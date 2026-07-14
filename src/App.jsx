@@ -95,7 +95,7 @@ const MENU = {
     {id:"s3",name:"七股炸牡蠣沙拉",  sub:"胡麻／油醋",dressing:true,member:330,normal:330},
   ]},
   appetizer:{ label:"Appetizer 特色前菜", emoji:"🍢", items:[
-    {id:"du1",name:"🍈榴槤季｜前菜（品名價格待補）",sub:"季節限定",member:280,normal:280,season:true},
+    {id:"du1",name:"🍈芒果莎莎花束沙拉",sub:"榴槤季·季節限定",member:180,normal:180,season:true},
     {id:"a1",name:"炙烤焦糖鮭魚蒔蘿奶酪捲",member:300,normal:300},
     {id:"a2",name:"油封蒜油馬鈴薯蝦滑",    member:240,normal:240},
     {id:"a3",name:"西西里肉醬嫩蛋",        member:240,normal:240},
@@ -117,7 +117,7 @@ const MENU = {
     {id:"b9",name:"乾煎培根酥脆三明治",    sub:"早午餐",member:360,normal:420},
   ]},
   pasta:    { label:"Pasta 義大利麵", emoji:"🍝", items:[
-    {id:"du2",name:"🍈榴槤季｜主餐（品名價格待補）",sub:"季節限定・可升級套餐",member:420,normal:460,season:true},
+    {id:"du2",name:"🍈白醬鮮蝦榴槤義大利麵",sub:"榴槤季·可升級套餐",member:420,normal:480,season:true},
     {id:"p1", name:"慢烤蒜酥小羔羊＋金沙辣奶油 🌶️",member:690,normal:750},
     {id:"p2", name:"炙燒干貝海鮮＋番紅花米蘭醬",   member:660,normal:720},
     {id:"p3", name:"香煎櫻桃鴨＋松露奶油醬",       member:510,normal:570},
@@ -157,7 +157,8 @@ const MENU = {
     {id:"r15",name:"半熟蛋＋牛肝菌燉飯",sub:"蛋奶素",member:330,normal:390},
   ]},
   dessert:  { label:"Dessert 甜點", emoji:"🍮", items:[
-    {id:"du4",name:"🍈榴槤季｜舒芙蕾（品名價格待補）",sub:"季節限定",member:280,normal:280,season:true},
+    {id:"du4",name:"🍈榴槤忘返舒芙蕾",sub:"榴槤季·季節限定",member:330,normal:330,season:true},
+    {id:"du6",name:"🍈榴槤起司紫薯球",sub:"榴槤季·季節限定",member:180,normal:180,season:true},
     {id:"d1",name:"熔岩流沙鹹蛋黃＋舒芙蕾",
      sub:"⚠ 一次只能做2顆，第3顆需等下一輪（每次45分–1小時），1顆約2-3人分食",
      member:270,normal:270},
@@ -192,7 +193,8 @@ const MENU = {
     {id:"mt6",name:"TWG焦糖奶油鮮奶茶", price:190,twgIce:true,    fixedSugar:true},
   ]},
   specials: { label:"House Specials 享特調", emoji:"🍹", note:"固定冰、糖", items:[
-    {id:"du3",name:"🍈榴槤季｜特調（品名價格待補）",price:150,fixedIce:true,fixedSugar:true,season:true},
+    {id:"du3",name:"🍈榴槤波波椰椰",price:150,fixedIce:true,fixedSugar:true,season:true},
+    {id:"du5",name:"🍈烤糖榴槤奶蓋拿鐵",price:150,fixedIce:true,fixedSugar:true,season:true},
     {id:"sp1",name:"白桃柚香烏龍",  price:120,fixedIce:true,fixedSugar:true},
     {id:"sp2",name:"白桃蘋果紅茶",  price:120,fixedIce:true,fixedSugar:true},
     {id:"sp3",name:"芭樂蜂蜜青茶",  price:130,fixedIce:true,fixedSugar:true},
@@ -1206,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v86</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v88</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2258,6 +2260,9 @@ function ItemsOffPage({ onBack }) {
               <div style={{fontSize:"11px",color:"#8a6a4a",marginBottom:"8px",lineHeight:"1.6"}}>
                 設定上架~下架日期後,<b>用餐日期在檔期內</b>的客人才看得到、點得到;檔期一過自動下架,不用手動關。
               </div>
+              <div style={{fontSize:"11px",color:"#a04020",marginBottom:"8px",lineHeight:"1.6",background:"#fce8e0",borderRadius:"7px",padding:"6px 9px",fontWeight:"700"}}>
+                🍈 榴槤為國外進口,可能臨時無法供應 —— 缺貨當天請直接在下面「🔍搜尋」找到該品項按「關閉此品項」(選當天日期),客人就點不到了。
+              </div>
               <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginBottom:"8px"}}>
                 <span style={{fontSize:"12px",fontWeight:"700",color:"#5a3a28"}}>檔期</span>
                 <input value={sFrom} onChange={e=>setSFrom(e.target.value)} placeholder="上架 7/15"
@@ -2457,7 +2462,7 @@ const rowBg=(g)=>{
     {key:"collector",  label:"收款人",  w:48, text:true},
     {key:"refundSigned",label:"退款\n簽名",w:44,chk:true,color:"#e87a5a"},
     {key:"cancelled",  label:"取消",   w:38, chk:true,color:"#c05050"},
-    {key:"note",       label:"備註",   w:120,text:true},
+    {key:"note",       label:"備註",   w:220,text:true},
   ];
   const compactKeys=["date","time","name","headcount"];
   const shownCols = compactMode ? COLS.filter(c=>compactKeys.includes(c.key)) : COLS;
@@ -2471,7 +2476,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v86</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v88</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             <button onClick={()=>setShowStaff(true)} style={{background:"#e8d8f0",border:"none",borderRadius:"8px",color:"#6a3a8a",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>員工</button>
@@ -2505,7 +2510,7 @@ const rowBg=(g)=>{
           </div>
         )}
         <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
-          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 14px",borderRadius:"9px",border:"none",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;const done=(lastResvImport===todayStr)&&todoChecks[`close_${todayStr}`];return done?null:<span className="blinkExcl">!</span>;})()}</button>
+          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 14px",borderRadius:"9px",border:"none",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"none",background:showMaiOnly?"#3a7a5a":"#e0d2bc",color:showMaiOnly?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"none",background:showPast?"#8a6a4a":"#e0d2bc",color:showPast?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="篩選日期（如 5/3）"
@@ -2673,7 +2678,12 @@ const rowBg=(g)=>{
                       {(g.orders||[]).some(o=>(o.lines||[]).some(l=>l.setMeal&&l.setMeal.veggieSoup))&&(
                         <span style={{fontSize:"9px",fontWeight:"800",color:"#dfeadf",background:"#5fe08a",borderRadius:"4px",padding:"1px 5px"}}>🌿 素湯</span>
                       )}
-                      <button onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,locked:!(x.locked||isPastDeadline(x.date)),unlockOverride:(x.locked||isPastDeadline(x.date))?true:false}))}
+                      <button onClick={()=>setGroups(p=>p.map(x=>{
+                          if(x.id!==g.id) return x;
+                          const eff = !x.unlockOverride && (x.locked || isPastDeadline(x.date));
+                          return eff ? {...x, locked:false, unlockOverride:true}   // 目前鎖著 → 解鎖
+                                     : {...x, locked:true,  unlockOverride:false}; // 目前開著 → 上鎖
+                        }))}
                         style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",
                           background:(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"#fbdcdc":"#dfeadf",color:(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"#b03030":"#2a7a4a",fontWeight:"700"}}>
                         {(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"🔒":"🔓"}
@@ -3083,7 +3093,7 @@ function CloseCell({ cellKey, closeMap, setCloseMap, staffList }) {
         style={{cursor:"pointer",fontSize:"10px",color:closer?"#1a6a1a":"#aaa",
           fontWeight:closer?"700":"400",background:closer?"#e0f0e0":"transparent",
           borderRadius:"3px",padding:"2px 3px",textAlign:"center",minWidth:"30px"}}>
-        {closer||"—"}
+        {closer?(typeof closer==="object"?closer.by:closer):"—"}
       </div>
       {open&&(
         <div style={{position:"fixed",top:"50%",left:"50%",transform:"translate(-50%,-50%)",zIndex:300,background:"#fdfaf4",
@@ -3162,6 +3172,14 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
   const [lastImport,setLastImport]=useState("");
   const [leaveWarn,setLeaveWarn]=useState(false);   // 一三五未關紅單就離開 → 防呆
   const [leaveAck,setLeaveAck]=useState(false);     // 本次已確認不關,不再攔
+  const [closeTaskDone,setCloseTaskDone]=useState(false); // 首頁閃燈用的關訂位打勾
+  useEffect(()=>{
+    const k=`close_${todayStr}`;
+    FS.loadDoc("todo").then(d=>{ if(d&&d[k]) setCloseTaskDone(true); });
+    const u=FS.subscribeDoc("todo",d=>{ if(d) setCloseTaskDone(!!d[k]); });
+    return ()=>u&&u();
+  },[]);
+  const markCloseDone=()=>{ FS.loadDoc("todo").then(d=>{ const nd={...(d||{}),[`close_${todayStr}`]:true}; FS.saveDoc("todo",nd); setCloseTaskDone(true); }); };
   const [noReopen,setNoReopen]=useState({}); // {date-time:true} = 已確認不開放
   const persistDW=(pm,cm,pg,dup,li,nr)=>FS.saveDoc("dingwe",{peopleMap:pm,closeMap:cm,progress:pg,dupReservations:dup!==undefined?dup:dupReservations,lastImport:li!==undefined?li:lastImport,noReopen:nr!==undefined?nr:noReopen});
   const toggleNoReopen=(key)=>{ const nn={...noReopen,[key]:!noReopen[key]}; setNoReopen(nn); persistDW(peopleMap,closeMap,progress,undefined,undefined,nn); };
@@ -3251,6 +3269,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
     const round = progress ? (progress.status==="complete" ? (progress.round||1)+1 : (progress.round||1)) : 1;
     const pg = {by:staffName,at,status:finishStatus,lastDate,round};
     setProgress(pg);
+    if(finishStatus==="complete") markCloseDone&&markCloseDone();
     // 把這次 key 的格子標記夥伴+時間
     setPeopleMap(p=>{
       const n={...p};
@@ -3401,15 +3420,20 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
     const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
     const todayLI=`${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()}`;
     setLastImport(todayLI);
+    // 重複訂位:合併,不要整個蓋掉 → 保留「未接」記錄、已確認的不再跳出來(#2 #6)
+    const prevByPhone={}; (dupReservations||[]).forEach(d=>{ prevByPhone[normPhone(d.phone)]=d; });
+    const mergedDup=(importStaff.dupWarn||[])
+      .filter(d=>{ const pv=prevByPhone[normPhone(d.phone)]; return !(pv&&pv.confirmed); })
+      .map(d=>{ const pv=prevByPhone[normPhone(d.phone)]; return pv?{...d,missed:pv.missed,missedAt:pv.missedAt,missedBy:pv.missedBy,confirmed:pv.confirmed}:d; });
     setPeopleMap(p=>{
       const n={...p};
       Object.entries(agg).forEach(([key,v])=>{
         n[key]={a:String(v.a),ch:String(v.ch),by:staffName,at,src:"麥"};
       });
-      persistDW(n,closeMap,progress,importStaff.dupWarn||[],todayLI);
+      persistDW(n,closeMap,progress,mergedDup,todayLI);
       return n;
     });
-    setDupReservations(importStaff.dupWarn||[]);
+    setDupReservations(mergedDup);
     // 匯入 ≥8 大人的大訂到追蹤表(去重 + 人數變動偵測)— 先在外面算好
     const mismatches=[];
     const toAdd=[];
@@ -3519,7 +3543,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
   const stepCur = !importedThisWeek ? 1 : (unclosedRedCnt>0 ? 2 : 3);
   const showSteps = isCloseDay && (stepCur<3 || !_doneClosing);
   const guardedBack = () => {
-    if(isCloseDay && unclosedRedCnt>0 && !leaveAck){ setLeaveWarn(true); }
+    if(isCloseDay && !closeTaskDone && !leaveAck){ setLeaveWarn(true); }
     else onBack();
   };
 
@@ -3682,25 +3706,25 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       )}
 
       {/* 關訂位選夥伴 */}
-      {closePicker&&<StaffPicker staffList={staffList} onSelect={n=>{setCloseMap(p=>{const m={...p,[closePicker]:n};persistDW(peopleMap,m,progress);return m;});setClosePicker(null);}} onClose={()=>setClosePicker(null)}/>}
+      {closePicker&&<StaffPicker staffList={staffList} onSelect={n=>{setCloseMap(p=>{const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;const m={...p,[closePicker]:{by:n,at}};persistDW(peopleMap,m,progress);return m;});setClosePicker(null);}} onClose={()=>setClosePicker(null)}/>}
 
       {leaveWarn&&createPortal(
         <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setLeaveWarn(false)}>
           <div style={{background:"#fff",borderRadius:"18px",padding:"22px",width:"100%",maxWidth:"340px",textAlign:"center",boxShadow:"0 12px 40px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:"34px",marginBottom:"6px"}}>⚠️</div>
-            <div style={{fontSize:"17px",color:"#c02020",fontWeight:"800",marginBottom:"8px"}}>還有紅色訂位沒關!</div>
+            <div style={{fontSize:"17px",color:"#c02020",fontWeight:"800",marginBottom:"8px"}}>今天的關訂位還沒完成!</div>
             <div style={{fontSize:"14px",color:"#5a4530",lineHeight:"1.7",marginBottom:"16px"}}>
-              今天(週{["日","一","二","三","四","五","六"][_dowNow]})還有 <b style={{color:"#c02020"}}>{unclosedRedCnt} 個滿20人的時段</b>沒關訂位。<br/>要先去大麥POS關掉、並在這裡按「完成關訂位」嗎?
+              今天(週{["日","一","二","三","四","五","六"][_dowNow]})要關訂位。{unclosedRedCnt>0?<>目前還有 <b style={{color:"#c02020"}}>{unclosedRedCnt} 個滿20人的時段</b>沒關。<br/></>:<br/>}要先去大麥POS關掉、並在這裡按「完成關訂位」嗎?
             </div>
             <button onClick={()=>setLeaveWarn(false)}
               style={{width:"100%",padding:"13px",borderRadius:"12px",border:"none",background:"#c02020",color:"#fff",fontSize:"15px",fontWeight:"800",cursor:"pointer",marginBottom:"9px"}}>
               留下來處理
             </button>
             <div style={{display:"flex",gap:"8px"}}>
-              <button onClick={()=>{setLeaveWarn(false);onBack();}}
-                style={{flex:1,padding:"11px",borderRadius:"10px",border:"1px solid #d0b090",background:"#fbf3e6",color:"#8a5a10",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>稍後提醒關閉</button>
               <button onClick={()=>{setLeaveAck(true);setLeaveWarn(false);onBack();}}
-                style={{flex:1,padding:"11px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#f0e8d8",color:"#7a6a4a",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>確認不關閉</button>
+                style={{flex:1,padding:"11px",borderRadius:"10px",border:"1px solid #d0b090",background:"#fbf3e6",color:"#8a5a10",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>稍後提醒關閉<div style={{fontSize:"9px",fontWeight:"400",opacity:0.8}}>紅燈保留</div></button>
+              <button onClick={()=>{markCloseDone();setLeaveAck(true);setLeaveWarn(false);onBack();}}
+                style={{flex:1,padding:"11px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#f0e8d8",color:"#7a6a4a",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>確認不關閉<div style={{fontSize:"9px",fontWeight:"400",opacity:0.8}}>紅燈熄滅</div></button>
             </div>
           </div>
         </div>,
@@ -3711,7 +3735,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v86</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v88</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -3754,18 +3778,19 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       )}
 
       {/* 重複訂位提醒(同電話多筆)— 按✕移除重複,人數自動重算;未接記夥伴 */}
-      {dupReservations&&dupReservations.length>0&&(
+      {dupReservations&&dupReservations.filter(d=>!d.confirmed).length>0&&(
         <div className="np" style={{padding:"5px 12px",background:"#fbe8d8",borderBottom:"1px solid #e0b088",flexShrink:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:dupOpen?"4px":"0",gap:"8px"}}>
-            <span style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",flex:1}}>⚠ 重複訂位 {dupReservations.length} 組{dupOpen?" — 按 ✕ 移除多訂的,人數自動更新":""}</span>
+            <span style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",flex:1}}>⚠ 重複訂位 {dupReservations.filter(d=>!d.confirmed).length} 組{dupOpen?" — 按 ✕ 移除多訂的,人數自動更新":""}</span>
             <button onClick={()=>setDupOpen(o=>!o)} style={{fontSize:"11px",background:dupOpen?"#c08040":"#e8a040",border:"none",borderRadius:"6px",padding:"5px 10px",color:"#fff",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{dupOpen?"▲ 收合":"▼ 展開處理"}</button>
-            <button onClick={()=>{setDupReservations([]);persistDW(peopleMap,closeMap,progress,[]);}} style={{fontSize:"10px",background:"#e0c0a0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a4a10",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已確認</button>
+            <button onClick={()=>{const marked=dupReservations.map(x=>({...x,confirmed:true}));setDupReservations(marked);persistDW(peopleMap,closeMap,progress,marked);}} style={{fontSize:"10px",background:"#e0c0a0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a4a10",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已確認</button>
           </div>
-          {dupOpen&&dupReservations.map((d,di)=>(
+          {dupOpen&&dupReservations.map((d,di)=>d.confirmed?null:(
             <div key={di} style={{marginBottom:"6px",paddingBottom:"5px",borderBottom:"1px dashed #e0c0a0"}}>
               <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap",marginBottom:"3px"}}>
                 <span style={{fontSize:"12px",color:"#6a4a2e",fontWeight:"700"}}>{d.name}（{d.phone}）</span>
                 <button onClick={()=>setMissedPick(di)} style={{fontSize:"10px",background:"#c06030",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 8px",fontWeight:"700",cursor:"pointer"}}>📵 未接{d.missed?` ×${d.missed}`:""}</button>
+                <button onClick={()=>{const marked=dupReservations.map((x,idx)=>idx===di?{...x,confirmed:true}:x);setDupReservations(marked);persistDW(peopleMap,closeMap,progress,marked);}} style={{fontSize:"10px",background:"#3a8a5a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 8px",fontWeight:"700",cursor:"pointer"}}>✓ 確認不是重複</button>
                 {d.missed>0&&<span style={{fontSize:"9px",color:"#a05030"}}>{d.missedBy} {d.missedAt}</span>}
                 {d.missed>=3&&<span style={{fontSize:"9px",color:"#fff",background:"#c0302a",borderRadius:"4px",padding:"1px 5px",fontWeight:"700"}}>⚠ 聯絡不上</span>}
               </div>
@@ -3909,7 +3934,8 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
                       <td style={{padding:"3px",border:"1px solid #e0d8c8",textAlign:"center",minWidth:isMobile?"50px":"36px",opacity:active?1:0.45}}>
                         {active&&<div onClick={()=>setClosePicker(key)}
                           style={{cursor:"pointer",fontSize:"11px",color:closer?"#1a6a1a":"#b0a890",fontWeight:closer?"700":"400",background:closer?"#e0f0e0":"transparent",borderRadius:"4px",padding:"4px 3px",minHeight:"22px"}}>
-                          {closer||"—"}
+                          {closer?(typeof closer==="object"?closer.by:closer):"—"}
+                          {closer&&typeof closer==="object"&&closer.at&&<div style={{fontSize:"7px",color:"#6a9a6a",fontWeight:"400"}}>{closer.at}</div>}
                         </div>}
                       </td>
                     </React.Fragment>
@@ -4396,7 +4422,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v86</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v88</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -4990,7 +5016,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
       <div style={{...S.header, paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 返回</button>
         <div style={S.logo}>✦ 全組訂單總覽{fromStaff&&<span style={{fontSize:"11px",fontWeight:"800",background:"#b07840",color:"#fff",borderRadius:"6px",padding:"2px 8px",marginLeft:"8px",verticalAlign:"middle"}}>員工版</span>}</div>
-        <div style={{fontSize:"11px",color:"#aa8060"}}>{group.name} · {group.date} {group.time}</div>
+        <div style={{fontSize:"11px",color:"#aa8060"}}>{group.name} · {group.date} {group.time}{group.headcount?` · 👥 ${group.headcount}`:""}</div>
       </div>
       <div style={{overflowY:"auto",flex:1,padding:"14px"}}>
         {fromStaff&&group.archiveType==="menu"&&(
