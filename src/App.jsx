@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v88</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v89</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2476,7 +2476,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v88</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v89</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             <button onClick={()=>setShowStaff(true)} style={{background:"#e8d8f0",border:"none",borderRadius:"8px",color:"#6a3a8a",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>員工</button>
@@ -3706,7 +3706,26 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       )}
 
       {/* 關訂位選夥伴 */}
-      {closePicker&&<StaffPicker staffList={staffList} onSelect={n=>{setCloseMap(p=>{const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;const m={...p,[closePicker]:{by:n,at}};persistDW(peopleMap,m,progress);return m;});setClosePicker(null);}} onClose={()=>setClosePicker(null)}/>}
+      {closePicker&&(closeMap[closePicker]?createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setClosePicker(null)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"320px",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#2a6a3a",marginBottom:"4px"}}>🔒 這個時段已關訂位</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px",lineHeight:"1.6"}}>
+              {closePicker.split("-")[0]} {closePicker.split("-").slice(1).join("-")}<br/>
+              關閉夥伴:{typeof closeMap[closePicker]==="object"?`${closeMap[closePicker].by} ${closeMap[closePicker].at||""}`:closeMap[closePicker]}
+            </div>
+            <button onClick={()=>{ setCloseMap(p=>{ const m={...p}; delete m[closePicker]; persistDW(peopleMap,m,progress); return m; }); setClosePicker(null); }}
+              style={{width:"100%",padding:"13px",borderRadius:"11px",border:"none",background:"#c04030",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer",marginBottom:"8px"}}>
+              ↩ 取消關訂（重新開放訂位）
+            </button>
+            <div style={{fontSize:"10px",color:"#a08070",marginBottom:"10px"}}>記得也要去大麥POS把訂位打開</div>
+            <button onClick={()=>setClosePicker(null)}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>關閉視窗</button>
+          </div>
+        </div>, document.body
+      ):(
+        <StaffPicker staffList={staffList} onSelect={n=>{setCloseMap(p=>{const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;const m={...p,[closePicker]:{by:n,at}};persistDW(peopleMap,m,progress);return m;});setClosePicker(null);}} onClose={()=>setClosePicker(null)}/>
+      ))}
 
       {leaveWarn&&createPortal(
         <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setLeaveWarn(false)}>
@@ -3735,7 +3754,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v88</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v89</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4422,7 +4441,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v88</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v89</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
