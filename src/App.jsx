@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v92</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v94</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1425,9 +1425,14 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
     }
     return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
   };
-  const startDraw = (e) => { e.preventDefault(); setIsDrawing(true); setLastPos(getPos(e, canvasRef.current)); setSigned(true); };
+  const startDraw = (e) => {
+    if(e.preventDefault) e.preventDefault();
+    try{ e.currentTarget.setPointerCapture&&e.pointerId!=null&&e.currentTarget.setPointerCapture(e.pointerId); }catch(err){}
+    setIsDrawing(true); setLastPos(getPos(e, canvasRef.current)); setSigned(true);
+  };
   const draw = (e) => {
-    e.preventDefault(); if (!isDrawing) return;
+    if(e.preventDefault) e.preventDefault();
+    if (!isDrawing) return;
     const canvas = canvasRef.current; const ctx = canvas.getContext("2d");
     const pos = getPos(e, canvas);
     ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(pos.x, pos.y);
@@ -1436,9 +1441,18 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
   };
   const stopDraw = () => setIsDrawing(false);
   const clearCanvas = () => { const canvas = canvasRef.current; canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height); setSigned(false); };
+  // React 的觸控事件是被動的,preventDefault 沒用 → 用原生監聽擋掉捲動/側滑返回
+  useEffect(()=>{
+    const c = canvasRef.current; if(!c) return;
+    const block = (e)=>{ e.preventDefault(); };
+    c.addEventListener("touchstart", block, {passive:false});
+    c.addEventListener("touchmove", block, {passive:false});
+    c.addEventListener("touchend", block, {passive:false});
+    return ()=>{ c.removeEventListener("touchstart",block); c.removeEventListener("touchmove",block); c.removeEventListener("touchend",block); };
+  },[]);
 
   return (
-    <div style={{position:"fixed",inset:0,background:"#fff",zIndex:400,display:"flex",flexDirection:"column",userSelect:"none",WebkitUserSelect:"none"}}>
+    <div style={{position:"fixed",inset:0,background:"#fff",zIndex:400,display:"flex",flexDirection:"column",userSelect:"none",WebkitUserSelect:"none",touchAction:"none",overscrollBehavior:"none"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid #eee",background:"#f5f0e8"}}>
         <div style={{fontSize:"18px",fontWeight:"700",color:"#3a2a1a",textAlign:"center",marginBottom:"10px"}}>
           {sigType==="staff"?"員工簽名確認":"客人簽名確認"}
@@ -1455,10 +1469,8 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
         <canvas ref={canvasRef} width={800} height={500}
           style={{border:"2px solid #ccc",borderRadius:"12px",background:"#fafafa",touchAction:"none",
             width:"100%",flex:1,display:"block",cursor:"crosshair",userSelect:"none",WebkitUserSelect:"none",
-            WebkitTouchCallout:"none"}}
-          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
-          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={stopDraw}
-          onPointerDown={startDraw} onPointerMove={draw} onPointerUp={stopDraw}
+            WebkitTouchCallout:"none",overscrollBehavior:"none"}}
+          onPointerDown={startDraw} onPointerMove={draw} onPointerUp={stopDraw} onPointerCancel={stopDraw} onPointerLeave={stopDraw}
           onContextMenu={e=>e.preventDefault()}/>
       </div>
       <div style={{display:"flex",gap:"10px",padding:"16px 20px",borderTop:"1px solid #eee",background:"#f9f9f9"}}>
@@ -2484,6 +2496,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showStats,setShowStats]=useState(false);
   const [showItemsOff,setShowItemsOff]=useState(false);
   const [showHelp,setShowHelp]=useState(false);
+  const [moreOpen,setMoreOpen]=useState(false);
   const [compactMode,setCompactMode]=useState(typeof window!=="undefined"&&window.innerWidth<820);
   const [wOpen,setWOpen]=useState(false);   // 散客客訴視窗
   const [gCpl,setGCpl]=useState(null);      // {group} 任一訂位新增客訴(含已封存)
@@ -2620,16 +2633,23 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v92</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v94</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
-            <button onClick={()=>setShowStaff(true)} style={{background:"#e8d8f0",border:"none",borderRadius:"8px",color:"#6a3a8a",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>員工</button>
-            <button onClick={()=>setShowHoliday(true)} style={{background:"#f0e0d0",border:"none",borderRadius:"8px",color:"#a05a20",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>假日</button>
-            <button onClick={()=>setShowItemsOff(true)} style={{background:"#f5e2c0",border:"none",borderRadius:"8px",color:"#8a5210",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>🚫品項</button>
-            <button onClick={()=>setShowAdd(true)} style={{background:"#b07840",border:"none",borderRadius:"8px",color:"#fff",fontSize:"12px",fontWeight:"700",padding:"7px 14px",cursor:"pointer"}}>+ 新增大訂</button>
-            <button onClick={()=>{setWForm({name:"",phone:"",type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setWOpen(true);}} style={{background:"#fbe0e0",border:"none",borderRadius:"8px",color:"#a04020",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>散客客訴</button>
-            <button onClick={()=>setCompactMode(v=>!v)} style={{background:compactMode?"#3a7a5a":"#e0d2bc",border:"none",borderRadius:"8px",color:compactMode?"#fff":"#6a4a2e",fontSize:"12px",fontWeight:"800",padding:"7px 10px",cursor:"pointer"}}>{compactMode?"📱 手機版":"💻 電腦版"}</button>
-            <button onClick={()=>setShowHelp(v=>!v)} style={{background:showHelp?"#6a4a2e":"#efe6d4",border:"1px solid #c8b89c",borderRadius:"8px",color:showHelp?"#fff":"#6a4a2e",fontSize:"12px",fontWeight:"800",padding:"7px 10px",cursor:"pointer"}}>❔ 說明</button>
+            {[
+              {t:"👥 員工",  fn:()=>setShowStaff(true)},
+              {t:"📅 假日",  fn:()=>setShowHoliday(true)},
+              {t:"🚫 品項",  fn:()=>setShowItemsOff(true)},
+              {t:"⚠ 散客客訴",fn:()=>{setWForm({name:"",phone:"",type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setWOpen(true);}},
+              {t:compactMode?"📱 手機版":"💻 電腦版", fn:()=>setCompactMode(v=>!v)},
+              {t:"❔ 說明",  fn:()=>setShowHelp(v=>!v), on:showHelp},
+            ].map(b=>(
+              <button key={b.t} onClick={b.fn}
+                style={{background:b.on?"#6a4a2e":"#f0e6d4",border:"1.5px solid #c8b89c",borderRadius:"8px",
+                  color:b.on?"#fff":"#6a4a2e",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>{b.t}</button>
+            ))}
+            <button onClick={()=>setShowAdd(true)}
+              style={{background:"#b07840",border:"1.5px solid #8a5a20",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>＋ 新增大訂</button>
           </div>
         </div>
         {showHelp&&(
@@ -2654,9 +2674,9 @@ const rowBg=(g)=>{
           </div>
         )}
         <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
-          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 14px",borderRadius:"9px",border:"none",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
-          <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"none",background:showMaiOnly?"#3a7a5a":"#e0d2bc",color:showMaiOnly?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
-          <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"none",background:showPast?"#8a6a4a":"#e0d2bc",color:showPast?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
+          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #c8b89c",background:"#f0e6d4",color:"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
+          <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #c8b89c",background:showMaiOnly?"#6a4a2e":"#f0e6d4",color:showMaiOnly?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
+          <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #c8b89c",background:showPast?"#6a4a2e":"#f0e6d4",color:showPast?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="篩選日期（如 5/3）"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
           {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
@@ -2796,8 +2816,8 @@ const rowBg=(g)=>{
             {filtered.length===0&&<tr><td colSpan={shownCols.length+4} style={{textAlign:"center",padding:"40px",color:"#a09070"}}>尚無紀錄</td></tr>}
             {filtered.map(g=>(
               <>
-                <tr key={g.id} style={{background:rowBg(g),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),borderBottom:"1px solid #f0e8d6"}}>
-                  <td style={{padding:"5px 6px",borderRight:"1px solid #e0d5c0",textAlign:"center"}}>
+                <tr key={g.id} style={{background:rowBg(g),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),borderBottom:"1.5px solid #cbb99a"}}>
+                  <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
                     {g.memberType==="private"
                       ? <div style={{fontSize:"14px",fontWeight:"700",color:"#a85ab4"}}>🎉 包場</div>
                       : !g.memberType
@@ -2810,8 +2830,8 @@ const rowBg=(g)=>{
                     {depositUrgency(g)==="urgent" &&<div style={{fontSize:"9px",background:"#5a3a10",color:"#ffd080",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>待付訂</div>}
                     {depositUrgency(g)&&(()=>{const dd=depDeadlineOf(g);return dd?<div style={{fontSize:"8px",color:"#b06020",marginTop:"1px",fontWeight:"800",whiteSpace:"nowrap"}}>{dd.lastMinute?"⏰訂後2hr內":`⏰${dd.label}前`}</div>:null;})()}
                   </td>
-                  <td style={{padding:"5px 4px",borderRight:"1px solid #e0d5c0"}}><MemberBadge g={g}/></td>
-                  <td style={{padding:"5px 6px",borderRight:"1px solid #e0d5c0",textAlign:"center"}}>
+                  <td style={{padding:"5px 4px",borderRight:"1.5px solid #cbb99a"}}><MemberBadge g={g}/></td>
+                  <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"3px"}}>
                       <button onClick={()=>setExpanded(expanded===g.id?null:g.id)}
                         style={{background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px"}}>
@@ -2838,7 +2858,7 @@ const rowBg=(g)=>{
                     const noDep = (["deposit","depositDate","collector"].includes(c.key))&&!needsDeposit(g.headcount,g.isVip);
                     return (
                     <React.Fragment key={c.key}>
-                    <td style={{padding:"5px 4px",borderRight:"1px solid #e0d5c0",verticalAlign:"middle",
+                    <td style={{padding:"5px 4px",borderRight:"1.5px solid #cbb99a",verticalAlign:"middle",
                       textAlign:c.chk||c.key==="collector"?"center":"left",
                       background:noDep?"#e6dece":undefined,opacity:noDep?0.45:1}}>
                       {noDep?<div style={{color:"#a09070",fontSize:"11px",textAlign:"center"}}>—</div>:
@@ -2875,7 +2895,7 @@ const rowBg=(g)=>{
                        ):
                        <EditCell g={g} field={c.key} w={c.w-8} onSave={save}/>}
                     </td>
-                    {c.key===statusAnchor&&<td style={{padding:"4px 3px",borderRight:"1px solid #e0d5c0",textAlign:"center",minWidth:"74px"}}>
+                    {c.key===statusAnchor&&<td style={{padding:"4px 3px",borderRight:"1.5px solid #cbb99a",textAlign:"center",minWidth:"74px"}}>
                       <StatusCell g={g} onSave={save} groups={groups} setGroups={setGroups} staffList={staffList}/>
                     </td>}
                     </React.Fragment>
@@ -3928,7 +3948,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v92</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v94</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4639,7 +4659,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v92</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v94</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -4729,7 +4749,7 @@ function StatsPage({ onBack, staffList }) {
                   <div style={{fontSize:"10px",color:"#8a6a4a"}}>週一至四</div>
                   <div style={{fontSize:"15px",fontWeight:"900",color:"#6a4a2e"}}>{catAvg.wd>0?`$${catAvg.wd.toLocaleString()}`:"—"}</div>
                 </div>
-                <div style={{flex:1,borderLeft:"1px solid #e0d5c0",borderRight:"1px solid #e0d5c0"}}>
+                <div style={{flex:1,borderLeft:"1px solid #e0d5c0",borderRight:"1.5px solid #cbb99a"}}>
                   <div style={{fontSize:"10px",color:"#8a6a4a"}}>週五</div>
                   <div style={{fontSize:"15px",fontWeight:"900",color:"#b07840"}}>{catAvg.fri>0?`$${catAvg.fri.toLocaleString()}`:"—"}</div>
                 </div>
@@ -5871,7 +5891,7 @@ const GS=`
   input::placeholder{color:#5a3a28}
   input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 `;
-const TH={padding:"9px 6px",color:"#a09070",fontWeight:"700",borderBottom:"2px solid #8a6a3a",borderRight:"1px solid #d4c4a8",textAlign:"center",fontSize:"14px",whiteSpace:"pre-line",background:"#e8ddd0"};
+const TH={padding:"9px 6px",color:"#6a4a2e",fontWeight:"800",borderBottom:"3px solid #8a6a3a",borderRight:"1.5px solid #b8a684",textAlign:"center",fontSize:"14px",whiteSpace:"pre-line",background:"#e8ddd0"};
 // Light theme for the customer ordering flow (米白 + 放大)
 const LS={
   page:      {minHeight:"100vh",background:"#fbf6ee",fontFamily:"'Noto Sans TC',sans-serif",color:"#4a3826",display:"flex",flexDirection:"column"},
