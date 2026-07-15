@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v89</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v90</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1492,6 +1492,16 @@ function ComplaintPanel({ g, setGroups, groups, walkin }) {
         <span style={{fontSize:"11px",fontWeight:"800",color:"#a04020"}}>📅 {it.date}{from?`　（${from}）`:""}</span>
         {onDel&&<button onClick={onDel} style={{background:"none",border:"1px solid #d4a0a0",borderRadius:"6px",color:"#b05050",fontSize:"10px",cursor:"pointer",padding:"1px 8px"}}>刪</button>}
       </div>
+      {(it.type||(it.kinds||[]).length>0)&&(
+        <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginBottom:"5px"}}>
+          {it.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"2px 7px"}}>{it.type==="環境"?"🏠":it.type==="餐點"?"🍽":"🙋"} {it.type}</span>}
+          {(it.kinds||[]).map(k=><span key={k} style={{fontSize:"10px",fontWeight:"700",background:"#fdeae0",border:"1px solid #e0b0a0",color:"#a04020",borderRadius:"5px",padding:"2px 6px"}}>{k}</span>)}
+        </div>
+      )}
+      {(it.dishes||[]).length>0&&(
+        <div style={{fontSize:"11px",color:"#8a4a10",marginBottom:"5px",lineHeight:"1.5"}}>🍽 {(it.dishes||[]).map(id=>{const d=findItem(id);return d?d.name:id;}).join("、")}</div>
+      )}
+      {it.photo&&<img src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
       <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 8px",fontSize:"11px",color:"#5a4030",lineHeight:"1.5"}}>
         <span style={{color:"#a08070"}}>原因</span><span>{it.reason||"—"}</span>
         <span style={{color:"#a08070"}}>態度</span><span>{it.attitude||"—"}</span>
@@ -1607,6 +1617,81 @@ function ArchivePhoto({ photoId, size=54 }){
   );
 }
 
+// 客訴細項:分類(環境/餐點/服務)+ 餐點兩層下拉複選 + 照片
+const CPL_KINDS = {
+  環境: ["桌況/清潔","冷氣溫度","噪音吵雜","廁所","停車","座位安排","其他"],
+  服務: ["等待過久","服務態度","送錯餐","漏餐","結帳問題","訂位問題","其他"],
+  餐點: ["不新鮮","味道太鹹","味道太淡","份量太少","溫度不對","異物","與圖不符","過敏原","其他"],
+};
+function CplDetail({ val, onChange }) {
+  const v = val||{};
+  const kinds = v.kinds||[];
+  const dishes = v.dishes||[];
+  const [cat,setCat] = useState("brunch");
+  const [busy,setBusy] = useState(false);
+  const set = (patch)=>onChange({...v,...patch});
+  const toggleKind = (k)=>set({kinds: kinds.includes(k)?kinds.filter(x=>x!==k):[...kinds,k]});
+  const addDish = (id)=>{ if(!id||dishes.includes(id)) return; set({dishes:[...dishes,id]}); };
+  const pickPhoto = async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; setBusy(true);
+    try{ set({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } setBusy(false); e.target.value=""; };
+  const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
+  return (
+    <div style={{marginBottom:"12px"}}>
+      <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型（可複選）</div>
+      <div style={{display:"flex",gap:"6px",marginBottom:"8px"}}>
+        {["環境","餐點","服務"].map(t=>(
+          <button key={t} onClick={()=>set({type:t})} style={{...chip(v.type===t),flex:1,padding:"9px"}}>{t==="環境"?"🏠":t==="餐點"?"🍽":"🙋"} {t}</button>
+        ))}
+      </div>
+      {v.type&&(
+        <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
+          {(CPL_KINDS[v.type]||[]).map(k=>(
+            <button key={k} onClick={()=>toggleKind(k)} style={chip(kinds.includes(k))}>{k}</button>
+          ))}
+        </div>
+      )}
+      {v.type==="餐點"&&(
+        <div style={{background:"#fff",border:"1px solid #e0d5c0",borderRadius:"10px",padding:"10px",marginBottom:"8px"}}>
+          <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>🍽 是哪道餐點?（先選分類 → 再選餐點,可複選）</div>
+          <div style={{display:"flex",gap:"6px"}}>
+            <select value={cat} onChange={e=>setCat(e.target.value)}
+              style={{flex:1,padding:"9px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700"}}>
+              {[...FOOD_CATS,...DRINK_CATS].map(c=><option key={c} value={c}>{MENU[c]?.label||c}</option>)}
+            </select>
+            <select value="" onChange={e=>addDish(e.target.value)}
+              style={{flex:1.4,padding:"9px",borderRadius:"8px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700"}}>
+              <option value="">選餐點…</option>
+              {(MENU[cat]?.items||[]).map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          </div>
+          {dishes.length>0&&(
+            <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginTop:"8px"}}>
+              {dishes.map(id=>{ const it=findItem(id);
+                return <span key={id} style={{display:"inline-flex",alignItems:"center",gap:"5px",background:"#fdf0e6",border:"1px solid #e0b080",borderRadius:"7px",padding:"3px 5px 3px 9px",fontSize:"12px",color:"#8a4a10",fontWeight:"700"}}>
+                  {it?it.name:id}
+                  <button onClick={()=>set({dishes:dishes.filter(x=>x!==id)})} style={{border:"none",background:"#e0b080",color:"#fff",borderRadius:"5px",fontSize:"10px",padding:"1px 6px",cursor:"pointer",fontWeight:"800"}}>✕</button>
+                </span>; })}
+            </div>
+          )}
+          <div style={{marginTop:"9px"}}>
+            {v.photo?(
+              <div style={{position:"relative"}}>
+                <img src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
+                <button onClick={()=>set({photo:null})} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
+              </div>
+            ):(
+              <label style={{display:"block",textAlign:"center",padding:"11px",borderRadius:"8px",border:"1.5px dashed #c0a880",background:"#faf4e8",color:"#9a6a30",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>
+                {busy?"處理中…":"📷 上傳餐點照片（選填）"}
+                <input type="file" accept="image/*" onChange={pickPhoto} style={{display:"none"}}/>
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatusCell({ g, onSave, groups, setGroups, staffList }) {
   const [open, setOpen] = useState(false);
   const [pickStaff, setPickStaff] = useState(false);
@@ -1619,7 +1704,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
 
   const [archModal, setArchModal] = useState(false);
   const [cplOpen, setCplOpen] = useState(false); // 過期→客訴與建議
-  const [cpl, setCpl] = useState({reason:"",attitude:"",adjust:"",treat:""});
+  const [cpl, setCpl] = useState({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
   const [archTime, setArchTime] = useState("");
   const [archPhoto, setArchPhoto] = useState(null);
   const [archBusy, setArchBusy] = useState(false);
@@ -1694,13 +1779,14 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
             {sl.status&&<div style={{fontSize:"10px",color:"#9a8a76",marginBottom:"3px"}}>{sl.status}</div>}
             <button onClick={(e)=>{e.stopPropagation();setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,archiveType:"booking"}));}}
               style={{fontSize:"12px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"6px",padding:"6px 12px",marginTop:"2px",fontWeight:"700",cursor:"pointer",display:"block",width:"100%"}}>直接封存</button>
-            <button onClick={(e)=>{e.stopPropagation();setCpl({reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
+            <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
               style={{fontSize:"12px",background:"#a05030",color:"#fff",border:"none",borderRadius:"6px",padding:"6px 12px",marginTop:"4px",fontWeight:"700",cursor:"pointer",display:"block",width:"100%"}}>客訴與建議</button>
             {cplOpen&&createPortal(
               <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={(e)=>{e.stopPropagation();setCplOpen(false);}}>
                 <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"420px",textAlign:"left",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
                   <div style={{fontSize:"17px",color:"#a05030",fontWeight:"800",marginBottom:"3px"}}>⚠ 客訴與建議</div>
                   <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px"}}>{g.name}（{g.date} {g.time}）— 記錄後會跟著這支電話,下次訂位自動提醒</div>
+                  <CplDetail val={cpl} onChange={setCpl}/>
                   {[["原因","reason"],["態度","attitude"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
                     <div key={k} style={{marginBottom:"12px"}}>
                       <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>{l}</div>
@@ -1712,7 +1798,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                     <button onClick={()=>setCplOpen(false)} style={{flex:1,padding:"13px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
                     <button onClick={()=>{
                         const now=new Date(); const date=`${now.getMonth()+1}/${now.getDate()}`;
-                        const hasContent=cpl.reason.trim()||cpl.attitude.trim()||cpl.adjust.trim()||cpl.treat.trim();
+                        const hasContent=cpl.type||(cpl.kinds||[]).length>0||(cpl.dishes||[]).length>0||cpl.photo||cpl.reason.trim()||cpl.attitude.trim()||cpl.adjust.trim()||cpl.treat.trim();
                         setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,
                           complaints: hasContent?[...(x.complaints||[]),{...cpl,date}]:(x.complaints||[]),
                           archived:true, archiveType:"booking"}));
@@ -2344,7 +2430,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showHelp,setShowHelp]=useState(false);
   const [compactMode,setCompactMode]=useState(typeof window!=="undefined"&&window.innerWidth<820);
   const [wOpen,setWOpen]=useState(false);   // 散客客訴視窗
-  const [wForm,setWForm]=useState({name:"",phone:"",reason:"",attitude:"",adjust:"",treat:""});
+  const [wForm,setWForm]=useState({name:"",phone:"",type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
   const [walkinCpl,setWalkinCpl]=useState([]); // 散客客訴清單(綁電話)
   useEffect(()=>{
     FS.loadDoc("walkinCpl").then(v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
@@ -2476,14 +2562,14 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v89</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v90</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             <button onClick={()=>setShowStaff(true)} style={{background:"#e8d8f0",border:"none",borderRadius:"8px",color:"#6a3a8a",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>員工</button>
             <button onClick={()=>setShowHoliday(true)} style={{background:"#f0e0d0",border:"none",borderRadius:"8px",color:"#a05a20",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>假日</button>
             <button onClick={()=>setShowItemsOff(true)} style={{background:"#f5e2c0",border:"none",borderRadius:"8px",color:"#8a5210",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>🚫品項</button>
             <button onClick={()=>setShowAdd(true)} style={{background:"#b07840",border:"none",borderRadius:"8px",color:"#fff",fontSize:"12px",fontWeight:"700",padding:"7px 14px",cursor:"pointer"}}>+ 新增大訂</button>
-            <button onClick={()=>{setWForm({name:"",phone:"",reason:"",attitude:"",adjust:"",treat:""});setWOpen(true);}} style={{background:"#fbe0e0",border:"none",borderRadius:"8px",color:"#a04020",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>散客客訴</button>
+            <button onClick={()=>{setWForm({name:"",phone:"",type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setWOpen(true);}} style={{background:"#fbe0e0",border:"none",borderRadius:"8px",color:"#a04020",fontSize:"12px",fontWeight:"700",padding:"7px 10px",cursor:"pointer"}}>散客客訴</button>
             <button onClick={()=>setCompactMode(v=>!v)} style={{background:compactMode?"#3a7a5a":"#e0d2bc",border:"none",borderRadius:"8px",color:compactMode?"#fff":"#6a4a2e",fontSize:"12px",fontWeight:"800",padding:"7px 10px",cursor:"pointer"}}>{compactMode?"📱 手機版":"💻 電腦版"}</button>
             <button onClick={()=>setShowHelp(v=>!v)} style={{background:showHelp?"#6a4a2e":"#efe6d4",border:"1px solid #c8b89c",borderRadius:"8px",color:showHelp?"#fff":"#6a4a2e",fontSize:"12px",fontWeight:"800",padding:"7px 10px",cursor:"pointer"}}>❔ 說明</button>
           </div>
@@ -2906,6 +2992,7 @@ const rowBg=(g)=>{
               <input value={wForm.name} onChange={e=>setWForm(p=>({...p,name:e.target.value}))} placeholder="姓名(選填)"
                 style={{flex:1,padding:"11px 12px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"15px"}}/>
             </div>
+            <CplDetail val={wForm} onChange={setWForm}/>
             {[["原因","reason"],["態度","attitude"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
               <div key={k} style={{marginBottom:"10px"}}>
                 <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
@@ -3136,7 +3223,7 @@ function StaffPicker({ onSelect, onClose, staffList }) {
 }
 
 function DingwePage({ groups, onBack, staffList, setGroups }) {
-  const RED_AT=20, YEL_AT=15; // 紅:20+ 黃:15-19
+  const RED_AT=25, ORG_AT=20, YEL_AT=15; // 紅25+必關 橘20-24需判斷 黃15-19留意
   const TIMES2 = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30"];
   const DAYS2 = ["一","二","三","四","五","六","日"];
   const [weekOffset, setWeekOffset] = useState(0);
@@ -3514,8 +3601,8 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
     const mm=String(dateStr).match(/(\d{1,2})\/(\d{1,2})/);
     let future=true;
     if(mm){const dd=new Date(today.getFullYear(),+mm[1]-1,+mm[2]);if(dd.getTime()<today.getTime()-1000*60*60*24*180)dd.setFullYear(dd.getFullYear()+1);if(dd.getTime()<=today.getTime())future=false;}
-    const needClose=[], canReopen=[];
-    if(!future) return {needClose,canReopen};
+    const needClose=[], canReopen=[], needJudge=[];
+    if(!future) return {needClose,canReopen,needJudge};
     TIMES2.forEach(time=>{
       const key=`${dateStr}-${time}`;
       const entry=peopleMap[key];
@@ -3524,9 +3611,10 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       const a=entry?parseInt(entry.a)||0:0, ch=entry?parseInt(entry.ch)||0:0;
       const total=entry?(a+ch):autoT;
       if(total>=RED_AT && !closeMap[key]) needClose.push(time);
-      if(total<RED_AT && closeMap[key]) canReopen.push(time);
+      if(total>=ORG_AT && total<RED_AT && !closeMap[key] && !noReopen[`judge-${key}`]) needJudge.push(time);
+      if(total<ORG_AT && closeMap[key]) canReopen.push(time);
     });
-    return {needClose,canReopen};
+    return {needClose,canReopen,needJudge};
   };
 
   const daysToShow = (viewDay!==null)?[viewDay]:Array.from({length:7},(_,i2)=>i2);
@@ -3754,7 +3842,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v89</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v90</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -3831,22 +3919,44 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
         const weekD = Array.from({length:7},(_,di)=>weekDates[di]).filter(d=>inRange(d));
         const closeList = weekD.map(d=>({d,slots:daySlots(d).needClose})).filter(x=>x.slots.length>0);
         const reopenList = weekD.map(d=>({d,slots:daySlots(d).canReopen})).filter(x=>x.slots.length>0);
-        if(closeList.length===0&&reopenList.length===0) return null;
+        const judgeList = weekD.map(d=>({d,slots:daySlots(d).needJudge})).filter(x=>x.slots.length>0);
+        if(closeList.length===0&&reopenList.length===0&&judgeList.length===0) return null;
+        const judgeN = judgeList.reduce((s,x)=>s+x.slots.length,0);
         return (
           <div className="np" style={{flexShrink:0}}>
-            <div onClick={()=>setWarnOpen(o=>!o)} style={{padding:"5px 12px",background:closeList.length>0?"#fbe0e0":"#e0f0e0",borderBottom:"1px solid #d0b0b0",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
-              <span style={{fontSize:"11px",fontWeight:"800",flex:1,color:closeList.length>0?"#c02020":"#2a7a3a"}}>
-                {closeList.length>0&&`⚠ 未關訂位 ${closeList.reduce((s,x)=>s+x.slots.length,0)} 時段`}
-                {closeList.length>0&&reopenList.length>0&&"　"}
+            <div onClick={()=>setWarnOpen(o=>!o)} style={{padding:"5px 12px",background:closeList.length>0?"#fbe0e0":judgeN>0?"#fdeedd":"#e0f0e0",borderBottom:"1px solid #d0b0b0",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
+              <span style={{fontSize:"11px",fontWeight:"800",flex:1,color:closeList.length>0?"#c02020":judgeN>0?"#b05a10":"#2a7a3a"}}>
+                {closeList.length>0&&`⚠ 必關未關 ${closeList.reduce((s,x)=>s+x.slots.length,0)} 時段`}
+                {closeList.length>0&&(judgeN>0||reopenList.length>0)&&"　"}
+                {judgeN>0&&`🟠 需判斷 ${judgeN} 時段`}
+                {judgeN>0&&reopenList.length>0&&"　"}
                 {reopenList.length>0&&`↩ 可開放 ${reopenList.reduce((s,x)=>s+x.slots.length,0)} 時段`}
               </span>
               <span style={{fontSize:"11px",fontWeight:"800",color:"#8a5a30",background:"#f0e0d0",borderRadius:"5px",padding:"2px 8px"}}>{warnOpen?"▲ 收合":"▼ 展開"}</span>
             </div>
             {warnOpen&&closeList.length>0&&(
               <div style={{padding:"6px 12px",background:"#fbe0e0",borderBottom:"1px solid #e0a0a0"}}>
-                <span style={{fontSize:"12px",color:"#c02020",fontWeight:"700"}}>⚠ 滿{RED_AT}人未關訂位：{closeList.map(x=>`${x.d} ${x.slots.join("/")}`).join("、")} — 請至大麥POS關閉並在此標記</span>
+                <span style={{fontSize:"12px",color:"#c02020",fontWeight:"700"}}>⚠ 滿{RED_AT}人必關未關：{closeList.map(x=>`${x.d} ${x.slots.join("/")}`).join("、")} — 請至大麥POS關閉並在此標記</span>
               </div>
             )}
+            {warnOpen&&judgeN>0&&(()=>{
+              const slots=[];
+              judgeList.forEach(x=>x.slots.forEach(t=>slots.push({d:x.d,t,key:`${x.d}-${t}`})));
+              return (
+                <div style={{padding:"6px 12px",background:"#fdeedd",borderBottom:"1px solid #e0b080"}}>
+                  <div style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",marginBottom:"5px"}}>🟠 {ORG_AT}–{RED_AT-1} 人,要不要關訂位?（不用一定關,決定後就不再提醒）</div>
+                  <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                    {slots.map(s=>(
+                      <span key={s.key} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"11px",background:"#fff",border:"1px solid #e0b080",borderRadius:"6px",padding:"3px 5px 3px 8px",color:"#a05a10",fontWeight:"700"}}>
+                        {s.d} {s.t}
+                        <button onClick={(e)=>{e.stopPropagation();setClosePicker(s.key);}} style={{fontSize:"10px",border:"none",borderRadius:"4px",padding:"2px 6px",cursor:"pointer",fontWeight:"700",background:"#c04030",color:"#fff",whiteSpace:"nowrap"}}>關訂位</button>
+                        <button onClick={(e)=>{e.stopPropagation();toggleNoReopen(`judge-${s.key}`);}} style={{fontSize:"10px",border:"none",borderRadius:"4px",padding:"2px 6px",cursor:"pointer",fontWeight:"700",background:"#8a9a8a",color:"#fff",whiteSpace:"nowrap"}}>本次不關</button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             {warnOpen&&reopenList.length>0&&(()=>{
               const slots=[];
               reopenList.forEach(x=>x.slots.forEach(t=>slots.push({d:x.d,t,key:`${x.d}-${t}`})));
@@ -3872,8 +3982,9 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       })()}
       {/* 顏色說明 */}
       <div className="np" style={{padding:"3px 12px",background:"#f5f0e8",display:"flex",gap:"14px",alignItems:"center",flexShrink:0,fontSize:"10px",color:"#6a4a2e"}}>
-        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#fff3cc",border:"1px solid #d8c060",borderRadius:"3px",verticalAlign:"-2px"}}/> {YEL_AT}–{RED_AT-1}人 特別留意</span>
-        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe8e8",border:"1px solid #d88080",borderRadius:"3px",verticalAlign:"-2px"}}/> {RED_AT}人以上</span>
+        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#fff3cc",border:"1px solid #d8c060",borderRadius:"3px",verticalAlign:"-2px"}}/> {YEL_AT}–{ORG_AT-1}人 留意</span>
+        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe0c0",border:"1px solid #e0a060",borderRadius:"3px",verticalAlign:"-2px"}}/> {ORG_AT}–{RED_AT-1}人 需判斷(可選不關)</span>
+        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe8e8",border:"1px solid #d88080",borderRadius:"3px",verticalAlign:"-2px"}}/> {RED_AT}人以上 必關</span>
       </div>
 
       {/* 選單日時的返回全部列(只在篩選單日時出現) */}
@@ -3928,22 +4039,23 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
                   const manualTotal=entry?(a+ch):null;
                   const disp=manualTotal!==null?manualTotal:autoT;
                   const red=disp>=RED_AT;
-                  const yel=!red&&disp>=YEL_AT;
+                  const org=!red&&disp>=ORG_AT;
+                  const yel=!red&&!org&&disp>=YEL_AT;
                   const active=inRange(date);
                   const closer=closeMap[key];
                   return (
                     <React.Fragment key={di}>
                       <td onClick={()=>active&&setEditCell({key,a:entry?String(entry.a):"",ch:entry?String(entry.ch):"",autoT})}
                         style={{padding:"3px",border:"1px solid #e0d8c8",borderLeft:"3px solid #8a6a3a",minWidth:isMobile?"60px":"40px",verticalAlign:"top",cursor:active?"pointer":"default",
-                        background:red?"#ffe8e8":yel?"#fff3cc":active?"transparent":"#ece8e0",opacity:active?1:0.45}}>
+                        background:red?"#ffe8e8":org?"#ffe6cc":yel?"#fff3cc":active?"transparent":"#ece8e0",opacity:active?1:0.45}}>
                         {active&&(entry?(
                           <div style={{textAlign:"center",minHeight:"30px"}}>
-                            <div style={{fontSize:"14px",fontWeight:"700",color:red?"#e82020":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</div>
+                            <div style={{fontSize:"14px",fontWeight:"700",color:red?"#e82020":org?"#c06010":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</div>
                             <div style={{fontSize:"8px",color:"#8a6a50"}}>大{a} 小{ch}</div>
                             {entry.by&&<div style={{fontSize:"7px",color:"#aaa"}}>{entry.src==="麥"?"麥·":""}{entry.by} {entry.at}</div>}
                           </div>
                         ):(
-                          <div style={{textAlign:"center",minHeight:"30px",lineHeight:"30px",fontSize:"13px",fontWeight:"700",color:autoT>=RED_AT?"#e82020":autoT>=YEL_AT?"#b08000":autoT>0?"#9a8a76":"#c8c0b0"}}>{autoT>0?autoT:"＋"}</div>
+                          <div style={{textAlign:"center",minHeight:"30px",lineHeight:"30px",fontSize:"13px",fontWeight:"700",color:autoT>=RED_AT?"#e82020":autoT>=ORG_AT?"#c06010":autoT>=YEL_AT?"#b08000":autoT>0?"#9a8a76":"#c8c0b0"}}>{autoT>0?autoT:"＋"}</div>
                         ))}
                       </td>
                       <td style={{padding:"3px",border:"1px solid #e0d8c8",verticalAlign:"top",minWidth:isMobile?"70px":"44px",opacity:active?1:0.45}}>
@@ -4441,7 +4553,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v89</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v90</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
