@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v98</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v100</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2317,12 +2317,15 @@ function depositUrgency(g) {
   if (!needsDeposit(g.headcount, g.isVip)) return null;
   const dd=depDeadlineOf(g);
   if(!dd){ const days=daysSinceBook(g.bookDate); if(days===null)return null; if(days>=3)return"overdue"; if(days>=1)return"urgent"; return null; }
-  if(dd.lastMinute) return "urgent";      // 前1天才訂位,2小時內付款,一律緊急
-  const now=new Date(); now.setHours(0,0,0,0);
-  const db=new Date(dd.dayBefore); db.setHours(0,0,0,0);
-  const diff=Math.round((db-now)/86400000);
-  if(diff<0) return "overdue";            // 已過用餐前1天中午
-  if(diff<=1) return "urgent";            // 剩1天內
+  const now=new Date();
+  // 用餐日已過 → 逾期
+  const mealEnd=new Date(dd.meal); mealEnd.setHours(23,59,59,999);
+  if(now>mealEnd) return "overdue";
+  if(dd.lastMinute) return "urgent";      // 前1天才訂位:訂位後2小時內(沒存訂位時間,一律緊急)
+  // 截止 = 用餐前1天「中午12:00」→ 要比到「時間」,不能只比日期
+  const dl=new Date(dd.dayBefore); dl.setHours(12,0,0,0);
+  if(now>dl) return "overdue";                       // 已過中午12:00
+  if(dl-now <= 36*3600*1000) return "urgent";        // 剩36小時內
   return null;
 }
 
@@ -2820,7 +2823,7 @@ const rowBg=(g)=>{
   const COLS=[
     {key:"date",       label:"日期",    w:50, text:true},
     {key:"time",       label:"時間",    w:50, text:true},
-    {key:"name",       label:"姓名",    w:54, text:true},
+    {key:"name",       label:"姓名",    w:88, text:true},
     {key:"phone",      label:"電話",    w:102,text:true},
     {key:"headcount",  label:"人數",    w:60, text:true},
     {key:"bookDate",   label:"訂位日",  w:50, text:true},
@@ -2843,7 +2846,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v98</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v100</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             {[
@@ -2882,10 +2885,28 @@ const rowBg=(g)=>{
               </div>
             ))}
             <div style={{fontSize:"11px",color:"#8a6a4a",marginTop:"8px",borderTop:"2px solid #d8c090",paddingTop:"7px"}}>下方每組點餐狀態格可點:選「已封存/現場點餐」等。過期的訂位會出現「直接封存 / 客訴與建議」。</div>
+            <div style={{marginTop:"10px",background:"#fff7e8",border:"1.5px solid #e0b060",borderRadius:"10px",padding:"10px 12px"}}>
+              <div style={{fontSize:"13px",fontWeight:"800",color:"#a05a10",marginBottom:"7px",borderBottom:"1.5px solid #e0c890",paddingBottom:"5px"}}>💰 訂金規則</div>
+              {[
+                ["誰要付訂金","10 人以上（大人+小孩+嬰兒 加總）或包廂,一律要付。包廂不管幾人都要。"],
+                ["金額","每人 $100;包廂最低 $1000。"],
+                ["何時要付清","用餐<b>前一天中午 12:00 前</b>匯款完成,逾期視同取消。"],
+                ["前一天才訂位","改成<b>訂位後 2 小時內</b>付款,才會保留位置。"],
+                ["🟠 待付訂","還沒付,快到期了（剩 36 小時內）。"],
+                ["🔴 逾期","已經超過 12:00 那個時間點還沒付 → 要打電話問。"],
+                ["客人怎麼付","訂位頁面有台新帳號＋「複製帳號」鈕;付完客人可自己回報後 5 碼 → 這裡變「待核對」,你核對後點成「已核對」。"],
+                ["填了訂金就不再提醒","訂金欄有金額、或已核對/待核對,紅字就會消失。"],
+              ].map(([k,v],i2,arr)=>(
+                <div key={k} style={{display:"flex",gap:"8px",padding:"6px 0",fontSize:"12px",lineHeight:"1.6",borderBottom:i2<arr.length-1?"1px solid #f0e0c0":"none"}}>
+                  <span style={{fontWeight:"800",color:"#8a5210",flexShrink:0,minWidth:"88px"}}>{k}</span>
+                  <span style={{color:"#5a4530"}} dangerouslySetInnerHTML={{__html:v}}/>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
-          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
+          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="篩選日期（如 5/3）"
@@ -2897,7 +2918,8 @@ const rowBg=(g)=>{
           const pastN=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;
           const importedToday = lastResvImport===todayStr;
           const dow=new Date().getDay(); // 0日 1一 2二 3三 4四 5五 6六
-          const needClose=[1,3,5].includes(dow);  // 一三五 要關訂位
+          const _sm=(new Date().getMonth()+1)<9;   // 暑假(到8/31)每天關訂位;9/1起一三五
+          const needClose=_sm?true:[1,3,5].includes(dow);
           const needCall=[3,4].includes(dow);      // 三四 要打電話確認週末
           const needSave=[1,3,5].includes(dow);    // 一三五 要存錢
           const needKey=[1,2,3,4,5].includes(dow); // 平日 key人事/物料
@@ -3024,7 +3046,7 @@ const rowBg=(g)=>{
                 {urgentGs.length>0&&(
                   <div style={{display:"flex",alignItems:"flex-start",gap:"8px"}}>
                     <span style={{fontSize:"13px"}}>⚠️</span>
-                    <span style={{fontSize:"12px",color:"#caa060"}}>即將到期：{urgentGs.map(g=>`${g.name} 還剩${3-daysSinceBook(g.bookDate)}天`).join("、")}</span>
+                    <span style={{fontSize:"12px",color:"#caa060"}}>即將到期：{urgentGs.map(g=>{const dd=depDeadlineOf(g);return `${g.name} ${dd?(dd.lastMinute?"訂後2hr內":`${dd.label}前`):""}`;}).join("、")}</span>
                   </div>
                 )}
               </div>
@@ -3035,7 +3057,7 @@ const rowBg=(g)=>{
       </div>
 
       <div style={{overflowX:"auto",overflowY:"auto",flex:1}}>
-        <table style={{borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap"}}>
+        <table style={{borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap",width:"100%",minWidth:"max-content"}}>
           <thead>
             <tr style={{background:"#efe6d4",position:"sticky",top:0,zIndex:5}}>
               <th style={{...TH,minWidth:80}}>代碼</th>
@@ -4009,7 +4031,11 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
 
   // ── 關訂位防呆 + 步驟指引 ──
   const _dowNow = new Date().getDay();
-  const isCloseDay = [1,3,5].includes(_dowNow);            // 一三五 要關訂位
+  // 暑假期間(至 8/31)每天都要關訂位;9/1 起恢復每週一三五
+  const _tdy = new Date();
+  const _isSummer = (_tdy.getMonth()+1) < 9;              // 1~8月 = 暑假模式(每天)
+  const isCloseDay = _isSummer ? true : [1,3,5].includes(_dowNow);
+  const closeDayLabel = _isSummer ? "暑假期間每天都要關訂位（到 8/31）" : "每週一、三、五要關訂位";
   const _weekDGuard = Array.from({length:7},(_,di)=>weekDates[di]).filter(d=>inRange(d));
   const unclosedRedCnt = _weekDGuard.reduce((s,d)=>s+daySlots(d).needClose.length,0);
   const importedThisWeek = !!lastImport;                    // 有導入紀錄
@@ -4208,11 +4234,16 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
             <div style={{fontSize:"34px",marginBottom:"6px"}}>⚠️</div>
             <div style={{fontSize:"17px",color:"#c02020",fontWeight:"800",marginBottom:"8px"}}>今天的關訂位還沒完成!</div>
             <div style={{fontSize:"14px",color:"#5a4530",lineHeight:"1.7",marginBottom:"16px"}}>
-              今天(週{["日","一","二","三","四","五","六"][_dowNow]})要關訂位。{unclosedRedCnt>0?<>目前還有 <b style={{color:"#c02020"}}>{unclosedRedCnt} 個滿20人的時段</b>沒關。<br/></>:<br/>}要先去大麥POS關掉、並在這裡按「完成關訂位」嗎?
+              {_isSummer?"暑假期間每天都要關訂位。":`今天(週${["日","一","二","三","四","五","六"][_dowNow]})要關訂位。`}
+              {unclosedRedCnt>0?<><br/>目前還有 <b style={{color:"#c02020"}}>{unclosedRedCnt} 個滿{RED_AT}人的時段</b>沒關。</>:""}
             </div>
+            <button onClick={()=>{setLeaveWarn(false);setFinishOpen(true);}}
+              style={{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"15px",fontWeight:"800",cursor:"pointer",marginBottom:"8px"}}>
+              🔒 完成關訂位（記錄關到哪＋夥伴）
+            </button>
             <button onClick={()=>setLeaveWarn(false)}
-              style={{width:"100%",padding:"13px",borderRadius:"12px",border:"none",background:"#c02020",color:"#fff",fontSize:"15px",fontWeight:"800",cursor:"pointer",marginBottom:"9px"}}>
-              留下來處理
+              style={{width:"100%",padding:"11px",borderRadius:"11px",border:"1.5px solid #c02020",background:"#fff",color:"#c02020",fontSize:"13px",fontWeight:"800",cursor:"pointer",marginBottom:"9px"}}>
+              留下來處理（還沒關完）
             </button>
             <div style={{display:"flex",gap:"8px"}}>
               <button onClick={()=>{setLeaveAck(true);setLeaveWarn(false);onBack();}}
@@ -4229,8 +4260,8 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v98</div>
-          <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v100</div>
+          <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
           <button onClick={()=>fileInputRef.current&&fileInputRef.current.click()} style={{padding:"6px 10px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",cursor:"pointer",fontSize:"11px",fontWeight:"700"}}>📥 大麥</button>
@@ -4465,12 +4496,13 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
         </table>
       </div>
 
-      {/* 完成 key 浮動按鈕 */}
+      {/* 完成關訂位:主要入口在「返回」時的提醒視窗;這裡保留一顆備用 */}
       <div className="np" style={{padding:"6px 14px",background:"#ede2d0",flexShrink:0}}>
         <button onClick={()=>setFinishOpen(true)}
-          style={{width:"100%",padding:"10px",borderRadius:"10px",border:"none",background:"#3a6a8a",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
+          style={{width:"100%",padding:"10px",borderRadius:"10px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
           🔒 完成關訂位（記錄關到哪＋夥伴）
         </button>
+        <div style={{fontSize:"9px",color:"#8a6a4a",textAlign:"center",marginTop:"3px"}}>按「← 返回」也會跳出提醒,可以在那裡直接完成</div>
       </div>
     </div>
   );
@@ -4940,7 +4972,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v98</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v100</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
