@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v95</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v97</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2685,6 +2685,9 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [lastResvImport,setLastResvImport]=useState("");
   const [todoChecks,setTodoChecks]=useState({}); // 手動代辦打勾(關訂位、打電話)，跨裝置同步
   const [newTodo,setNewTodo]=useState("");
+  const [todoAdd,setTodoAdd]=useState(false);
+  const [todoFreq,setTodoFreq]=useState("once");   // once=只有今天 daily=每天 weekly=每週
+  const [todoDays,setTodoDays]=useState([1,3,5]);
   const toggleTodo=(key)=>{ const nn={...todoChecks,[key]:!todoChecks[key]}; setTodoChecks(nn); FS.saveDoc("todo",nn); };
   const todayStr=(()=>{const d=new Date();return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;})();
   useEffect(()=>{
@@ -2841,7 +2844,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v95</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v97</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             {[
@@ -2852,8 +2855,8 @@ const rowBg=(g)=>{
               {t:"❔ 說明",  fn:()=>setShowHelp(v=>!v), on:showHelp},
             ].map(b=>(
               <button key={b.t} onClick={b.fn}
-                style={{background:b.on?"#6a4a2e":"#f0e6d4",border:"1.5px solid #c8b89c",borderRadius:"8px",
-                  color:b.on?"#fff":"#6a4a2e",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>{b.t}</button>
+                style={{background:b.on?"#1a4a6a":"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",
+                  color:b.on?"#fff":"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>{b.t}</button>
             ))}
             <button onClick={()=>setShowCplCenter(true)}
               style={{background:"#c02020",border:"1.5px solid #8a1010",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:"5px"}}><IcoWarn size={15} color="#fff"/> 客訴中心</button>
@@ -2883,9 +2886,9 @@ const rowBg=(g)=>{
           </div>
         )}
         <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
-          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #c8b89c",background:"#f0e6d4",color:"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
-          <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #c8b89c",background:showMaiOnly?"#6a4a2e":"#f0e6d4",color:showMaiOnly?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
-          <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #c8b89c",background:showPast?"#6a4a2e":"#f0e6d4",color:showPast?"#fff":"#6a4a2e",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
+          <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const d=new Date().getDay();if(![1,3,5].includes(d))return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
+          <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
+          <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="篩選日期（如 5/3）"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
           {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
@@ -2905,8 +2908,15 @@ const rowBg=(g)=>{
           const keyDone=todoChecks[`key_${todayStr}`];
           const fbDone=todoChecks[`fb_${todayStr}`];
           const igDone=todoChecks[`ig_${todayStr}`];
-          const customToday=(todoChecks.customList||[]).filter(t=>t.date===todayStr);
-          const customAllDone=customToday.every(t=>todoChecks[`custom_${t.id}`]);
+          const _dowT=new Date().getDay();
+          const ckey=(t)=>(t.freq&&t.freq!=="once")?`custom_${t.id}_${todayStr}`:`custom_${t.id}`;
+          const customToday=(todoChecks.customList||[]).filter(t=>{
+            if(!t.freq||t.freq==="once") return t.date===todayStr;
+            if(t.freq==="daily") return true;
+            if(t.freq==="weekly") return (t.days||[]).includes(_dowT);
+            return false;
+          });
+          const customAllDone=customToday.every(t=>todoChecks[ckey(t)]);
           // 前幾天沒做完的(補做提醒)—— 只從開始使用的基準日之後算
           const overdueTasks=[];
           const sinceParts=(todoChecks._since||todayStr).split("/").map(Number);
@@ -2922,8 +2932,14 @@ const rowBg=(g)=>{
           }
           const allDone = importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
           return (
-            <div style={{marginTop:"8px",background:"#eaf2fa",borderRadius:"12px",border:"2.5px solid #6a94c0",padding:"11px 13px"}}>
-              <div style={{fontSize:"13px",color:"#1a4a7a",fontWeight:"800",marginBottom:allDone?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>📋 櫃檯代辦{allDone&&<span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>}</div>
+            <div style={{marginTop:"8px",background:"#fdf4dd",borderRadius:"12px",border:"2.5px solid #d8a840",padding:"11px 13px"}}>
+              <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"800",marginBottom:allDone?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>
+                📋 櫃檯代辦{allDone&&<span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>}
+                <span style={{flex:1}}/>
+                <button onClick={()=>{setNewTodo("");setTodoFreq("once");setTodoDays([1,3,5]);setTodoAdd(true);}}
+                  title="新增代辦"
+                  style={{width:"26px",height:"26px",lineHeight:"1",borderRadius:"7px",border:"1.5px solid #c08a20",background:"#fff",color:"#8a5210",fontSize:"16px",fontWeight:"900",cursor:"pointer",padding:0,flexShrink:0}}>＋</button>
+              </div>
               <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                 {overdueTasks.map(t=>(
                   <div key={t.key} onClick={()=>toggleTodo(t.key)} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:"#fbe0e0",border:"1px solid #d09090",borderRadius:"8px",padding:"6px 8px"}}>
@@ -2967,30 +2983,27 @@ const rowBg=(g)=>{
                 )}
                 <div onClick={()=>toggleTodo(`fb_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:fbDone?0.55:1,cursor:"pointer"}}>
                   <span style={{fontSize:"13px"}}>{fbDone?"✅":"🔴"}</span>
-                  <span style={{fontSize:"13px",color:fbDone?"#7a9a8a":"#1a3a5a",fontWeight:"700",textDecoration:fbDone?"line-through":"none"}}>💬 回覆 FB 訊息</span>
+                  <span style={{fontSize:"13px",color:fbDone?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:fbDone?"line-through":"none"}}>💬 回覆 FB 訊息</span>
                   {fbDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
                 </div>
                 <div onClick={()=>toggleTodo(`ig_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:igDone?0.55:1,cursor:"pointer"}}>
                   <span style={{fontSize:"13px"}}>{igDone?"✅":"🔴"}</span>
-                  <span style={{fontSize:"13px",color:igDone?"#7a9a8a":"#1a3a5a",fontWeight:"700",textDecoration:igDone?"line-through":"none"}}>📷 回覆 IG 訊息</span>
+                  <span style={{fontSize:"13px",color:igDone?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:igDone?"line-through":"none"}}>📷 回覆 IG 訊息</span>
                   {igDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
                 </div>
                 {customToday.map(t=>{
-                  const done=todoChecks[`custom_${t.id}`];
+                  const k=ckey(t); const done=todoChecks[k];
+                  const WD=["日","一","二","三","四","五","六"];
+                  const fq=(!t.freq||t.freq==="once")?null:t.freq==="daily"?"每天":`每週${(t.days||[]).map(d=>WD[d]).join("")}`;
                   return (
                     <div key={t.id} style={{display:"flex",alignItems:"center",gap:"8px",opacity:done?0.55:1}}>
-                      <span onClick={()=>toggleTodo(`custom_${t.id}`)} style={{fontSize:"13px",cursor:"pointer"}}>{done?"✅":"🔴"}</span>
-                      <span onClick={()=>toggleTodo(`custom_${t.id}`)} style={{fontSize:"13px",color:done?"#7a9a7a":"#3a2a1a",fontWeight:"700",textDecoration:done?"line-through":"none",cursor:"pointer",flex:1}}>📝 {t.text}</span>
-                      <span onClick={()=>{const nn={...todoChecks,customList:(todoChecks.customList||[]).filter(x=>x.id!==t.id)};delete nn[`custom_${t.id}`];setTodoChecks(nn);FS.saveDoc("todo",nn);}} style={{fontSize:"11px",color:"#a06050",cursor:"pointer",padding:"0 4px"}}>✕</span>
+                      <span onClick={()=>toggleTodo(k)} style={{fontSize:"13px",cursor:"pointer"}}>{done?"✅":"🔴"}</span>
+                      <span onClick={()=>toggleTodo(k)} style={{fontSize:"13px",color:done?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:done?"line-through":"none",cursor:"pointer",flex:1}}>📝 {t.text}</span>
+                      {fq&&<span style={{fontSize:"9px",fontWeight:"700",color:"#8a5210",background:"#f8e8b8",border:"1px solid #d8b860",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>{fq}</span>}
+                      <span onClick={()=>{if(!window.confirm(`刪除代辦「${t.text}」?`))return;const nn={...todoChecks,customList:(todoChecks.customList||[]).filter(x=>x.id!==t.id)};delete nn[k];setTodoChecks(nn);FS.saveDoc("todo",nn);}} style={{fontSize:"11px",color:"#a06050",cursor:"pointer",padding:"0 4px"}}>✕</span>
                     </div>
                   );
                 })}
-                <div style={{display:"flex",gap:"6px",marginTop:"2px"}}>
-                  <input value={newTodo} onChange={e=>setNewTodo(e.target.value)} placeholder="＋ 新增今日待辦…"
-                    style={{flex:1,padding:"6px 10px",borderRadius:"8px",border:"1px solid #4a3520",background:"#ffffff",color:"#3a2a1a",fontSize:"12px"}}/>
-                  <button onClick={()=>{const t=newTodo.trim();if(!t)return;const item={id:`${Date.now()}`,text:t,date:todayStr};const nn={...todoChecks,customList:[...(todoChecks.customList||[]),item]};setTodoChecks(nn);FS.saveDoc("todo",nn);setNewTodo("");}}
-                    style={{padding:"6px 12px",borderRadius:"8px",border:"none",background:"#b07840",color:"#fff",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>新增</button>
-                </div>
                 {maiN>0&&(
                   <div onClick={()=>{setShowMaiOnly(true);setShowPast(false);}} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
                     <span style={{fontSize:"13px"}}>🔴</span>
@@ -3279,6 +3292,54 @@ const rowBg=(g)=>{
             <button onClick={()=>setShowStaff(false)} style={{width:"100%",marginTop:"12px",padding:"9px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>關閉</button>
           </div>
         </div>
+      )}
+      {todoAdd&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setTodoAdd(false)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"380px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#8a5210",marginBottom:"12px"}}>📋 新增櫃檯代辦</div>
+            <div style={{fontSize:"12px",color:"#6a4a10",fontWeight:"700",marginBottom:"5px"}}>要做什麼?</div>
+            <input value={newTodo} autoFocus onChange={e=>setNewTodo(e.target.value)} placeholder="例如:補印菜單、盤點飲料"
+              style={{width:"100%",boxSizing:"border-box",padding:"11px 12px",borderRadius:"10px",border:"1.5px solid #c08a20",background:"#fff",color:"#4a3010",fontSize:"15px",fontWeight:"700",marginBottom:"14px"}}/>
+            <div style={{fontSize:"12px",color:"#6a4a10",fontWeight:"700",marginBottom:"5px"}}>多久做一次?</div>
+            <div style={{display:"flex",gap:"6px",marginBottom:"10px"}}>
+              {[["once","只有今天"],["daily","每天"],["weekly","每週固定"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setTodoFreq(k)}
+                  style={{flex:1,padding:"10px 4px",borderRadius:"9px",border:`1.5px solid ${todoFreq===k?"#8a5210":"#e0cc90"}`,background:todoFreq===k?"#8a5210":"#fdf4dd",color:todoFreq===k?"#fff":"#6a4a10",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+            {todoFreq==="weekly"&&(
+              <div style={{background:"#fdf4dd",border:"1.5px solid #d8b860",borderRadius:"10px",padding:"10px",marginBottom:"10px"}}>
+                <div style={{fontSize:"11px",color:"#8a5210",fontWeight:"700",marginBottom:"6px"}}>選星期幾（可複選）</div>
+                <div style={{display:"flex",gap:"4px",marginBottom:"7px"}}>
+                  {["日","一","二","三","四","五","六"].map((w,i)=>{
+                    const on=todoDays.includes(i);
+                    return <button key={i} onClick={()=>setTodoDays(p=>on?p.filter(x=>x!==i):[...p,i].sort())}
+                      style={{flex:1,padding:"9px 0",borderRadius:"8px",border:`1.5px solid ${on?"#8a5210":"#e0cc90"}`,background:on?"#8a5210":"#fff",color:on?"#fff":"#8a7a50",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>{w}</button>;
+                  })}
+                </div>
+                <div style={{display:"flex",gap:"5px"}}>
+                  {[["一三五",[1,3,5]],["二四六",[2,4,6]],["週末",[0,6]],["平日",[1,2,3,4,5]]].map(([l,d])=>(
+                    <button key={l} onClick={()=>setTodoDays(d)} style={{flex:1,padding:"5px 0",borderRadius:"6px",border:"1px solid #d8b860",background:"#fff",color:"#8a5210",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{l}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{fontSize:"11px",color:"#a08a50",marginBottom:"14px",lineHeight:"1.6"}}>
+              {todoFreq==="once"?"只出現今天,做完就結束。":todoFreq==="daily"?"每天都會出現,每天要重新打勾。":`每${todoDays.length?"週"+todoDays.map(d=>["日","一","二","三","四","五","六"][d]).join("、"):"…選星期"}出現,當天要重新打勾。`}
+            </div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setTodoAdd(false)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #e0cc90",color:"#6a4a10",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const t=newTodo.trim(); if(!t){ window.alert("請先寫要做什麼"); return; }
+                  if(todoFreq==="weekly"&&todoDays.length===0){ window.alert("請至少選一天"); return; }
+                  const item={id:`${Date.now()}`,text:t,freq:todoFreq,days:todoFreq==="weekly"?todoDays:[],date:todayStr};
+                  const nn={...todoChecks,customList:[...(todoChecks.customList||[]),item]};
+                  setTodoChecks(nn); FS.saveDoc("todo",nn); setNewTodo(""); setTodoAdd(false);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#8a5210",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>加入代辦</button>
+            </div>
+          </div>
+        </div>, document.body
       )}
       {gCpl&&createPortal(
         <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={()=>setGCpl(null)}>
@@ -4169,7 +4230,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v95</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v97</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4880,7 +4941,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v95</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v97</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
