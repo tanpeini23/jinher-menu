@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v94</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v95</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1513,6 +1513,12 @@ function ComplaintPanel({ g, setGroups, groups, walkin, onAdd }) {
           {(it.kinds||[]).map(k=><span key={k} style={{fontSize:"10px",fontWeight:"700",background:"#fdeae0",border:"1px solid #e0b0a0",color:"#a04020",borderRadius:"5px",padding:"2px 6px"}}>{k}</span>)}
         </div>
       )}
+      {((it.attitudes||[]).length>0||it.attitude)&&(
+        <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginBottom:"5px"}}>
+          {(it.attitudes||[]).map(a=><span key={a} style={{fontSize:"10px",fontWeight:"700",background:a==="願意回訪"?"#dff0e6":"#f0e8f4",border:`1px solid ${a==="願意回訪"?"#7ab88a":"#c0a0d0"}`,color:a==="願意回訪"?"#1a6a3a":"#6a3a8a",borderRadius:"5px",padding:"2px 6px"}}>{a}</span>)}
+          {it.attitude&&<span style={{fontSize:"10px",color:"#6a3a8a"}}>「{it.attitude}」</span>}
+        </div>
+      )}
       {(it.dishes||[]).length>0&&(
         <div style={{marginBottom:"5px"}}>
           {(it.dishes||[]).map((dd,j)=>{
@@ -1532,7 +1538,6 @@ function ComplaintPanel({ g, setGroups, groups, walkin, onAdd }) {
       {it.photo&&<img src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
       <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 8px",fontSize:"11px",color:"#5a4030",lineHeight:"1.5"}}>
         <span style={{color:"#a08070"}}>原因</span><span>{it.reason||"—"}</span>
-        <span style={{color:"#a08070"}}>態度</span><span>{it.attitude||"—"}</span>
         <span style={{color:"#a08070"}}>如何調整</span><span>{it.adjust||it.note||"—"}</span>
         <span style={{color:"#a08070"}}>下次招待</span><span style={{color:"#1a6a3a",fontWeight:"700"}}>{it.treat||"—"}</span>
       </div>
@@ -1647,6 +1652,33 @@ function ArchivePhoto({ photoId, size=54 }){
   );
 }
 
+// ─── 手繪風 SVG 圖示(統一細線條、圓潤,配米白金棕色系)────────────────
+const Ico = ({d, size=16, color="currentColor", fill="none"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={color}
+    strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+    style={{verticalAlign:"-3px",flexShrink:0}}>{d}</svg>
+);
+const IcoFood = (p)=><Ico {...p} d={<><path d="M7 3v8M5 3v4a2 2 0 0 0 4 0V3M7 11v10"/><path d="M17 3c-1.5 1.5-2 3.5-2 5.5 0 1.7.8 2.5 2 2.5s2-.8 2-2.5c0-2-.5-4-2-5.5zM17 11v10"/></>}/>;
+const IcoService = (p)=><Ico {...p} d={<><path d="M12 3a5 5 0 0 0-5 5c0 4-1.5 5.5-2.5 6.5h15C18.5 13.5 17 12 17 8a5 5 0 0 0-5-5z"/><path d="M10.5 18a1.6 1.6 0 0 0 3 0"/><path d="M12 2.2v.8"/></>}/>;
+const IcoEnv = (p)=><Ico {...p} d={<><path d="M3.5 10.5 12 4l8.5 6.5"/><path d="M5.5 9.8V20h13V9.8"/><path d="M10 20v-5h4v5"/></>}/>;
+const IcoStore = (p)=><Ico {...p} d={<><path d="M4 9h16l-1 11H5L4 9z"/><path d="M4 9 5.5 4h13L20 9"/><path d="M9.5 13.5h5"/><path d="M8 9c0 1.4-.9 2.5-2 2.5M16 9c0 1.4.9 2.5 2 2.5M12 9v2.5"/></>}/>;
+const IcoForm = (p)=><Ico {...p} d={<><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3.5"/></>}/>;
+const IcoSearchChat = (p)=><Ico {...p} d={<><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 4v-4H6.5A2.5 2.5 0 0 1 4 13.5v-7z"/><circle cx="11.2" cy="9.8" r="2.6"/><path d="m13.3 11.9 2.1 2.1"/></>}/>;
+const IcoChart = (p)=><Ico {...p} d={<><path d="M4 20h16"/><path d="M7 20v-6M12 20V7M17 20v-9"/></>}/>;
+const IcoWarn = (p)=><Ico {...p} d={<><path d="M12 4.5 21 19H3l9-14.5z"/><path d="M12 10v4M12 16.6v.4"/></>}/>;
+
+const CPL_SOURCES = [
+  {k:"大訂餐評", Icon:IcoForm,       desc:"從過期訂單記的"},
+  {k:"現場餐評", Icon:IcoStore,      desc:"沒訂位的現場客人"},
+  {k:"Google",  Icon:IcoSearchChat, desc:"Google 評論"},
+];
+const CPL_TYPES = [
+  {k:"餐點", Icon:IcoFood},
+  {k:"服務", Icon:IcoService},
+  {k:"環境", Icon:IcoEnv},
+];
+const ATTITUDE_OPTS = ["客氣理性","情緒不滿","大聲激動","要求賠償","表示要給負評","當場已安撫","願意回訪","其他"];
+
 // 客訴細項:分類(環境/餐點/服務)+ 餐點兩層下拉複選 + 照片
 const CPL_KINDS = {
   環境: ["桌況/清潔","冷氣溫度","噪音吵雜","廁所","停車","座位安排","其他"],
@@ -1669,8 +1701,10 @@ function CplDetail({ val, onChange }) {
     <div style={{marginBottom:"12px"}}>
       <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型（可複選）</div>
       <div style={{display:"flex",gap:"6px",marginBottom:"8px"}}>
-        {["環境","餐點","服務"].map(t=>(
-          <button key={t} onClick={()=>set({type:t})} style={{...chip(v.type===t),flex:1,padding:"9px"}}>{t==="環境"?"🏠":t==="餐點"?"🍽":"🙋"} {t}</button>
+        {CPL_TYPES.map(({k,Icon})=>(
+          <button key={k} onClick={()=>set({type:k})} style={{...chip(v.type===k),flex:1,padding:"9px",display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>
+            <Icon size={16} color={v.type===k?"#fff":"#8a6a4a"}/>{k}
+          </button>
         ))}
       </div>
       {v.type&&v.type!=="餐點"&&(
@@ -1747,6 +1781,20 @@ function CplDetail({ val, onChange }) {
           )}
         </div>
       )}
+      <div style={{marginTop:"12px"}}>
+        <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客人態度（可複選）</div>
+        <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+          {ATTITUDE_OPTS.map(a=>{
+            const on=(v.attitudes||[]).includes(a);
+            return <button key={a} onClick={()=>set({attitudes:on?(v.attitudes||[]).filter(x=>x!==a):[...(v.attitudes||[]),a]})}
+              style={{...chip(on),background:on?(a==="願意回訪"?"#2a7a4a":"#a04020"):"#fff",borderColor:on?(a==="願意回訪"?"#2a7a4a":"#a04020"):"#d8c8b0"}}>{a}</button>;
+          })}
+        </div>
+        {(v.attitudes||[]).includes("其他")&&(
+          <input value={v.attitude||""} onChange={e=>set({attitude:e.target.value})} placeholder="其他態度,請描述"
+            style={{width:"100%",boxSizing:"border-box",marginTop:"6px",padding:"9px 11px",borderRadius:"9px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"13px"}}/>
+        )}
+      </div>
     </div>
   );
 }
@@ -1922,7 +1970,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
             <div style={{fontSize:"17px",color:"#a05030",fontWeight:"800",marginBottom:"3px"}}>⚠ 客訴與建議</div>
             <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px"}}>{g.name}（{g.date} {g.time}）— 記錄後會跟著這支電話,下次訂位自動提醒</div>
             <CplDetail val={cpl} onChange={setCpl}/>
-            {[["原因","reason"],["態度","attitude"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+            {[["原因/經過","reason"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
               <div key={k} style={{marginBottom:"12px"}}>
                 <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>{l}</div>
                 <textarea value={cpl[k]} onChange={e=>setCpl(p=>({...p,[k]:e.target.value}))} rows={2}
@@ -1935,7 +1983,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                   const now=new Date(); const date=`${now.getMonth()+1}/${now.getDate()}`;
                   const hasContent=cpl.type||(cpl.kinds||[]).length>0||(cpl.dishes||[]).length>0||cpl.photo||cpl.reason.trim()||cpl.attitude.trim()||cpl.adjust.trim()||cpl.treat.trim();
                   setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,
-                    complaints: hasContent?[...(x.complaints||[]),{...cpl,date}]:(x.complaints||[]),
+                    complaints: hasContent?[...(x.complaints||[]),{...cpl,date,source:"大訂餐評"}]:(x.complaints||[]),
                     archived:true, archiveType:x.archiveType==="menu"?"menu":"booking"}));
                   setCplOpen(false);
                 }}
@@ -2471,6 +2519,165 @@ function ItemsOffPage({ onBack }) {
   );
 }
 
+// ─── 客訴中心:統計 + 清單 + 新增(散客/Google)────────────────────────────
+function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
+  const [tab,setTab]=useState("stats");
+  const [fType,setFType]=useState("");
+  const [fSrc,setFSrc]=useState("");
+  const [addOpen,setAddOpen]=useState(false);
+  const [f,setF]=useState({name:"",phone:"",source:"現場餐評",type:"",kinds:[],dishes:[],photo:null,attitudes:[],attitude:"",reason:"",adjust:"",treat:""});
+  // 匯總:大訂餐評(訂位上的) + 散客/Google(walkinCpl)
+  const all=[];
+  (groups||[]).forEach(g=>(g.complaints||[]).forEach(c=>all.push({...c,source:c.source||"大訂餐評",_who:g.name,_phone:g.phone,_when:`${g.date||""} ${g.time||""}`})));
+  (walkinCpl||[]).forEach(c=>all.push({...c,source:c.source||"現場餐評",_who:c.name,_phone:c.phone,_when:""}));
+  const ymOf=(d)=>{const m=(d||"").match(/^(\d{1,2})\//);return m?+m[1]:0;};
+  const nowM=new Date().getMonth()+1;
+  const thisM=all.filter(c=>ymOf(c.date)===nowM), lastM=all.filter(c=>ymOf(c.date)===(nowM===1?12:nowM-1));
+  const byType={}; all.forEach(c=>{ if(c.type) byType[c.type]=(byType[c.type]||0)+1; });
+  const bySrc={};  all.forEach(c=>{ bySrc[c.source]=(bySrc[c.source]||0)+1; });
+  const dishCnt={};
+  all.forEach(c=>(c.dishes||[]).forEach(d=>{ const id=typeof d==="object"?d.id:d; const it=findItem(id); const nm=it?it.name:id; dishCnt[nm]=(dishCnt[nm]||0)+1; }));
+  const topDishes=Object.entries(dishCnt).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const shown=all.filter(c=>(!fType||c.type===fType)&&(!fSrc||c.source===fSrc))
+    .sort((a,b)=>{const p=x=>{const m=(x.date||"0/0").split("/").map(Number);return (m[0]||0)*100+(m[1]||0);};return p(b)-p(a);});
+  const chip=(on)=>({padding:"7px 12px",borderRadius:"8px",border:`1.5px solid ${on?"#a04020":"#c8b89c"}`,fontSize:"13px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#f0e6d4",color:on?"#fff":"#6a4a2e"});
+  const srcIcon=(k)=>{const s2=CPL_SOURCES.find(x=>x.k===k);return s2?<s2.Icon size={14} color="#8a5a30"/>:null;};
+  const Bar=({label,n,total,color})=>(
+    <div style={{marginBottom:"7px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:"12px",color:"#5a4530",fontWeight:"700",marginBottom:"3px"}}><span>{label}</span><span>{n} 件</span></div>
+      <div style={{height:"9px",background:"#efe6d4",borderRadius:"5px",overflow:"hidden"}}>
+        <div style={{width:`${total?Math.round(n/total*100):0}%`,height:"100%",background:color,borderRadius:"5px"}}/>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{minHeight:"100vh",background:"#f5efe2",display:"flex",flexDirection:"column"}}>
+      <div className="np" style={{padding:"8px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,borderBottom:"2.5px solid #c8b89c"}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
+        <div style={{fontSize:"14px",fontWeight:"800",color:"#a04020",display:"flex",alignItems:"center",gap:"6px"}}><IcoWarn size={17} color="#a04020"/> 客訴中心</div>
+        <button onClick={()=>{setF({name:"",phone:"",source:"現場餐評",type:"",kinds:[],dishes:[],photo:null,attitudes:[],attitude:"",reason:"",adjust:"",treat:""});setAddOpen(true);}}
+          style={{background:"#c02020",border:"none",borderRadius:"8px",color:"#fff",fontSize:"12px",fontWeight:"800",padding:"7px 11px",cursor:"pointer"}}>＋ 記客訴</button>
+      </div>
+      <div style={{display:"flex",gap:"8px",padding:"10px 12px 0"}}>
+        <button style={{...chip(tab==="stats"),flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}} onClick={()=>setTab("stats")}><IcoChart size={15} color={tab==="stats"?"#fff":"#6a4a2e"}/> 統計</button>
+        <button style={{...chip(tab==="list"),flex:1}} onClick={()=>setTab("list")}>清單（{all.length}）</button>
+      </div>
+
+      <div style={{overflowY:"auto",flex:1,padding:"12px"}}>
+        {tab==="stats"&&(<>
+          <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+            <div style={{flex:1,background:"#fff",border:"2px solid #e0a080",borderRadius:"12px",padding:"12px",textAlign:"center"}}>
+              <div style={{fontSize:"11px",color:"#8a6a4a"}}>本月客訴</div>
+              <div style={{fontSize:"30px",fontWeight:"900",color:"#a04020"}}>{thisM.length}</div>
+              <div style={{fontSize:"10px",color:thisM.length>lastM.length?"#c02020":"#2a7a4a",fontWeight:"700"}}>
+                上月 {lastM.length} 件{thisM.length!==lastM.length?(thisM.length>lastM.length?` ▲${thisM.length-lastM.length}`:` ▼${lastM.length-thisM.length}`):""}
+              </div>
+            </div>
+            <div style={{flex:1,background:"#fff",border:"2px solid #c8b89c",borderRadius:"12px",padding:"12px",textAlign:"center"}}>
+              <div style={{fontSize:"11px",color:"#8a6a4a"}}>累計總數</div>
+              <div style={{fontSize:"30px",fontWeight:"900",color:"#6a4a2e"}}>{all.length}</div>
+              <div style={{fontSize:"10px",color:"#a08a70"}}>願意回訪 {all.filter(c=>(c.attitudes||[]).includes("願意回訪")).length} 件</div>
+            </div>
+          </div>
+          <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px"}}>依類型</div>
+            {CPL_TYPES.map(({k,Icon})=>(
+              <Bar key={k} label={<span style={{display:"inline-flex",alignItems:"center",gap:"5px"}}><Icon size={13} color="#8a6a4a"/>{k}</span>} n={byType[k]||0} total={all.length} color={k==="餐點"?"#c06030":k==="服務"?"#8a6ac0":"#3a8a5a"}/>
+            ))}
+          </div>
+          <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px"}}>依來源</div>
+            {CPL_SOURCES.map(({k,Icon})=>(
+              <Bar key={k} label={<span style={{display:"inline-flex",alignItems:"center",gap:"5px"}}><Icon size={13} color="#8a6a4a"/>{k}</span>} n={bySrc[k]||0} total={all.length} color="#b07840"/>
+            ))}
+          </div>
+          <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px",display:"flex",alignItems:"center",gap:"6px"}}><IcoFood size={15} color="#c06030"/> 最常被客訴的餐點</div>
+            {topDishes.length===0?<div style={{fontSize:"12px",color:"#a09070",textAlign:"center",padding:"8px"}}>還沒有餐點客訴紀錄</div>
+              :topDishes.map(([nm,n],i)=>(
+                <div key={nm} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:i>0?"1px solid #f0e8d6":"none"}}>
+                  <span style={{fontSize:"13px",fontWeight:"900",color:"#c06030",minWidth:"18px"}}>{i+1}</span>
+                  <span style={{flex:1,fontSize:"13px",color:"#3a2a1a",fontWeight:"700"}}>{nm}</span>
+                  <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{n} 件</span>
+                </div>
+              ))}
+          </div>
+        </>)}
+
+        {tab==="list"&&(<>
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
+            <button style={{...chip(!fType&&!fSrc),padding:"5px 10px",fontSize:"12px"}} onClick={()=>{setFType("");setFSrc("");}}>全部</button>
+            {CPL_TYPES.map(({k,Icon})=><button key={k} style={{...chip(fType===k),padding:"5px 10px",fontSize:"12px",display:"inline-flex",alignItems:"center",gap:"4px"}} onClick={()=>setFType(fType===k?"":k)}><Icon size={13} color={fType===k?"#fff":"#8a6a4a"}/>{k}</button>)}
+            {CPL_SOURCES.map(({k,Icon})=><button key={k} style={{...chip(fSrc===k),padding:"5px 10px",fontSize:"12px",display:"inline-flex",alignItems:"center",gap:"4px"}} onClick={()=>setFSrc(fSrc===k?"":k)}><Icon size={13} color={fSrc===k?"#fff":"#8a6a4a"}/>{k}</button>)}
+          </div>
+          {shown.length===0?<div style={{textAlign:"center",padding:"40px",color:"#a09070",fontSize:"13px"}}>沒有符合的紀錄</div>
+            :shown.map((c,i)=>(
+              <div key={i} style={{background:"#fff",border:"1.5px solid #e0c8b8",borderRadius:"11px",padding:"11px 12px",marginBottom:"8px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"5px",flexWrap:"wrap"}}>
+                  <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{c.date}</span>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"10px",fontWeight:"700",background:"#f5ece0",border:"1px solid #d8c8b0",borderRadius:"5px",padding:"2px 6px",color:"#8a5a30"}}>{srcIcon(c.source)}{c.source}</span>
+                  {c.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"2px 7px"}}>{c.type}</span>}
+                  <span style={{flex:1}}/>
+                  <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c._who||"—"} {c._phone||""}</span>
+                </div>
+                {(c.kinds||[]).length>0&&<div style={{fontSize:"11px",color:"#8a4a10",marginBottom:"3px"}}>{(c.kinds||[]).join("、")}</div>}
+                {(c.dishes||[]).map((d,j)=>{const id=typeof d==="object"?d.id:d;const it=findItem(id);const dk=(typeof d==="object"?d.kinds:[])||[];
+                  return <div key={j} style={{fontSize:"11px",color:"#8a4a10",lineHeight:"1.6"}}>🍽 <b>{it?it.name:id}</b>{dk.length>0?`　${dk.join("、")}`:""}{(typeof d==="object"&&d.note)?`　—「${d.note}」`:""}</div>;})}
+                {(c.attitudes||[]).length>0&&<div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginTop:"4px"}}>{(c.attitudes||[]).map(a=><span key={a} style={{fontSize:"10px",fontWeight:"700",background:a==="願意回訪"?"#dff0e6":"#f0e8f4",border:`1px solid ${a==="願意回訪"?"#7ab88a":"#c0a0d0"}`,color:a==="願意回訪"?"#1a6a3a":"#6a3a8a",borderRadius:"5px",padding:"2px 6px"}}>{a}</span>)}</div>}
+                {c.reason&&<div style={{fontSize:"11px",color:"#5a4030",marginTop:"4px",lineHeight:"1.5"}}>原因:{c.reason}</div>}
+                {c.treat&&<div style={{fontSize:"11px",color:"#1a6a3a",fontWeight:"700",marginTop:"2px"}}>下次招待:{c.treat}</div>}
+              </div>
+            ))}
+        </>)}
+      </div>
+
+      {addOpen&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={()=>setAddOpen(false)}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"430px",maxHeight:"88vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"10px"}}>＋ 記錄客訴</div>
+            <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>來源</div>
+            <div style={{display:"flex",gap:"6px",marginBottom:"10px"}}>
+              {CPL_SOURCES.filter(x=>x.k!=="大訂餐評").map(({k,Icon,desc})=>(
+                <button key={k} onClick={()=>setF(p=>({...p,source:k}))}
+                  style={{flex:1,padding:"9px 6px",borderRadius:"9px",border:`1.5px solid ${f.source===k?"#a04020":"#d8c8b0"}`,background:f.source===k?"#a04020":"#fff",color:f.source===k?"#fff":"#6a4a2e",cursor:"pointer",fontWeight:"800",fontSize:"12px"}}>
+                  <Icon size={16} color={f.source===k?"#fff":"#8a6a4a"}/><div>{k}</div><div style={{fontSize:"9px",fontWeight:"400",opacity:0.75}}>{desc}</div>
+                </button>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+              <input value={f.phone} onChange={e=>setF(p=>({...p,phone:e.target.value}))} placeholder="電話（選填,填了下次訂位會提醒）" inputMode="tel"
+                style={{flex:1.4,padding:"10px 11px",borderRadius:"9px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",fontWeight:"700"}}/>
+              <input value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder={f.source==="Google"?"Google 暱稱":"姓名"}
+                style={{flex:1,padding:"10px 11px",borderRadius:"9px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"14px"}}/>
+            </div>
+            <CplDetail val={f} onChange={setF}/>
+            {[["原因/經過","reason"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+              <div key={k} style={{marginBottom:"11px"}}>
+                <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
+                <textarea value={f[k]} onChange={e=>setF(p=>({...p,[k]:e.target.value}))} rows={2}
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",lineHeight:"1.5",resize:"vertical",fontFamily:"inherit"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setAddOpen(false)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const has=f.type||(f.kinds||[]).length>0||(f.dishes||[]).length>0||f.reason.trim();
+                  if(!has){ window.alert("至少選一個類型或填原因"); return; }
+                  const now=new Date();
+                  const rec={id:`w${Date.now()}`,date:`${now.getMonth()+1}/${now.getDate()}`,...f};
+                  const nl=[...(walkinCpl||[]),rec];
+                  setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+                  setAddOpen(false);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#c02020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>儲存客訴</button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
+    </div>
+  );
+}
+
 function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [filter,setFilter]=useState("");
   const [showMaiOnly,setShowMaiOnly]=useState(false);
@@ -2496,7 +2703,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showStats,setShowStats]=useState(false);
   const [showItemsOff,setShowItemsOff]=useState(false);
   const [showHelp,setShowHelp]=useState(false);
-  const [moreOpen,setMoreOpen]=useState(false);
+  const [showCplCenter,setShowCplCenter]=useState(false);
   const [compactMode,setCompactMode]=useState(typeof window!=="undefined"&&window.innerWidth<820);
   const [wOpen,setWOpen]=useState(false);   // 散客客訴視窗
   const [gCpl,setGCpl]=useState(null);      // {group} 任一訂位新增客訴(含已封存)
@@ -2606,6 +2813,7 @@ const rowBg=(g)=>{
   if(showDingwe) return <DingwePage groups={groups} onBack={()=>setShowDingwe(false)} staffList={staffList} setGroups={setGroups}/>;
   if(showStats) return <StatsPage onBack={()=>setShowStats(false)} staffList={staffList}/>;
   if(showItemsOff) return <ItemsOffPage onBack={()=>setShowItemsOff(false)}/>;
+  if(showCplCenter) return <CplCenterPage onBack={()=>setShowCplCenter(false)} groups={groups} walkinCpl={walkinCpl} setWalkinCpl={setWalkinCpl}/>;
 
   const COLS=[
     {key:"date",       label:"日期",    w:50, text:true},
@@ -2633,14 +2841,13 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v94</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v95</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             {[
               {t:"👥 員工",  fn:()=>setShowStaff(true)},
               {t:"📅 假日",  fn:()=>setShowHoliday(true)},
               {t:"🚫 品項",  fn:()=>setShowItemsOff(true)},
-              {t:"⚠ 散客客訴",fn:()=>{setWForm({name:"",phone:"",type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setWOpen(true);}},
               {t:compactMode?"📱 手機版":"💻 電腦版", fn:()=>setCompactMode(v=>!v)},
               {t:"❔ 說明",  fn:()=>setShowHelp(v=>!v), on:showHelp},
             ].map(b=>(
@@ -2648,6 +2855,8 @@ const rowBg=(g)=>{
                 style={{background:b.on?"#6a4a2e":"#f0e6d4",border:"1.5px solid #c8b89c",borderRadius:"8px",
                   color:b.on?"#fff":"#6a4a2e",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>{b.t}</button>
             ))}
+            <button onClick={()=>setShowCplCenter(true)}
+              style={{background:"#c02020",border:"1.5px solid #8a1010",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:"5px"}}><IcoWarn size={15} color="#fff"/> 客訴中心</button>
             <button onClick={()=>setShowAdd(true)}
               style={{background:"#b07840",border:"1.5px solid #8a5a20",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>＋ 新增大訂</button>
           </div>
@@ -2662,7 +2871,7 @@ const rowBg=(g)=>{
               ["員工","管理夥伴名單(新增/刪除),就是各種「選夥伴」會出現的名字。"],
               ["假日","設定哪些日期算假日(影響備料、訂位人數標準)。"],
               ["🚫 品項","按日期關閉餐點(可選幾號到幾號);季節限定品項在這裡設上架~下架檔期,自動上下架。"],
-              ["散客客訴","沒有訂位的現場客人要記客訴,按這裡。記錄綁電話,之後同一支電話訂位會自動提醒。"],
+              ["客訴中心","所有客訴集中管理:統計(本月件數/類型佔比/最常被客訴的餐點)、清單篩選,也可在這裡記現場餐評和 Google 評論。填了電話,下次訂位會自動跳紅色「客訴」提醒。"],
               ["+ 新增大訂","手動新增一筆大訂訂位(客人沒線上訂、或電話訂位時用)。"],
             ].map(([k,v],i2,arr)=>(
               <div key={k} style={{display:"flex",gap:"8px",padding:"7px 0",fontSize:"12px",lineHeight:"1.6",borderBottom:i2<arr.length-1?"1px solid #eee0c4":"none"}}>
@@ -2694,6 +2903,8 @@ const rowBg=(g)=>{
           const callDone=todoChecks[`call_${todayStr}`];
           const saveDone=todoChecks[`save_${todayStr}`];
           const keyDone=todoChecks[`key_${todayStr}`];
+          const fbDone=todoChecks[`fb_${todayStr}`];
+          const igDone=todoChecks[`ig_${todayStr}`];
           const customToday=(todoChecks.customList||[]).filter(t=>t.date===todayStr);
           const customAllDone=customToday.every(t=>todoChecks[`custom_${t.id}`]);
           // 前幾天沒做完的(補做提醒)—— 只從開始使用的基準日之後算
@@ -2709,10 +2920,10 @@ const rowBg=(g)=>{
             if([3,4].includes(wd)&&!todoChecks[`call_${ds}`]) overdueTasks.push({key:`call_${ds}`,text:`📞 ${ds}（${wl}）的打電話確認還沒做`});
             if([1,3,5].includes(wd)&&!todoChecks[`save_${ds}`]) overdueTasks.push({key:`save_${ds}`,text:`💰 ${ds}（${wl}）的存錢還沒做`});
           }
-          const allDone = importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && customAllDone;
+          const allDone = importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
           return (
-            <div style={{marginTop:"8px",background:"#efe6d4",borderRadius:"12px",border:"1px solid #d8c8b0",padding:"10px 12px"}}>
-              <div style={{fontSize:"12px",color:"#c8a060",fontWeight:"800",marginBottom:allDone?"0":"8px",display:"flex",alignItems:"center",gap:"6px"}}>📋 櫃檯代辦{allDone&&<span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>}</div>
+            <div style={{marginTop:"8px",background:"#eaf2fa",borderRadius:"12px",border:"2.5px solid #6a94c0",padding:"11px 13px"}}>
+              <div style={{fontSize:"13px",color:"#1a4a7a",fontWeight:"800",marginBottom:allDone?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>📋 櫃檯代辦{allDone&&<span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>}</div>
               <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                 {overdueTasks.map(t=>(
                   <div key={t.key} onClick={()=>toggleTodo(t.key)} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:"#fbe0e0",border:"1px solid #d09090",borderRadius:"8px",padding:"6px 8px"}}>
@@ -2754,6 +2965,16 @@ const rowBg=(g)=>{
                     {keyDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
                   </div>
                 )}
+                <div onClick={()=>toggleTodo(`fb_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:fbDone?0.55:1,cursor:"pointer"}}>
+                  <span style={{fontSize:"13px"}}>{fbDone?"✅":"🔴"}</span>
+                  <span style={{fontSize:"13px",color:fbDone?"#7a9a8a":"#1a3a5a",fontWeight:"700",textDecoration:fbDone?"line-through":"none"}}>💬 回覆 FB 訊息</span>
+                  {fbDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                </div>
+                <div onClick={()=>toggleTodo(`ig_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:igDone?0.55:1,cursor:"pointer"}}>
+                  <span style={{fontSize:"13px"}}>{igDone?"✅":"🔴"}</span>
+                  <span style={{fontSize:"13px",color:igDone?"#7a9a8a":"#1a3a5a",fontWeight:"700",textDecoration:igDone?"line-through":"none"}}>📷 回覆 IG 訊息</span>
+                  {igDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                </div>
                 {customToday.map(t=>{
                   const done=todoChecks[`custom_${t.id}`];
                   return (
@@ -2869,7 +3090,7 @@ const rowBg=(g)=>{
                          <div>
                            <EditCell g={g} field={c.key} w={c.w-8} onSave={save}/>
                            {(()=>{const n=phoneCplMap[normPhone(g.phone)];return n?(
-                             <div style={{marginTop:"2px",fontSize:"9px",fontWeight:"800",color:"#fff",background:"#c04030",borderRadius:"5px",padding:"1px 5px",display:"inline-block"}}>⚠客訴×{n} 點開看</div>
+                             <div className="blinkExcl" style={{marginTop:"2px",fontSize:"10px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 7px",display:"inline-block",letterSpacing:"1px"}}>客訴{n>1?` ×${n}`:""}</div>
                            ):null;})()}
                          </div>
                        ):
@@ -3065,7 +3286,7 @@ const rowBg=(g)=>{
             <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"3px"}}>⚠ 新增客訴</div>
             <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px"}}>{gCpl.name}（{gCpl.date} {gCpl.time}）— 記錄後會跟著這支電話,下次訂位自動提醒</div>
             <CplDetail val={gForm} onChange={setGForm}/>
-            {[["原因","reason"],["態度","attitude"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+            {[["原因/經過","reason"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
               <div key={k} style={{marginBottom:"11px"}}>
                 <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
                 <textarea value={gForm[k]} onChange={e=>setGForm(p=>({...p,[k]:e.target.value}))} rows={2}
@@ -3078,7 +3299,7 @@ const rowBg=(g)=>{
                   const has=gForm.type||(gForm.kinds||[]).length>0||(gForm.dishes||[]).length>0||gForm.photo||gForm.reason.trim()||gForm.attitude.trim()||gForm.adjust.trim()||gForm.treat.trim();
                   if(!has){ window.alert("至少選一個類型或填一欄"); return; }
                   const now=new Date(); const date=`${now.getMonth()+1}/${now.getDate()}`;
-                  setGroups(p=>p.map(x=>x.id!==gCpl.id?x:{...x,complaints:[...(x.complaints||[]),{...gForm,date}]}));
+                  setGroups(p=>p.map(x=>x.id!==gCpl.id?x:{...x,complaints:[...(x.complaints||[]),{...gForm,date,source:"大訂餐評"}]}));
                   setGCpl(null);
                 }}
                 style={{flex:2,padding:"12px",borderRadius:"10px",background:"#a04020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>儲存客訴</button>
@@ -3099,7 +3320,7 @@ const rowBg=(g)=>{
                 style={{flex:1,padding:"11px 12px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"15px"}}/>
             </div>
             <CplDetail val={wForm} onChange={setWForm}/>
-            {[["原因","reason"],["態度","attitude"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+            {[["原因/經過","reason"],["如何調整","adjust"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
               <div key={k} style={{marginBottom:"10px"}}>
                 <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
                 <textarea value={wForm[k]} onChange={e=>setWForm(p=>({...p,[k]:e.target.value}))} rows={2}
@@ -3948,7 +4169,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v94</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v95</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>每週一、三、五需統計人數</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4659,7 +4880,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v94</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v95</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
