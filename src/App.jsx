@@ -89,13 +89,22 @@ const FS = {
 
 // ─── MENU DATA ───────────────────────────────────────────────────────────────
 const MENU = {
+  durian:   { label:"🍈 榴槤季", emoji:"🍈", note:"季節限定・榴槤為國外進口,若臨時缺貨敬請見諒", items:[
+    {id:"du1",name:"芒果莎莎花束沙拉",      sub:"季節限定",        member:180,normal:180,season:true},
+    {id:"du2",name:"白醬鮮蝦榴槤義大利麵",  sub:"可升級套餐",      member:420,normal:480,season:true,isMain:true},
+    {id:"du4",name:"榴槤忘返舒芙蕾",        sub:"季節限定",        member:330,normal:330,season:true},
+    {id:"du6",name:"榴槤起司紫薯球",        sub:"季節限定",        member:180,normal:180,season:true},
+  ]},
+  duriandrink:{ label:"🍈 榴槤季飲品", emoji:"🍈", note:"季節限定・固定冰糖", items:[
+    {id:"du3",name:"榴槤波波椰椰",     price:150,fixedIce:true,fixedSugar:true,season:true},
+    {id:"du5",name:"烤糖榴槤奶蓋拿鐵", price:150,fixedIce:true,fixedSugar:true,season:true},
+  ]},
   salad:    { label:"Salad 沙拉", emoji:"🥗", items:[
     {id:"s1",name:"煙燻鮭魚生菜沙拉",sub:"胡麻／油醋",dressing:true,member:330,normal:330},
     {id:"s2",name:"酪梨鮮蝦沙拉",    sub:"胡麻／油醋",dressing:true,member:330,normal:330},
     {id:"s3",name:"七股炸牡蠣沙拉",  sub:"胡麻／油醋",dressing:true,member:330,normal:330},
   ]},
   appetizer:{ label:"Appetizer 特色前菜", emoji:"🍢", items:[
-    {id:"du1",name:"🍈芒果莎莎花束沙拉",sub:"榴槤季·季節限定",member:180,normal:180,season:true},
     {id:"a1",name:"炙烤焦糖鮭魚蒔蘿奶酪捲",member:300,normal:300},
     {id:"a2",name:"油封蒜油馬鈴薯蝦滑",    member:240,normal:240},
     {id:"a3",name:"西西里肉醬嫩蛋",        member:240,normal:240},
@@ -117,7 +126,6 @@ const MENU = {
     {id:"b9",name:"乾煎培根酥脆三明治",    sub:"早午餐",member:360,normal:420},
   ]},
   pasta:    { label:"Pasta 義大利麵", emoji:"🍝", items:[
-    {id:"du2",name:"🍈白醬鮮蝦榴槤義大利麵",sub:"榴槤季·可升級套餐",member:420,normal:480,season:true},
     {id:"p1", name:"慢烤蒜酥小羔羊＋金沙辣奶油 🌶️",member:690,normal:750},
     {id:"p2", name:"炙燒干貝海鮮＋番紅花米蘭醬",   member:660,normal:720},
     {id:"p3", name:"香煎櫻桃鴨＋松露奶油醬",       member:510,normal:570},
@@ -157,8 +165,6 @@ const MENU = {
     {id:"r15",name:"半熟蛋＋牛肝菌燉飯",sub:"蛋奶素",member:330,normal:390},
   ]},
   dessert:  { label:"Dessert 甜點", emoji:"🍮", items:[
-    {id:"du4",name:"🍈榴槤忘返舒芙蕾",sub:"榴槤季·季節限定",member:330,normal:330,season:true},
-    {id:"du6",name:"🍈榴槤起司紫薯球",sub:"榴槤季·季節限定",member:180,normal:180,season:true},
     {id:"d1",name:"熔岩流沙鹹蛋黃＋舒芙蕾",
      sub:"⚠ 一次只能做2顆，第3顆需等下一輪（每次45分–1小時），1顆約2-3人分食",
      member:270,normal:270},
@@ -193,8 +199,6 @@ const MENU = {
     {id:"mt6",name:"TWG焦糖奶油鮮奶茶", price:190,twgIce:true,    fixedSugar:true},
   ]},
   specials: { label:"House Specials 享特調", emoji:"🍹", note:"固定冰、糖", items:[
-    {id:"du3",name:"🍈榴槤波波椰椰",price:150,fixedIce:true,fixedSugar:true,season:true},
-    {id:"du5",name:"🍈烤糖榴槤奶蓋拿鐵",price:150,fixedIce:true,fixedSugar:true,season:true},
     {id:"sp1",name:"白桃柚香烏龍",  price:120,fixedIce:true,fixedSugar:true},
     {id:"sp2",name:"白桃蘋果紅茶",  price:120,fixedIce:true,fixedSugar:true},
     {id:"sp3",name:"芭樂蜂蜜青茶",  price:130,fixedIce:true,fixedSugar:true},
@@ -265,8 +269,8 @@ const MENU = {
   ]},
 };
 
-const FOOD_CATS  = ["salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
-const DRINK_CATS = ["styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
+const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
+const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const MAIN_CATS  = ["brunch","pasta","pizza","risotto"];
 const SET_MEALS  = [
   {id:"A",label:"A 經典套餐",price:150,desc:"湯品、麵包、任選飲品折抵80元"},
@@ -328,6 +332,7 @@ function isAlcohol(item) {
 }
 
 function isMainDish(item) {
+  if(item && item.isMain) return true;               // 季節主餐(例:榴槤麵)不在 MAIN_CATS 也算主餐
   return MAIN_CATS.some(c => MENU[c]?.items.find(i => i.id === item.id));
 }
 
@@ -1201,7 +1206,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v103</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v104</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2853,7 +2858,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v103</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v104</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             {[
@@ -4267,7 +4272,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v103</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v104</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4979,7 +4984,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v103</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v104</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
