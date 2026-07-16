@@ -1208,7 +1208,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v100</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v102</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1486,7 +1486,7 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
 
 
 // ─── STATUS CELL ─────────────────────────────────────────────────────────────
-const STATUS_OPTIONS = ["已加LINE","已提醒點餐","未接","未KEY-需優先KEY","未KEY-超過1週無法先KEY","已KEY需改單","現場點餐","已封存"];
+const STATUS_OPTIONS = ["已加LINE","已提醒點餐","未接","未KEY-需優先KEY","未KEY-超過1週無法先KEY","已KEY需改單","現場點餐","餐點封存"];
 
 const DEFAULT_STAFF = ["佩霓","TINA","07","佑庭","大銘"];
 
@@ -1666,6 +1666,13 @@ const IcoForm = (p)=><Ico {...p} d={<><rect x="5" y="3" width="14" height="18" r
 const IcoSearchChat = (p)=><Ico {...p} d={<><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 4v-4H6.5A2.5 2.5 0 0 1 4 13.5v-7z"/><circle cx="11.2" cy="9.8" r="2.6"/><path d="m13.3 11.9 2.1 2.1"/></>}/>;
 const IcoChart = (p)=><Ico {...p} d={<><path d="M4 20h16"/><path d="M7 20v-6M12 20V7M17 20v-9"/></>}/>;
 const IcoWarn = (p)=><Ico {...p} d={<><path d="M12 4.5 21 19H3l9-14.5z"/><path d="M12 10v4M12 16.6v.4"/></>}/>;
+const IcoTag = (p)=><Ico {...p} d={<><path d="M3 11.5V4.5A1.5 1.5 0 0 1 4.5 3h7l8.5 8.5a1.5 1.5 0 0 1 0 2.1l-6.4 6.4a1.5 1.5 0 0 1-2.1 0L3 11.5z"/><circle cx="7.5" cy="7.5" r="1.3"/></>}/>;
+const IcoUser = (p)=><Ico {...p} d={<><circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/></>}/>;
+const IcoCrown = (p)=><Ico {...p} d={<><path d="M4 8l3.2 3L12 5l4.8 6L20 8l-1.6 10H5.6L4 8z"/><path d="M5.6 18h12.8"/></>}/>;
+const IcoStar = (p)=><Ico {...p} d={<><path d="M12 4l2.3 4.9 5.2.7-3.8 3.6 1 5.1L12 15.8 7.3 18.3l1-5.1L4.5 9.6l5.2-.7L12 4z"/></>}/>;
+const IcoParty = (p)=><Ico {...p} d={<><path d="M3 21l5.5-13 6.5 6.5L3 21z"/><path d="M14 3v2M19 8h2M16.5 5.5 18 4M17 12c2 0 3-1 3-3"/></>}/>;
+const IcoPeople = (p)=><Ico {...p} d={<><circle cx="8.5" cy="8" r="2.8"/><path d="M3.5 19c0-3 2.2-5 5-5s5 2 5 5"/><path d="M15.5 6.2A2.6 2.6 0 0 1 17 11M16.5 14.2c2.2.3 4 2.1 4 4.8"/></>}/>;
+const IcoDoor = (p)=><Ico {...p} d={<><path d="M6 3h12v18H6zM6 3v18"/><rect x="8.5" y="6" width="7" height="12" rx="1"/><circle cx="13.5" cy="12" r="0.9" fill="currentColor"/></>}/>;
 
 const CPL_SOURCES = [
   {k:"大訂餐評", Icon:IcoForm,       desc:"從過期訂單記的"},
@@ -1843,8 +1850,8 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
   const selectStatus = (status) => {
     setPendingStatus(status);
     setOpen(false);
-    if(status === "已封存") {
-      setPickArchiveType(true);
+    if(status === "餐點封存") {
+      openArchive();               // 直接進拍照封存,不用再選類型
     } else if(status === "現場點餐") {
       setPendingArchiveType("onsite");
       setPickStaff(true);
@@ -1858,7 +1865,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
     const now = new Date();
     const date = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     // Handle archived separately
-    const isArchive = pendingStatus === "已封存";
+    const isArchive = pendingStatus === "餐點封存";
     const isOnsite = pendingArchiveType==="onsite";
     const isMissed = pendingStatus === "未接";
     setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,
@@ -2325,7 +2332,7 @@ function depositUrgency(g) {
   // 截止 = 用餐前1天「中午12:00」→ 要比到「時間」,不能只比日期
   const dl=new Date(dd.dayBefore); dl.setHours(12,0,0,0);
   if(now>dl) return "overdue";                       // 已過中午12:00
-  if(dl-now <= 36*3600*1000) return "urgent";        // 剩36小時內
+  if(dl-now <= 72*3600*1000) return "urgent";        // 截止前3天內 → 黃色提醒(有時間追款)
   return null;
 }
 
@@ -2846,7 +2853,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v100</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v102</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             {[
@@ -4260,7 +4267,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v100</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v102</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4972,7 +4979,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v100</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v102</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -5566,7 +5573,23 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
       <div style={{...S.header, paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 返回</button>
         <div style={S.logo}>✦ 全組訂單總覽{fromStaff&&<span style={{fontSize:"11px",fontWeight:"800",background:"#b07840",color:"#fff",borderRadius:"6px",padding:"2px 8px",marginLeft:"8px",verticalAlign:"middle"}}>員工版</span>}</div>
-        <div style={{fontSize:"11px",color:"#aa8060"}}>{group.name} · {group.date} {group.time}{group.headcount?` · 👥 ${group.headcount}`:""}</div>
+        <div style={{fontSize:"12px",color:"#aa8060",marginTop:"2px"}}>{group.name} · {group.date} {group.time}</div>
+        {(()=>{
+          const mt=group.memberType;
+          const mColor=mt==="new"?"#3f8f63":mt==="existing"?"#a86a20":mt==="private"?"#a85ab4":"#8a7a60";
+          const mBg=mt==="new"?"#e2f4ea":mt==="existing"?"#f6e8d2":mt==="private"?"#f2e4f6":"#f0eadf";
+          const mLabel=mt==="new"?"入會":mt==="existing"?"會員":mt==="private"?"包場":"非會員";
+          const MIcon = mt==="new"?IcoStar:mt==="existing"?IcoCrown:mt==="private"?IcoParty:IcoUser;
+          const chipS={display:"inline-flex",alignItems:"center",gap:"4px",borderRadius:"7px",padding:"4px 9px",fontSize:"12px",fontWeight:"800"};
+          return (
+            <div style={{display:"flex",gap:"6px",marginTop:"7px",flexWrap:"wrap"}}>
+              {group.code&&<span style={{...chipS,background:"#eef3f8",color:"#2a5a7a",border:"1px solid #bcd2e4"}}><IcoTag size={13} color="#2a5a7a"/>{group.code}</span>}
+              <span style={{...chipS,background:mBg,color:mColor,border:`1px solid ${mColor}55`}}><MIcon size={13} color={mColor}/>{mLabel}</span>
+              {group.headcount&&<span style={{...chipS,background:"#f0eadf",color:"#6a4a2e",border:"1px solid #d8c8b0"}}><IcoPeople size={13} color="#6a4a2e"/>{group.headcount}</span>}
+              {group.isVip&&<span style={{...chipS,background:"#f2e4f6",color:"#a85ab4",border:"1px solid #c88ad0"}}><IcoDoor size={13} color="#a85ab4"/>包廂</span>}
+            </div>
+          );
+        })()}
       </div>
       <div style={{overflowY:"auto",flex:1,padding:"14px"}}>
         {fromStaff&&group.archiveType==="menu"&&(
