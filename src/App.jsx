@@ -818,8 +818,105 @@ function ItemChoiceModal({ item, isMember, onConfirm, onClose }) {
 }
 
 // ─── ORDER FLOW ───────────────────────────────────────────────────────────────
+// 一進點餐頁就全螢幕攔截:非看到截止時間不可(按「我知道了」才能開始點)
+function DeadlineGate({ dateStr, onClose }){
+  const dl=getOrderDeadline(dateStr);
+  if(!dl) return null;
+  const ms=dl-new Date();
+  const over=ms<=0;
+  const d=Math.floor(ms/86400000), h=Math.floor(ms%86400000/3600000), mi=Math.floor(ms%3600000/60000);
+  const urgent = !over && ms<=24*3600000;
+  const WD=["日","一","二","三","四","五","六"];
+  const dlTxt=`${dl.getMonth()+1}/${dl.getDate()}（${WD[dl.getDay()]}）${String(dl.getHours()).padStart(2,"0")}:${String(dl.getMinutes()).padStart(2,"0")}`;
+  const main = over?"#c02020" : urgent?"#c02020" : "#b05a10";
+  return createPortal(
+    <div style={{position:"fixed",inset:0,zIndex:9500,background:"rgba(30,20,10,0.82)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+      <div style={{background:"#fffaf2",borderRadius:"20px",padding:"24px 20px",width:"100%",maxWidth:"370px",textAlign:"center",boxShadow:"0 16px 50px rgba(0,0,0,0.45)",border:`3px solid ${main}`}}>
+        <div style={{fontSize:"40px",marginBottom:"4px"}}>{over?"⛔":"⏰"}</div>
+        {over?(<>
+          <div style={{fontSize:"21px",fontWeight:"900",color:"#c02020",marginBottom:"10px"}}>線上點餐已截止</div>
+          <div style={{background:"#fbe0e0",border:"2px solid #c02020",borderRadius:"12px",padding:"13px",marginBottom:"16px"}}>
+            <div style={{fontSize:"14px",color:"#a01010",fontWeight:"800",lineHeight:"1.8"}}>
+              當天請<u>現場點餐</u><br/>
+              餐點需<u>現場排單製作</u><br/>
+              <span style={{fontSize:"17px",fontWeight:"900"}}>等候約 40 分鐘以上</span>
+            </div>
+          </div>
+          <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"16px",lineHeight:"1.7"}}>
+            截止時間為 {dlTxt}。<br/>如有疑問請聯繫店家,敬請見諒。
+          </div>
+        </>):(<>
+          <div style={{fontSize:"13px",fontWeight:"800",color:main,letterSpacing:"0.08em"}}>線上點餐倒數</div>
+          <div className={urgent?"blinkTag":""} style={{fontSize:"36px",fontWeight:"900",color:main,lineHeight:"1.2",margin:"5px 0 3px"}}>
+            {d>0&&<>{d} 天 </>}{h} 小時 {mi} 分
+          </div>
+          <div style={{fontSize:"15px",fontWeight:"800",color:"#5a3a28",marginBottom:"14px"}}>截止：{dlTxt}</div>
+          <div style={{background:urgent?"#fbe0e0":"#fff2e0",border:`2px solid ${urgent?"#c02020":"#e08030"}`,borderRadius:"12px",padding:"13px",marginBottom:"16px"}}>
+            <div style={{fontSize:"13px",color:urgent?"#a01010":"#a05a10",fontWeight:"800",lineHeight:"1.8"}}>
+              ⚠ 逾時<u>無法線上點餐</u><br/>
+              當天需<u>現場點餐、現場排單製作</u><br/>
+              <span style={{fontSize:"17px",fontWeight:"900"}}>等候約 40 分鐘以上</span>
+            </div>
+          </div>
+          <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"16px",lineHeight:"1.7"}}>
+            為了讓您一入座就能享用餐點,<br/>請<b>務必在截止前完成點餐</b> 🙏
+          </div>
+        </>)}
+        <button onClick={onClose}
+          style={{width:"100%",padding:"15px",borderRadius:"13px",border:"none",background:over?"#8a6a4a":main,color:"#fff",fontSize:"16px",fontWeight:"900",cursor:"pointer"}}>
+          {over?"我知道了":"我知道了，開始點餐"}
+        </button>
+      </div>
+    </div>, document.body
+  );
+}
+
+// 點餐截止倒數:離越近越紅,並且把「後果」講清楚(客人才會動)
+function DeadlineBar({ dateStr, compact=false }){
+  const [,tick]=useState(0);
+  useEffect(()=>{ const t=setInterval(()=>tick(x=>x+1),30000); return ()=>clearInterval(t); },[]);
+  const dl=getOrderDeadline(dateStr);
+  if(!dl) return null;
+  const now=new Date();
+  const ms=dl-now;
+  if(ms<=0) return (
+    <div style={{padding:"11px 14px",background:"#c02020",textAlign:"center"}}>
+      <div style={{fontSize:"15px",color:"#fff",fontWeight:"900"}}>⛔ 線上點餐已截止</div>
+      <div style={{fontSize:"12px",color:"#ffdada",marginTop:"3px",lineHeight:"1.7",fontWeight:"700"}}>
+        當天請<u>現場點餐</u>,餐點需現場排單製作,<u>等候約 40 分鐘以上</u>,敬請見諒。
+      </div>
+    </div>
+  );
+  const d=Math.floor(ms/86400000), h=Math.floor(ms%86400000/3600000), mi=Math.floor(ms%3600000/60000);
+  const urgent = ms<=24*3600000;       // 24小時內 = 紅色閃爍
+  const soon   = !urgent && ms<=72*3600000;  // 3天內 = 橘色
+  const WD=["日","一","二","三","四","五","六"];
+  const dlTxt=`${dl.getMonth()+1}/${dl.getDate()}（${WD[dl.getDay()]}）${String(dl.getHours()).padStart(2,"0")}:${String(dl.getMinutes()).padStart(2,"0")}`;
+  const bg = urgent?"#fbe0e0":soon?"#ffeeda":"#fcefd6";
+  const bd = urgent?"#c02020":soon?"#e08030":"#e8cf9a";
+  const fg = urgent?"#c02020":soon?"#b05a10":"#9c5a1c";
+  return (
+    <div style={{padding:compact?"9px 12px":"11px 14px",background:bg,borderBottom:`2px solid ${bd}`,textAlign:"center"}}>
+      <div style={{fontSize:"11px",color:fg,fontWeight:"800",letterSpacing:"0.05em"}}>⏰ 線上點餐倒數</div>
+      <div className={urgent?"blinkTag":""} style={{fontSize:compact?"20px":"24px",color:fg,fontWeight:"900",lineHeight:"1.25",margin:"2px 0"}}>
+        {d>0&&<>{d} 天 </>}{h} 小時 {mi} 分
+      </div>
+      <div style={{fontSize:"12px",color:fg,fontWeight:"800"}}>截止：{dlTxt}</div>
+      <div style={{fontSize:"11px",color:urgent?"#a03030":"#8a5a2a",marginTop:"5px",lineHeight:"1.7",fontWeight:"700",
+        background:urgent?"#fff":"transparent",borderRadius:urgent?"7px":0,padding:urgent?"5px 8px":0}}>
+        ⚠ 逾時無法線上點餐 → 當天需<u>現場點餐、現場排單製作</u>,<u>等候約 40 分鐘以上</u>
+      </div>
+    </div>
+  );
+}
+
 function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGroup }) {
   const isMember = group.memberType !== "none";
+  // ── 一進來就強制提醒點餐截止(客人常常拖到逾期,現場點餐要等40分鐘)──
+  const [gateOpen, setGateOpen] = useState(()=>{
+    if(!group.date || group.locked) return false;
+    return true;                       // 每次進入點餐都提醒一次
+  });
   // ── 訂金(訂位人自助) ──
   const BANK_INFO = { bank:"台新銀行（812）成功分行", name:"今鶴餐飲有限公司", acct:"2085-01-0000754-1" };
   const depNeeded = needsDeposit(group.headcount, group.isVip);
@@ -839,6 +936,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
   const [isBooker,setIsBooker]=useState(false);
   const [last5,setLast5]=useState("");
   const [copied,setCopied]=useState(false);
+  const [dlGate,setDlGate]=useState(true);   // 一進點餐頁先攔截,強制看到截止時間
   const [guestName, setGuestName] = useState(existingOrder?.guestName || "");
   const [lines, setLines] = useState(existingOrder?.lines || []);
   const [activeCat, setActiveCat] = useState("brunch");
@@ -913,13 +1011,8 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
   if (step === "info") return (
     <div style={LS.page}>
       <style>{GS}</style>
-      {group&&group.date&&(
-        <div style={{padding:"10px 14px",background:"#fcefd6",borderBottom:"1px solid #e8cf9a",textAlign:"center"}}>
-          <div style={{fontSize:"14px",color:"#9c5a1c",fontWeight:"700"}}>⏰ 點餐截止：{deadlineText(group.date)}</div>
-          <div style={{fontSize:"12px",color:"#b07020",marginTop:"2px"}}>逾時系統將自動關閉，無法線上點餐</div>
-          <div style={{fontSize:"11px",color:"#9a6a30",marginTop:"3px"}}>※ 國定假日若在週一至週五，截止為用餐前一天12:00</div>
-        </div>
-      )}
+      {dlGate&&group&&group.date&&<DeadlineGate dateStr={group.date} onClose={()=>setDlGate(false)}/>}
+      {group&&group.date&&<DeadlineBar dateStr={group.date}/>}
       <div style={{padding:"28px 20px 20px",background:"linear-gradient(180deg,#f3e9da,#fbf6ee)",borderBottom:"1px solid #e6d6bd",textAlign:"center"}}>
         <div style={{fontSize:"13px",color:"#9a6a40",letterSpacing:"0.2em",marginBottom:"8px"}}>✦ 今鶴 JINHER ✦</div>
         <div style={{fontSize:"20px",fontFamily:"'Noto Serif TC',serif",fontWeight:"700",color:"#9c5a1c"}}>{group.name} 的訂位</div>
@@ -1016,11 +1109,8 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
       <div style={{fontSize:"20px",fontFamily:"'Noto Serif TC',serif",color:"#9c5a1c",marginBottom:"4px"}}>感謝您的點餐！</div>
       <div style={{fontSize:"14px",color:"#6a4f38",marginBottom:"2px"}}>{guestName}</div>
       <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"12px"}}>{group.name} · {group.date} {group.time}</div>
-        {group.date&&!group.locked&&!isPastDeadline(group.date)&&(
-          <div style={{fontSize:"13px",color:"#c05a10",marginTop:"4px",fontWeight:"700"}}>⏰ 點餐截止：{deadlineText(group.date)}（逾時自動關閉）</div>
-        )}
-        {group.date&&!group.locked&&!isPastDeadline(group.date)&&(
-          <div style={{fontSize:"11px",color:"#b07020",marginTop:"2px"}}>※ 國定假日若在週一至週五，截止為用餐前一天12:00</div>
+        {group.date&&!group.locked&&(
+          <div style={{margin:"8px -20px 12px",borderRadius:"0"}}><DeadlineBar dateStr={group.date} compact/></div>
         )}
       <div style={{background:"#fbf2e2",border:"2px solid #e0b060",borderRadius:"16px",padding:"12px 32px",marginBottom:"12px"}}>
         <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"4px"}}>您的號碼</div>
@@ -1266,7 +1356,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v110</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v112</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3163,7 +3253,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v110</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v112</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <FsStatus/>
             {[
@@ -3236,6 +3326,19 @@ const rowBg=(g)=>{
           const maiN=groups.filter(g=>g.fromMai&&!g.cancelled).length;
           const pastN=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;
           const importedToday = lastResvImport===todayStr;
+          // ⏰ 快截止還沒點完的訂位 → 夥伴要主動催(客人逾時只能現場點餐,等40分鐘以上)
+          const chaseGs = groups.filter(g=>{
+            if(g.fromMai||g.cancelled||g.archived||g.locked) return false;
+            if(!g.date||isPastMeal(g)) return false;
+            const dl=getOrderDeadline(g.date); if(!dl) return false;
+            const left=dl-new Date();
+            if(left<=0 || left>48*3600000) return false;        // 只看「48小時內截止」
+            const hc=(g.headcount||"").toLowerCase();
+            const p=+((hc.match(/(\d+)p/)||[])[1]||0), c2=+((hc.match(/(\d+)c/)||[])[1]||0);
+            const need=(p+c2)||parseInt(hc)||0;
+            const done=(g.orders||[]).length;
+            return need>0 && done<need;                          // 還沒點完
+          });
           const dow=new Date().getDay(); // 0日 1一 2二 3三 4四 5五 6六
           const _sm=(new Date().getMonth()+1)<9;   // 暑假(到8/31)每天關訂位;9/1起一三五
           const needClose=_sm?true:[1,3,5].includes(dow);
@@ -3270,8 +3373,8 @@ const rowBg=(g)=>{
             if([3,4].includes(wd)&&!todoChecks[`call_${ds}`]) overdueTasks.push({key:`call_${ds}`,text:`📞 ${ds}（${wl}）的打電話確認還沒做`});
             if([1,3,5].includes(wd)&&!todoChecks[`save_${ds}`]) overdueTasks.push({key:`save_${ds}`,text:`💰 ${ds}（${wl}）的存錢還沒做`});
           }
-          const allDone = importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
-          const todoLeft = [!importedToday, maiN>0, pastN>0, overdueGs.length>0, urgentGs.length>0, overdueTasks.length>0,
+          const allDone = chaseGs.length===0 && importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
+          const todoLeft = [chaseGs.length>0, !importedToday, maiN>0, pastN>0, overdueGs.length>0, urgentGs.length>0, overdueTasks.length>0,
             needClose&&!closeDone, needCall&&!callDone, needSave&&!saveDone, needKey&&!keyDone, !fbDone, !igDone]
             .filter(Boolean).length + customToday.filter(t=>!todoChecks[ckey(t)]).length;
           return (
@@ -3290,6 +3393,28 @@ const rowBg=(g)=>{
                   style={{width:"26px",height:"26px",lineHeight:"1",borderRadius:"7px",border:"1.5px solid #c08a20",background:"#fff",color:"#8a5210",fontSize:"16px",fontWeight:"900",cursor:"pointer",padding:0,flexShrink:0}}>＋</button>
               </div>
               {todoOpen&&<div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                {chaseGs.length>0&&(
+                  <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>
+                      ⏰ 快截止還沒點完 {chaseGs.length} 組 —— 要打電話催!
+                    </div>
+                    {chaseGs.map(g=>{
+                      const dl=getOrderDeadline(g.date); const left=dl-new Date();
+                      const hh=Math.floor(left/3600000), mm2=Math.floor(left%3600000/60000);
+                      const hc=(g.headcount||"").toLowerCase();
+                      const p=+((hc.match(/(\d+)p/)||[])[1]||0), c2=+((hc.match(/(\d+)c/)||[])[1]||0);
+                      const need=(p+c2)||parseInt(hc)||0;
+                      return (
+                        <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"3px",marginTop:"3px"}}>
+                          <b>{g.date} {g.time} {g.name}</b> {g.phone}　
+                          <span style={{color:"#c02020",fontWeight:"800"}}>已點 {(g.orders||[]).length}/{need} 人</span>　
+                          <span style={{color:"#8a5a10",fontWeight:"700"}}>剩 {hh}小時{mm2}分</span>
+                        </div>
+                      );
+                    })}
+                    <div style={{fontSize:"9px",color:"#a06050",marginTop:"4px"}}>逾時客人只能現場點餐、現場排單,要等 40 分鐘以上</div>
+                  </div>
+                )}
                 {overdueTasks.map(t=>(
                   <div key={t.key} onClick={()=>toggleTodo(t.key)} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:"#fbe0e0",border:"1px solid #d09090",borderRadius:"8px",padding:"6px 8px"}}>
                     <span style={{fontSize:"13px"}}>⏰</span>
@@ -4654,7 +4779,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v110</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v112</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5398,7 +5523,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v110</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v112</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -6010,6 +6135,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
           );
         })()}
       </div>
+      {!fromStaff&&group.date&&!group.locked&&<DeadlineBar dateStr={group.date} compact/>}
       <div style={{overflowY:"auto",flex:1,padding:"14px"}}>
         {fromStaff&&group.archiveType==="menu"&&(
           <div style={{background:"#f3ecfa",border:"1px solid #6a4a8a",borderRadius:"14px",padding:"12px 14px",marginBottom:"14px"}}>
@@ -6381,6 +6507,17 @@ function HomePage({ onEnterCode, onEnterOrder, onStaff }) {
           <div style={{fontSize:"11px",color:"#8b5e3c",letterSpacing:"0.25em",marginBottom:"12px"}}>✦  W E L C O M E  ✦</div>
           <div style={{fontSize:"32px",fontFamily:"'Noto Serif TC',serif",fontWeight:"700",color:"#8a5210",letterSpacing:"0.06em",marginBottom:"6px"}}>今鶴 JINHER</div>
           <div style={{fontSize:"12px",color:"#5a3a28",letterSpacing:"0.1em"}}>線上點餐系統</div>
+        </div>
+        <div style={{background:"#fff2e0",border:"2.5px solid #e08030",borderRadius:"14px",padding:"13px 15px",marginBottom:"18px"}}>
+          <div style={{fontSize:"14px",fontWeight:"900",color:"#c03a10",textAlign:"center",marginBottom:"6px"}}>⏰ 請務必在截止時間前完成點餐</div>
+          <div style={{fontSize:"12px",color:"#a05a10",lineHeight:"1.85",fontWeight:"700"}}>
+            ・<b>六、日用餐 → 該週五 12:00</b> 截止<br/>
+            ・其他日期用餐 → <b>用餐前一天 12:00</b> 截止<br/>
+            <span style={{color:"#c02020"}}>・逾時<u>無法線上點餐</u>,當天需<u>現場點餐、現場排單製作</u>,<b style={{fontSize:"13px"}}>等候約 40 分鐘以上</b></span>
+          </div>
+          <div style={{fontSize:"11px",color:"#8a6a4a",marginTop:"6px",textAlign:"center",lineHeight:"1.6"}}>
+            輸入代碼後會顯示您這組的<b>確切截止時間</b>
+          </div>
         </div>
         <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
           {[["new","首次點餐"],["edit","查看／修改訂單"],["summary","全組訂單總覽"]].map(([m,l])=>(
