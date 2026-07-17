@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.2/package/xlsx.mjs";
 
 // ─── FIREBASE CONFIG ──────────────────────────────────────────────────────────
@@ -17,13 +18,29 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
+
+// ─── 匿名登入:客人完全無感(不用註冊/登入),但資料庫可以只開放給「已登入」 ───
+// 這讓 Firestore 規則能從「任何人可讀寫」改成「登入才可讀寫」,擋掉外部亂改。
+let _authReady = null;
+function ensureAuth() {
+  if (_authReady) return _authReady;
+  _authReady = new Promise((resolve) => {
+    onAuthStateChanged(auth, (u) => { if (u) resolve(u); });
+    signInAnonymously(auth).catch((e) => { console.warn("匿名登入失敗,改用未登入模式", e); resolve(null); });
+  });
+  return _authReady;
+}
+ensureAuth();
 
 // ─── FIRESTORE HELPERS ────────────────────────────────────────────────────────
 const FS = {
   async saveDoc(name, obj) {
+    await ensureAuth();
     try { await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) }); } catch(e) {}
   },
   async loadDoc(name) {
+    await ensureAuth();
     try {
       const snap = await getDoc(doc(db, "jinher", name));
       if (snap.exists()) return JSON.parse(snap.data().data);
@@ -31,18 +48,26 @@ const FS = {
     return null;
   },
   subscribeDoc(name, callback) {
-    return onSnapshot(doc(db, "jinher", name), (snap) => {
-      if (snap.exists()) { try { callback(JSON.parse(snap.data().data)); } catch(e) {} }
+    let inner = null, cancelled = false;
+    ensureAuth().then(() => {
+      if (cancelled) return;
+      inner = onSnapshot(doc(db, "jinher", name), (snap) => {
+        if (snap.exists()) { try { callback(JSON.parse(snap.data().data)); } catch(e) {} }
+      }, (err) => { console.warn("subscribe 失敗:", name, err); });
     });
+    return () => { cancelled = true; if (inner) inner(); };
   },
   async saveStatsMonth(ym, obj) {
+    await ensureAuth();
     try { await setDoc(doc(db, "jinher_stats", "m_"+ym), { data: JSON.stringify(obj) }); return true; } catch(e) { return false; }
   },
   async loadStatsMonth(ym) {
+    await ensureAuth();
     try { const snap = await getDoc(doc(db, "jinher_stats", "m_"+ym)); if(snap.exists()) return JSON.parse(snap.data().data); } catch(e) {}
     return null;
   },
   async loadAllStatsMonths() {
+    await ensureAuth();
     try {
       const snap = await getDocs(collection(db, "jinher_stats"));
       const months = {};
@@ -51,13 +76,16 @@ const FS = {
     } catch(e) { return {}; }
   },
   async saveStatsMeta(obj) {
+    await ensureAuth();
     try { await setDoc(doc(db, "jinher_stats", "meta"), { data: JSON.stringify(obj) }); } catch(e) {}
   },
   async loadStatsMeta() {
+    await ensureAuth();
     try { const snap = await getDoc(doc(db, "jinher_stats", "meta")); if(snap.exists()) return JSON.parse(snap.data().data); } catch(e) {}
     return null;
   },
   async saveGroups(groups) {
+    await ensureAuth();
     try {
       await setDoc(doc(db, "jinher", "groups"), { data: JSON.stringify(groups) });
     } catch(e) {
@@ -65,6 +93,7 @@ const FS = {
     }
   },
   async loadGroups() {
+    await ensureAuth();
     try {
       const snap = await getDoc(doc(db, "jinher", "groups"));
       if (snap.exists()) return JSON.parse(snap.data().data);
@@ -76,14 +105,19 @@ const FS = {
     return null;
   },
   subscribeGroups(callback) {
-    return onSnapshot(doc(db, "jinher", "groups"), (snap) => {
-      if (snap.exists()) {
-        try {
-          const data = JSON.parse(snap.data().data);
-          callback(data, snap.metadata && snap.metadata.hasPendingWrites);
-        } catch(e) {}
-      }
+    let inner = null, cancelled = false;
+    ensureAuth().then(() => {
+      if (cancelled) return;
+      inner = onSnapshot(doc(db, "jinher", "groups"), (snap) => {
+        if (snap.exists()) {
+          try {
+            const data = JSON.parse(snap.data().data);
+            callback(data, snap.metadata && snap.metadata.hasPendingWrites);
+          } catch(e) {}
+        }
+      }, (err) => { console.warn("subscribeGroups 失敗", err); });
     });
+    return () => { cancelled = true; if (inner) inner(); };
   }
 };
 
@@ -1206,7 +1240,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v104</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v107</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1936,10 +1970,16 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
             )}
           </div>
         ) : g.fromMai ? (
-            <div style={{marginTop:"2px",display:"flex",flexDirection:"column",gap:"2px",alignItems:"center"}}>
+            <div style={{marginTop:"2px",display:"flex",flexDirection:"column",gap:"3px",alignItems:"center"}}>
               <div style={{fontSize:"9px",background:"#1a5a3a",color:"#1a6a3a",borderRadius:"4px",padding:"1px 4px",fontWeight:"700"}}>📥麥訂</div>
-              <button onClick={(e)=>{e.stopPropagation();const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false,statusLog:{status:"已加LINE",operator:"",date:d}}));}}
-                style={{fontSize:"9px",background:"#b07840",color:"#fff",border:"none",borderRadius:"4px",padding:"2px 6px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>轉一般→</button>
+              {g.maiMissed>0&&<div style={{fontSize:"9px",fontWeight:"800",color:"#fff",background:g.maiMissed>=3?"#c02020":"#c06030",borderRadius:"4px",padding:"1px 5px"}}>📵 未接 ×{g.maiMissed}{g.maiMissed>=3?" 聯絡不上":""}</div>}
+              <div style={{display:"flex",gap:"3px"}}>
+                <button onClick={(e)=>{e.stopPropagation();const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,maiMissed:(x.maiMissed||0)+1,maiMissedAt:at}));}}
+                  style={{fontSize:"9px",background:"#c06030",color:"#fff",border:"none",borderRadius:"4px",padding:"2px 6px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>📵 未接</button>
+                <button onClick={(e)=>{e.stopPropagation();const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false,maiMissed:0,statusLog:{status:"已加LINE",operator:"",date:d}}));}}
+                  style={{fontSize:"9px",background:"#b07840",color:"#fff",border:"none",borderRadius:"4px",padding:"2px 6px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>轉一般→</button>
+              </div>
+              {g.maiMissedAt&&<div style={{fontSize:"8px",color:"#a05030"}}>{g.maiMissedAt}</div>}
             </div>
           ) : g.onsiteOrder ? (
             <div>
@@ -2692,6 +2732,208 @@ function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
   );
 }
 
+// ─── 櫃檯交接:算錢 / 印訂位表 / 放休接力 ────────────────────────────────
+const CASH_SPOTS = ["金庫","備用金","錢櫃"];
+const BREAK_HRS = [1, 1.5, 2];
+const BREAK_TODOS = ["剪麵包丁","補冰塊","補備品","洗杯子","擦桌椅","其他"];
+function HandoverBox({ todayStr, staffList, open, setOpen }) {
+  const [data,setData]=useState({});                 // {"7/16":{cash:{},printed:false,breaks:[]}}
+  const [cashEdit,setCashEdit]=useState(null);       // 正在填不符的位置
+  const [cashForm,setCashForm]=useState({diff:"少",amt:"",note:""});
+  const [pickWho,setPickWho]=useState(false);
+  const [outPick,setOutPick]=useState(null);         // 要去放休的人 {idx}
+  const day = data[todayStr]||{cash:{},printed:false,breaks:[]};
+  useEffect(()=>{
+    FS.loadDoc("handover").then(v=>{ if(v) setData(v); });
+    const u=FS.subscribeDoc("handover", v=>{ if(v) setData(v); });
+    return ()=>u&&u();
+  },[]);
+  const save=(patch)=>{ const nd={...data,[todayStr]:{...day,...patch}}; setData(nd); FS.saveDoc("handover",nd); };
+  const now=()=>{ const d=new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+  const cashDone = CASH_SPOTS.every(k=>day.cash&&day.cash[k]);
+  const breaks = day.breaks||[];
+  const outNow = breaks.find(b=>b.status==="out");
+  const pendingTodos = breaks.filter(b=>b.status==="back"&&b.todo&&!b.todoDone);
+  const left = (cashDone?0:1) + (day.printed?0:1) + (breaks.length>0&&breaks.every(b=>b.status==="back")?0:(breaks.length?1:0)) + pendingTodos.length;
+  const allDone = cashDone && day.printed && breaks.length>0 && breaks.every(b=>b.status==="back") && pendingTodos.length===0;
+  const setBreaks=(bs)=>save({breaks:bs});
+  return (
+    <div style={{marginTop:"8px",background:"#eaf2fa",borderRadius:"12px",border:"2.5px solid #6a94c0",padding:"11px 13px"}}>
+      <div style={{fontSize:"13px",color:"#1a4a7a",fontWeight:"800",marginBottom:open?"9px":"0",display:"flex",alignItems:"center",gap:"6px"}}>
+        <span onClick={()=>setOpen(v=>!v)} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"6px"}}>
+          <span style={{fontSize:"11px"}}>{open?"▼":"▶"}</span>🤝 櫃檯交接
+        </span>
+        {allDone
+          ? <span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>
+          : !open&&left>0&&<span className="blinkExcl" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"1px 7px"}}>還有 {left} 項</span>}
+        {outNow&&<span style={{fontSize:"10px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 7px"}}>🟢 {outNow.name} 放休中</span>}
+      </div>
+
+      {open&&(<>
+        {/* 1. 算錢 */}
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+          <div style={{fontSize:"12px",fontWeight:"800",color:"#1a4a7a",marginBottom:"6px"}}>💰 算錢{cashDone&&<span style={{color:"#2a7a4a",fontSize:"10px",marginLeft:"6px"}}>✓ 都對過了</span>}</div>
+          {CASH_SPOTS.map(k=>{
+            const c=day.cash&&day.cash[k];
+            return (
+              <div key={k} style={{display:"flex",alignItems:"center",gap:"7px",padding:"4px 0",borderTop:k!==CASH_SPOTS[0]?"1px solid #eaf0f6":"none"}}>
+                <span style={{fontSize:"13px",fontWeight:"700",color:"#2a4a6a",minWidth:"52px"}}>{k}</span>
+                {c?(
+                  <>
+                    {c.ok
+                      ? <span style={{fontSize:"12px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",borderRadius:"5px",padding:"2px 8px"}}>✓ 正確</span>
+                      : <span style={{fontSize:"12px",fontWeight:"800",color:"#c02020",background:"#fbe0e0",borderRadius:"5px",padding:"2px 8px"}}>✗ {c.diff} ${c.amt}{c.note?`・${c.note}`:""}</span>}
+                    <span style={{fontSize:"9px",color:"#8aa0b8"}}>{c.at}</span>
+                    <span style={{flex:1}}/>
+                    <button onClick={()=>{const nc={...(day.cash||{})};delete nc[k];save({cash:nc});}}
+                      style={{fontSize:"10px",border:"1px solid #c8d8e8",background:"#fff",color:"#5a7a9a",borderRadius:"5px",padding:"2px 7px",cursor:"pointer"}}>重來</button>
+                  </>
+                ):(
+                  <>
+                    <button onClick={()=>save({cash:{...(day.cash||{}),[k]:{ok:true,at:now()}}})}
+                      style={{fontSize:"12px",fontWeight:"800",border:"1.5px solid #7ab88a",background:"#fff",color:"#1a6a3a",borderRadius:"7px",padding:"4px 11px",cursor:"pointer"}}>✓ 正確</button>
+                    <button onClick={()=>{setCashForm({diff:"少",amt:"",note:""});setCashEdit(k);}}
+                      style={{fontSize:"12px",fontWeight:"800",border:"1.5px solid #d09090",background:"#fff",color:"#c02020",borderRadius:"7px",padding:"4px 11px",cursor:"pointer"}}>✗ 不符</button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 2. 印訂位表 */}
+        <div onClick={()=>save({printed:!day.printed,printedAt:day.printed?"":now()})}
+          style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",opacity:day.printed?0.6:1}}>
+          <span style={{fontSize:"13px"}}>{day.printed?"✅":"🔴"}</span>
+          <span style={{fontSize:"13px",fontWeight:"700",color:day.printed?"#7a9a8a":"#1a3a5a",textDecoration:day.printed?"line-through":"none"}}>🖨 印訂位表</span>
+          {day.printed&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>{day.printedAt}</span>}
+        </div>
+
+        {/* 3. 放休接力 */}
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+            <span style={{fontSize:"12px",fontWeight:"800",color:"#1a4a7a"}}>☕ 放休接力</span>
+            <span style={{fontSize:"9px",color:"#8aa0b8"}}>先上班先休・按順序接力</span>
+            <span style={{flex:1}}/>
+            <button onClick={()=>setPickWho(true)}
+              style={{width:"24px",height:"24px",lineHeight:"1",borderRadius:"6px",border:"1.5px solid #6a94c0",background:"#fff",color:"#1a4a7a",fontSize:"15px",fontWeight:"900",cursor:"pointer",padding:0}}>＋</button>
+          </div>
+          {breaks.length===0
+            ? <div style={{fontSize:"11px",color:"#8aa0b8",textAlign:"center",padding:"8px"}}>按 ＋ 加入今天上班的夥伴（依上班先後排）</div>
+            : breaks.map((b,i)=>(
+                <div key={b.id} style={{display:"flex",alignItems:"center",gap:"7px",padding:"6px 0",borderTop:i>0?"1px solid #eaf0f6":"none"}}>
+                  <span style={{fontSize:"11px",fontWeight:"900",color:"#8aa0b8",minWidth:"14px"}}>{i+1}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>
+                      {b.name}
+                      {b.status==="out"&&<span style={{fontSize:"10px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",borderRadius:"4px",padding:"1px 6px",marginLeft:"5px"}}>🟢 放休中 {b.outAt}~{b.due}（{b.hrs}hr）</span>}
+                      {b.status==="back"&&<span style={{fontSize:"10px",color:"#8aa0b8",marginLeft:"5px"}}>已回 {b.backAt}</span>}
+                      {b.status==="waiting"&&<span style={{fontSize:"10px",color:"#a0b0c0",marginLeft:"5px"}}>等待中</span>}
+                    </div>
+                    {b.todo&&(
+                      <div onClick={()=>b.status==="back"&&setBreaks(breaks.map((x,j)=>j===i?{...x,todoDone:!x.todoDone}:x))}
+                        style={{fontSize:"11px",marginTop:"2px",cursor:b.status==="back"?"pointer":"default",
+                          color:b.todoDone?"#7a9a8a":(b.status==="back"?"#c06030":"#8aa0b8"),fontWeight:"700",textDecoration:b.todoDone?"line-through":"none"}}>
+                        {b.status==="back"?(b.todoDone?"✅":"🔴"):"·"} 回來後：{b.todo}
+                      </div>
+                    )}
+                  </div>
+                  {b.status==="waiting"&&<button onClick={()=>setOutPick(i)} disabled={!!outNow}
+                    style={{fontSize:"11px",fontWeight:"800",border:"none",borderRadius:"6px",padding:"5px 10px",cursor:outNow?"not-allowed":"pointer",background:outNow?"#dde5ee":"#3a7a5a",color:outNow?"#a0b0c0":"#fff",whiteSpace:"nowrap"}}>去放休</button>}
+                  {b.status==="out"&&<button onClick={()=>{setBreaks(breaks.map((x,j)=>j===i?{...x,status:"back",backAt:now()}:x));}}
+                    style={{fontSize:"11px",fontWeight:"800",border:"none",borderRadius:"6px",padding:"5px 10px",cursor:"pointer",background:"#c06030",color:"#fff",whiteSpace:"nowrap"}}>回來了</button>}
+                  <button onClick={()=>{if(window.confirm(`移除 ${b.name}?`))setBreaks(breaks.filter((_,j)=>j!==i));}}
+                    style={{fontSize:"10px",border:"none",background:"none",color:"#c0a0a0",cursor:"pointer",padding:"0 2px"}}>✕</button>
+                </div>
+              ))}
+          {breaks.length>0&&!outNow&&breaks.some(b=>b.status==="waiting")&&(
+            <div style={{fontSize:"11px",color:"#1a6a3a",fontWeight:"700",marginTop:"6px",background:"#eef8f0",borderRadius:"6px",padding:"5px 8px"}}>
+              👉 換 <b>{breaks.find(b=>b.status==="waiting").name}</b> 放休
+            </div>
+          )}
+        </div>
+      </>)}
+
+      {/* 不符金額視窗 */}
+      {cashEdit&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setCashEdit(null)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"340px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#c02020",marginBottom:"12px"}}>✗ {cashEdit} 不符</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+              {["多","少"].map(d=>(
+                <button key={d} onClick={()=>setCashForm(p=>({...p,diff:d}))}
+                  style={{flex:1,padding:"11px",borderRadius:"9px",border:`1.5px solid ${cashForm.diff===d?"#c02020":"#d0d8e0"}`,background:cashForm.diff===d?"#c02020":"#fff",color:cashForm.diff===d?"#fff":"#5a6a7a",fontSize:"15px",fontWeight:"800",cursor:"pointer"}}>{d}</button>
+              ))}
+            </div>
+            <input value={cashForm.amt} onChange={e=>setCashForm(p=>({...p,amt:e.target.value.replace(/\D/g,"")}))} placeholder="金額" inputMode="numeric" autoFocus
+              style={{width:"100%",boxSizing:"border-box",padding:"11px",borderRadius:"9px",border:"1.5px solid #c9a45c",fontSize:"16px",fontWeight:"800",textAlign:"center",marginBottom:"8px",color:"#2e2010"}}/>
+            <input value={cashForm.note} onChange={e=>setCashForm(p=>({...p,note:e.target.value}))} placeholder="備註（選填,例如:找錯錢）"
+              style={{width:"100%",boxSizing:"border-box",padding:"10px",borderRadius:"9px",border:"1px solid #d0d8e0",fontSize:"13px",marginBottom:"14px",color:"#2e2010"}}/>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setCashEdit(null)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #d0d8e0",color:"#5a6a7a",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{ if(!cashForm.amt){window.alert("請填金額");return;}
+                  save({cash:{...(day.cash||{}),[cashEdit]:{ok:false,diff:cashForm.diff,amt:cashForm.amt,note:cashForm.note,at:now()}}}); setCashEdit(null); }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#c02020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>記錄</button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
+
+      {/* 加入夥伴 */}
+      {pickWho&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setPickWho(false)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"340px",maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"15px",fontWeight:"800",color:"#1a4a7a",marginBottom:"4px"}}>加入今天上班的夥伴</div>
+            <div style={{fontSize:"11px",color:"#8aa0b8",marginBottom:"10px"}}>依「先上班先休」的順序點選</div>
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {(staffList||[]).filter(n=>!breaks.some(b=>b.name===n)).map(n=>(
+                <button key={n} onClick={()=>{ setBreaks([...breaks,{id:`${Date.now()}${n}`,name:n,status:"waiting",todo:""}]); }}
+                  style={{padding:"9px 13px",borderRadius:"9px",border:"1.5px solid #b8d0e8",background:"#eaf2fa",color:"#1a4a7a",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>{n}</button>
+              ))}
+            </div>
+            <button onClick={()=>setPickWho(false)} style={{width:"100%",marginTop:"14px",padding:"11px",borderRadius:"10px",background:"#1a4a7a",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>完成</button>
+          </div>
+        </div>, document.body
+      )}
+
+      {/* 去放休:選時長 + 回來後要做 */}
+      {outPick!=null&&breaks[outPick]&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setOutPick(null)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"350px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#1a4a7a",marginBottom:"3px"}}>☕ {breaks[outPick].name} 去放休</div>
+            <div style={{fontSize:"11px",color:"#8aa0b8",marginBottom:"12px"}}>現在 {now()} · 休多久?（當天現場決定）</div>
+            <div style={{display:"flex",gap:"7px",marginBottom:"14px"}}>
+              {BREAK_HRS.map(h=>{
+                const d=new Date(); d.setMinutes(d.getMinutes()+h*60);
+                const due=`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+                return (
+                  <button key={h} onClick={()=>{ setBreaks(breaks.map((x,j)=>j===outPick?{...x,status:"out",outAt:now(),hrs:h,due}:x)); setOutPick(null); }}
+                    style={{flex:1,padding:"12px 4px",borderRadius:"10px",border:"1.5px solid #7ab88a",background:"#fff",color:"#1a6a3a",fontSize:"15px",fontWeight:"800",cursor:"pointer"}}>
+                    {h} hr<div style={{fontSize:"9px",fontWeight:"400",color:"#7a9a8a"}}>~{due}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{fontSize:"12px",color:"#3a5a7a",fontWeight:"700",marginBottom:"5px"}}>回來後要做（選填）</div>
+            <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
+              {BREAK_TODOS.map(t=>{
+                const on=breaks[outPick].todo===t;
+                return <button key={t} onClick={()=>setBreaks(breaks.map((x,j)=>j===outPick?{...x,todo:on?"":t}:x))}
+                  style={{padding:"6px 10px",borderRadius:"7px",border:`1.5px solid ${on?"#c06030":"#d8e0e8"}`,background:on?"#c06030":"#fff",color:on?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>{t}</button>;
+              })}
+            </div>
+            {breaks[outPick].todo==="其他"&&(
+              <input onChange={e=>setBreaks(breaks.map((x,j)=>j===outPick?{...x,todo:e.target.value||"其他"}:x))} placeholder="要做什麼?"
+                style={{width:"100%",boxSizing:"border-box",padding:"9px",borderRadius:"8px",border:"1.5px solid #c9a45c",fontSize:"13px",marginBottom:"8px",color:"#2e2010"}}/>
+            )}
+            <button onClick={()=>setOutPick(null)} style={{width:"100%",padding:"11px",borderRadius:"10px",background:"transparent",border:"1px solid #d0d8e0",color:"#5a6a7a",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+          </div>
+        </div>, document.body
+      )}
+    </div>
+  );
+}
+
 function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [filter,setFilter]=useState("");
   const [showMaiOnly,setShowMaiOnly]=useState(false);
@@ -2700,6 +2942,8 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [todoChecks,setTodoChecks]=useState({}); // 手動代辦打勾(關訂位、打電話)，跨裝置同步
   const [newTodo,setNewTodo]=useState("");
   const [todoAdd,setTodoAdd]=useState(false);
+  const [todoOpen,setTodoOpen]=useState(true);
+  const [hoOpen,setHoOpen]=useState(false);
   const [todoFreq,setTodoFreq]=useState("once");   // once=只有今天 daily=每天 weekly=每週
   const [todoDays,setTodoDays]=useState([1,3,5]);
   const toggleTodo=(key)=>{ const nn={...todoChecks,[key]:!todoChecks[key]}; setTodoChecks(nn); FS.saveDoc("todo",nn); };
@@ -2858,7 +3102,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v104</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v107</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
             {[
@@ -2888,6 +3132,7 @@ const rowBg=(g)=>{
               ["員工","管理夥伴名單(新增/刪除),就是各種「選夥伴」會出現的名字。"],
               ["假日","設定哪些日期算假日(影響備料、訂位人數標準)。"],
               ["🚫 品項","按日期關閉餐點(可選幾號到幾號);季節限定品項在這裡設上架~下架檔期,自動上下架。"],
+              ["🤝 櫃檯交接","收合式清單:①算錢(金庫/備用金/錢櫃,不符可記多少錢+備註,留紀錄) ②印訂位表 ③放休接力(按＋加今天上班的夥伴,按去放休選1/1.5/2小時,回來後要做的事會變成待打勾)。"],
               ["客訴中心","所有客訴集中管理:統計(本月件數/類型佔比/最常被客訴的餐點)、清單篩選,也可在這裡記現場餐評和 Google 評論。填了電話,下次訂位會自動跳紅色「客訴」提醒。"],
               ["+ 新增大訂","手動新增一筆大訂訂位(客人沒線上訂、或電話訂位時用)。"],
             ].map(([k,v],i2,arr)=>(
@@ -2964,16 +3209,25 @@ const rowBg=(g)=>{
             if([1,3,5].includes(wd)&&!todoChecks[`save_${ds}`]) overdueTasks.push({key:`save_${ds}`,text:`💰 ${ds}（${wl}）的存錢還沒做`});
           }
           const allDone = importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
+          const todoLeft = [!importedToday, maiN>0, pastN>0, overdueGs.length>0, urgentGs.length>0, overdueTasks.length>0,
+            needClose&&!closeDone, needCall&&!callDone, needSave&&!saveDone, needKey&&!keyDone, !fbDone, !igDone]
+            .filter(Boolean).length + customToday.filter(t=>!todoChecks[ckey(t)]).length;
           return (
             <div style={{marginTop:"8px",background:"#fdf4dd",borderRadius:"12px",border:"2.5px solid #d8a840",padding:"11px 13px"}}>
-              <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"800",marginBottom:allDone?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>
-                📋 櫃檯代辦{allDone&&<span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>}
+              <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"800",marginBottom:(allDone||!todoOpen)?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>
+                <span onClick={()=>setTodoOpen(v=>!v)} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"6px"}}>
+                  <span style={{fontSize:"11px"}}>{todoOpen?"▼":"▶"}</span>
+                  📋 櫃檯代辦
+                </span>
+                {allDone
+                  ? <span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>
+                  : !todoOpen&&<span className="blinkExcl" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"1px 7px"}}>還有 {todoLeft} 項</span>}
                 <span style={{flex:1}}/>
                 <button onClick={()=>{setNewTodo("");setTodoFreq("once");setTodoDays([1,3,5]);setTodoAdd(true);}}
                   title="新增代辦"
                   style={{width:"26px",height:"26px",lineHeight:"1",borderRadius:"7px",border:"1.5px solid #c08a20",background:"#fff",color:"#8a5210",fontSize:"16px",fontWeight:"900",cursor:"pointer",padding:0,flexShrink:0}}>＋</button>
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+              {todoOpen&&<div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                 {overdueTasks.map(t=>(
                   <div key={t.key} onClick={()=>toggleTodo(t.key)} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:"#fbe0e0",border:"1px solid #d09090",borderRadius:"8px",padding:"6px 8px"}}>
                     <span style={{fontSize:"13px"}}>⏰</span>
@@ -3061,10 +3315,11 @@ const rowBg=(g)=>{
                     <span style={{fontSize:"12px",color:"#caa060"}}>即將到期：{urgentGs.map(g=>{const dd=depDeadlineOf(g);return `${g.name} ${dd?(dd.lastMinute?"訂後2hr內":`${dd.label}前`):""}`;}).join("、")}</span>
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           );
         })()}
+        <HandoverBox todayStr={todayStr} staffList={staffList} open={hoOpen} setOpen={setHoOpen}/>
         <div style={{fontSize:"10px",color:"#5a3a28",marginTop:"6px"}}>{filtered.length} 組 · {compactMode?"手機版:點一列展開看全部欄位":"左右滑動查看所有欄位"}</div>
       </div>
 
@@ -3142,6 +3397,16 @@ const rowBg=(g)=>{
                        ):
                        c.key==="deposit"?(
                          <div>
+                           {!g.deposit&&needsDeposit(g.headcount,g.isVip)&&(()=>{
+                             const hc=(g.headcount||"").toLowerCase();
+                             const p=+((hc.match(/(\d+)p/)||[])[1]||0),cc=+((hc.match(/(\d+)c/)||[])[1]||0),ss=+((hc.match(/(\d+)s/)||[])[1]||0);
+                             const tot=(p+cc+ss)||parseInt(hc)||0;
+                             const amt=g.isVip?Math.max(tot,10)*100:tot*100;
+                             return (
+                               <button onClick={()=>{const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()}`;setGroups(pr=>pr.map(x=>x.id!==g.id?x:{...x,deposit:String(amt),payDate:x.payDate||d}));}}
+                                 style={{width:"100%",marginBottom:"3px",fontSize:"9px",fontWeight:"800",border:"none",borderRadius:"5px",padding:"3px 2px",cursor:"pointer",background:"#2a7a4a",color:"#fff",whiteSpace:"nowrap"}}>✓ 收訂 ${amt}</button>
+                             );
+                           })()}
                            <div style={{display:"flex",alignItems:"center",gap:"4px",justifyContent:"center"}}>
                              <div style={{flex:1}}><EditCell g={g} field={c.key} w={c.w-30} onSave={save}/></div>
                              <div onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,payCash:!x.payCash}))} title="付款方式"
@@ -3653,6 +3918,16 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
   const [progress, setProgress] = useState(null); // {by,at,status,lastDate}
   const [viewDay, setViewDay] = useState(null);
   const [dupOpen, setDupOpen] = useState(false);
+  const [cplWarn,setCplWarn]=useState([]);      // 有客訴紀錄的訂位(比對全部訂位,不只大訂)
+  const [cplWarnOpen,setCplWarnOpen]=useState(false);
+  const [walkinCpl,setWalkinCpl]=useState([]);  // 散客/Google 客訴(比對電話用)
+  useEffect(()=>{
+    FS.loadDoc("cplWarn").then(v=>{ if(Array.isArray(v)) setCplWarn(v); });
+    const uA=FS.subscribeDoc("cplWarn", v=>{ if(Array.isArray(v)) setCplWarn(v); });
+    FS.loadDoc("walkinCpl").then(v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
+    const uB=FS.subscribeDoc("walkinCpl", v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
+    return ()=>{ uA&&uA(); uB&&uB(); };
+  },[]);
   const [warnOpen, setWarnOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(typeof window!=="undefined"&&window.innerWidth<640);
   const [editCell, setEditCell] = useState(null); // {key,a,ch,autoT}
@@ -3894,6 +4169,23 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
           phone:p, name:rs[0].name, missed:0, missedAt:"",
           items: rs.sort((x,y)=>(x.date+x.time).localeCompare(y.date+y.time)).map((x,i)=>({rid:`${p}_${x.date}_${x.time}_${x.a}_${x.ch}_${i}`, date:x.date, time:x.time, a:x.a, ch:x.ch}))
         }));
+      // 客訴客人比對:掃「全部訂位」(不只大訂) vs 有客訴紀錄的電話 → 小桌訂位也抓得到
+      const cplPhones={};
+      (groups||[]).forEach(gg=>{ const p2=normPhone(gg.phone); if(p2&&(gg.complaints||[]).length>0){ (cplPhones[p2]=cplPhones[p2]||[]).push(...(gg.complaints||[])); } });
+      (walkinCpl||[]).forEach(c=>{ const p2=normPhone(c.phone); if(p2) (cplPhones[p2]=cplPhones[p2]||[]).push(c); });
+      const cplWarn=allDedup.filter(rec=>cplPhones[normPhone(rec.phone)]&&cplPhones[normPhone(rec.phone)].length>0)
+        .map(rec=>{
+          const cs=cplPhones[normPhone(rec.phone)];
+          const last=cs[cs.length-1]||{};
+          const dishNames=(last.dishes||[]).map(d=>{const id=typeof d==="object"?d.id:d;const it=findItem(id);return it?it.name:id;});
+          return {
+            rid:`${normPhone(rec.phone)}_${rec.date}_${rec.time}`,
+            date:rec.date, time:rec.time, name:rec.name, phone:rec.phone,
+            a:rec.a, ch:rec.ch, n:cs.length,
+            type:last.type||"", kinds:(last.kinds||[]).join("、"), dishes:dishNames.join("、"),
+            treat:last.treat||"", src:last.source||"", ack:false
+          };
+        });
       // 取消 → 自動封存對應大訂(取消的時段、且沒有同時段的有效訂位才封存)
       const activeSet=new Set(allDedup.filter(rc=>rc.phone).map(rc=>`${rc.phone}|${rc.date}|${rc.time}`));
       const toArchive=[];
@@ -3914,7 +4206,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
           if(oa!==bo.adults||oc!==bo.children) changedC2++;
         }
       });
-      setImportStaff({agg,cnt,slots:Object.keys(agg).length,bigOrders,newCount:newC2,changedCount:changedC2,dupWarn,toArchive});
+      setImportStaff({agg,cnt,slots:Object.keys(agg).length,bigOrders,newCount:newC2,changedCount:changedC2,dupWarn,cplWarn,toArchive});
     } catch(err) {
       alert("讀取失敗："+err.message);
     }
@@ -3942,6 +4234,11 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       return n;
     });
     setDupReservations(mergedDup);
+    // 客訴警示:合併保留「✓已知道」,沒處理的下次打開還在
+    const prevAck={}; (cplWarn||[]).forEach(c=>{ if(c.ack) prevAck[c.rid]=true; });
+    const mergedCpl=(importStaff.cplWarn||[]).map(c=>prevAck[c.rid]?{...c,ack:true}:c);
+    setCplWarn(mergedCpl);
+    FS.saveDoc("cplWarn", mergedCpl);
     // 匯入 ≥8 大人的大訂到追蹤表(去重 + 人數變動偵測)— 先在外面算好
     const mismatches=[];
     const toAdd=[];
@@ -4272,7 +4569,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v104</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v107</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4315,6 +4612,35 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       )}
 
       {/* 重複訂位提醒(同電話多筆)— 按✕移除重複,人數自動重算;未接記夥伴 */}
+      {cplWarn&&cplWarn.filter(c=>!c.ack).length>0&&(
+        <div className="np" style={{padding:"5px 12px",background:"#fbe0e0",borderBottom:"1.5px solid #d09090",flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cplWarnOpen?"5px":"0",gap:"8px"}}>
+            <span className="blinkExcl" style={{fontSize:"12px",color:"#c02020",fontWeight:"800",flex:1}}>
+              ⚠ 這批訂位有 {cplWarn.filter(c=>!c.ack).length} 位客人有客訴紀錄
+            </span>
+            <button onClick={()=>setCplWarnOpen(o=>!o)} style={{fontSize:"11px",background:cplWarnOpen?"#8a2020":"#c02020",border:"none",borderRadius:"6px",padding:"5px 10px",color:"#fff",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{cplWarnOpen?"▲ 收合":"▼ 展開"}</button>
+            <button onClick={()=>{const m=cplWarn.map(c=>({...c,ack:true}));setCplWarn(m);FS.saveDoc("cplWarn",m);}} style={{fontSize:"10px",background:"#e8c0c0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a2020",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已知道</button>
+          </div>
+          {cplWarnOpen&&cplWarn.map((c,ci)=>c.ack?null:(
+            <div key={c.rid} style={{background:"#fff",border:"1px solid #e0a0a0",borderRadius:"8px",padding:"7px 9px",marginBottom:"4px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                <span style={{fontSize:"12px",fontWeight:"800",color:"#3a2a1a"}}>{c.date} {c.time}</span>
+                <span style={{fontSize:"12px",fontWeight:"700",color:"#5a4030"}}>{c.name||"—"}</span>
+                <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c.phone}</span>
+                <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c.a}大{c.ch>0?`${c.ch}小`:""}</span>
+                <span style={{fontSize:"10px",fontWeight:"800",background:"#c02020",color:"#fff",borderRadius:"4px",padding:"1px 6px"}}>客訴 ×{c.n}</span>
+                <span style={{flex:1}}/>
+                <button onClick={()=>{const m=cplWarn.map((x,j)=>j===ci?{...x,ack:true}:x);setCplWarn(m);FS.saveDoc("cplWarn",m);}}
+                  style={{fontSize:"10px",background:"#3a8a5a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已知道</button>
+              </div>
+              <div style={{fontSize:"11px",color:"#a04020",marginTop:"3px",lineHeight:"1.6"}}>
+                {c.type&&<b>{c.type}</b>}{c.kinds?`・${c.kinds}`:""}{c.dishes?`　🍽 ${c.dishes}`:""}{c.src?`　(${c.src})`:""}
+              </div>
+              {c.treat&&<div style={{fontSize:"11px",color:"#1a6a3a",fontWeight:"700",marginTop:"2px"}}>👉 這次要招待:{c.treat}</div>}
+            </div>
+          ))}
+        </div>
+      )}
       {dupReservations&&dupReservations.filter(d=>!d.confirmed).length>0&&(
         <div className="np" style={{padding:"5px 12px",background:"#fbe8d8",borderBottom:"1px solid #e0b088",flexShrink:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:dupOpen?"4px":"0",gap:"8px"}}>
@@ -4984,7 +5310,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v104</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v107</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
