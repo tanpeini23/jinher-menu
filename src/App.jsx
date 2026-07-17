@@ -952,16 +952,32 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
                   <div>
                     {(depDaysLeft!=null&&depDaysLeft<0)&&(
                       <div style={{background:"#fbe0e0",border:"1.5px solid #d06060",borderRadius:"10px",padding:"11px 12px",marginBottom:"10px"}}>
-                        <div style={{fontSize:"14px",color:"#c02020",fontWeight:"800",lineHeight:"1.6"}}>⚠ 已超過付款期限</div>
-                        <div style={{fontSize:"12px",color:"#a03030",marginTop:"2px",lineHeight:"1.6"}}>位置可能無法保留,請<u>立即聯繫店家</u>確認訂位是否還在。</div>
+                        <div style={{fontSize:"15px",color:"#c02020",fontWeight:"900",lineHeight:"1.6"}}>⚠ 已超過匯款期限</div>
+                        <div style={{fontSize:"12px",color:"#a03030",marginTop:"3px",lineHeight:"1.7",fontWeight:"700"}}>依規定<u>逾時未收到訂金,座位不予保留,訂位將自動取消</u>。<br/>若您已匯款或仍要用餐,請<u>立即聯繫店家</u>確認。</div>
                       </div>
                     )}
                     <div style={{background:"#fff4e0",border:"1px solid #e8b060",borderRadius:"10px",padding:"12px",marginBottom:"10px"}}>
                       <div style={{fontSize:"16px",color:"#b06010",fontWeight:"700"}}>應付訂金 ${depAmount}</div>
                       <div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>{group.isVip?"包廂 · ":""}{group.headcount} · 每人$100{group.isVip&&depTotal<10?"（包廂最低$1000）":""}</div>
                       {depInfo.lastMinute
-                        ? <div style={{fontSize:"14px",color:"#c02020",fontWeight:"800",marginTop:"8px",lineHeight:"1.7",background:"#fce0e0",borderRadius:"8px",padding:"8px 10px"}}>⏰ 您是用餐前一天才訂位,請於<u>訂位後 2 小時內</u>完成付款,否則位置不予保留!</div>
-                        : depDeadline&&<div style={{fontSize:"13px",color:"#d05a36",fontWeight:"700",marginTop:"8px",lineHeight:"1.6"}}>⏰ 請於 <u>{depDeadline} 前</u>匯款完成（{depInfo.which==="訂位日+3天"?"訂位後 3 天內":"用餐前一天中午 12:00 前"}），逾期視同取消{depDaysLeft!=null&&depDaysLeft>=0?`（還剩 ${depDaysLeft} 天）`:""}。</div>}
+                        ? <div style={{marginTop:"9px",background:"#c02020",borderRadius:"9px",padding:"10px 11px"}}>
+                            <div style={{fontSize:"14px",color:"#fff",fontWeight:"900",lineHeight:"1.6"}}>⏰ 請於「訂位後 2 小時內」完成匯款</div>
+                            <div style={{fontSize:"12px",color:"#ffdada",fontWeight:"700",marginTop:"3px",lineHeight:"1.7"}}>您是用餐前一天才訂位。<u>逾時未收到訂金,恕不保留座位,訂位將自動取消。</u></div>
+                          </div>
+                        : depDeadline&&(
+                          <div style={{marginTop:"9px",background:"#fff0e0",border:"2px solid #d05a36",borderRadius:"9px",padding:"10px 11px"}}>
+                            <div style={{fontSize:"14px",color:"#c03a10",fontWeight:"900",lineHeight:"1.6"}}>
+                              ⏰ 匯款期限:{depDeadline} 前
+                              {depDaysLeft!=null&&depDaysLeft>=0&&<span style={{fontSize:"12px",fontWeight:"700"}}>（還剩 {depDaysLeft} 天）</span>}
+                            </div>
+                            <div style={{fontSize:"12px",color:"#a03a10",fontWeight:"800",marginTop:"4px",lineHeight:"1.7"}}>
+                              <u>逾時未收到訂金,恕不保留座位,訂位將自動取消。</u>
+                            </div>
+                            <div style={{fontSize:"11px",color:"#8a5a3a",marginTop:"4px",lineHeight:"1.6"}}>
+                              {depInfo.which==="訂位後3天內"?"依規定:訂位後 3 天內須完成匯款。":"依規定:用餐日前需完成匯款;六日與國定假日銀行無法對帳,故提前至前一個上班日。"}
+                            </div>
+                          </div>
+                        )}
                     </div>
                     <div style={{background:"#fdf8ef",border:"1px solid #e6d6bd",borderRadius:"10px",padding:"12px",marginBottom:"10px"}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}>
@@ -1250,7 +1266,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v109</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v110</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2353,27 +2369,36 @@ function daysSinceBook(bookDate) {
   return Math.floor((now-d)/86400000);
 }
 
-// 訂金截止:取「最早到期」的那個
-//   A. 訂位日 +3 天(當天結束前)  ← 主要規則
-//   B. 用餐前1天中午12:00
+// 銀行不營業日:六、日、國定假日(含後台自訂)→ 無法對帳,不能當截止日
+function isBankOff(d){ const w=d.getDay(); return w===0 || w===6 || isHoliday(d); }
+// 訂金截止:兩條規則取「先到的」
+//   A. 訂位日算第1天,第3天中午12:00(= 訂位日+2天)   例:7/14訂 → 7/16 12:00
+//   B. 用餐日往前推,最後一個「銀行有上班日」的中午12:00  例:7/18(六)用餐 → 7/17(五) 12:00
 //   C. 用餐前1天才訂位 → 訂位後2小時內
+const WD_TXT=["日","一","二","三","四","五","六"];
 function depDeadlineOf(g){
   const yr=new Date().getFullYear();
   const mm=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/);
   const bm=(g.bookDate||"").match(/^(\d{1,2})\/(\d{1,2})$/);
   if(!mm) return null;
   const meal=new Date(yr,+mm[1]-1,+mm[2]);
-  const dayBefore=new Date(meal); dayBefore.setDate(meal.getDate()-1);
-  const B=new Date(dayBefore); B.setHours(12,0,0,0);            // 用餐前1天12:00
-  if(!bm) return {meal,dayBefore,dl:B,lastMinute:false,which:"用餐前1天12:00",label:`${B.getMonth()+1}/${B.getDate()} 12:00`};
+  // B:從用餐日前一天往前找,找到第一個銀行有上班的日子
+  let bDay=new Date(meal); bDay.setDate(meal.getDate()-1);
+  let guard=0;
+  while(isBankOff(bDay) && guard++<10){ bDay.setDate(bDay.getDate()-1); }
+  const B=new Date(bDay); B.setHours(12,0,0,0);
+  const fmt=(d)=>`${d.getMonth()+1}/${d.getDate()}（${WD_TXT[d.getDay()]}）12:00`;
+  if(!bm) return {meal,dl:B,lastMinute:false,which:"用餐日前",label:fmt(B)};
   const book=new Date(yr,+bm[1]-1,+bm[2]);
   const lastMinute=Math.round((meal-book)/86400000)<=1;
-  const A=new Date(book); A.setDate(book.getDate()+3); A.setHours(23,59,59,999);  // 訂位日+3天
-  if(lastMinute) return {meal,dayBefore,dl:B,lastMinute:true,which:"訂位後2小時內",label:"訂後2hr內"};
+  if(lastMinute) return {meal,dl:B,lastMinute:true,which:"訂位後2小時內",label:"訂位後2小時內"};
+  // A:訂位日算第1天 → 第3天中午12:00
+  const A=new Date(book); A.setDate(book.getDate()+2); A.setHours(12,0,0,0);
   const useA = A<=B;
   const dl = useA?A:B;
-  return {meal,dayBefore,dl,lastMinute:false,which:useA?"訂位日+3天":"用餐前1天12:00",
-          label: useA?`${A.getMonth()+1}/${A.getDate()}`:`${B.getMonth()+1}/${B.getDate()} 12:00`};
+  return {meal, dl, lastMinute:false,
+          which: useA?"訂位後3天內":"用餐日前",
+          label: fmt(dl)};
 }
 
 function depositUrgency(g) {
@@ -3138,7 +3163,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v109</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v110</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <FsStatus/>
             {[
@@ -3183,10 +3208,11 @@ const rowBg=(g)=>{
               {[
                 ["誰要付訂金","10 人以上（大人+小孩+嬰兒 加總）或包廂,一律要付。包廂不管幾人都要。"],
                 ["金額","每人 $100;包廂最低 $1000。"],
-                ["何時要付清","<b>訂位日起 3 天內</b>付清。若用餐日很近,最晚<b>用餐前一天中午 12:00</b> —— 兩個取<b>先到的</b>那個。"],
+                ["何時要付清","兩條取<b>先到的</b>:<br/>①<b>訂位後 3 天內的中午 12:00</b>（訂位當天算第1天,例:7/14訂→7/16 12:00）<br/>②<b>用餐日前、最後一個銀行上班日的中午 12:00</b>（六日/國定假日銀行無法對帳,會自動往前推。例:7/18(六)或7/19(日)用餐→7/17(五) 12:00）"],
                 ["前一天才訂位","改成<b>訂位後 2 小時內</b>付款,才會保留位置。"],
+              ["逾期怎麼講","客人的訂金頁面已經明確寫著:<b>逾時未收到訂金,恕不保留座位,訂位將自動取消</b>。"],
                 ["🟠 待付訂","還沒付,截止前 3 天內就會變黃提醒。"],
-                ["🔴 逾期","已經超過 12:00 那個時間點還沒付 → 要打電話問。"],
+                ["🔴 逾期","已過截止時間還沒付。客人端會顯示「座位不予保留,訂位將自動取消」,要打電話確認。"],
                 ["客人怎麼付","訂位頁面有台新帳號＋「複製帳號」鈕;付完客人可自己回報後 5 碼 → 這裡變「待核對」,你核對後點成「已核對」。"],
                 ["填了訂金就不再提醒","訂金欄有金額、或已核對/待核對,紅字就會消失。"],
               ].map(([k,v],i2,arr)=>(
@@ -4628,7 +4654,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v109</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v110</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5372,7 +5398,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v109</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v110</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
