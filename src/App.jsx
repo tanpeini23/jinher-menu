@@ -23,11 +23,16 @@ const auth = getAuth(firebaseApp);
 // ─── 匿名登入:客人完全無感(不用註冊/登入),但資料庫可以只開放給「已登入」 ───
 // 這讓 Firestore 規則能從「任何人可讀寫」改成「登入才可讀寫」,擋掉外部亂改。
 let _authReady = null;
+const FSTAT = { auth:"連線中…", err:null, lastSave:null, listeners:new Set() };
+function fstatSet(patch){ Object.assign(FSTAT, patch); FSTAT.listeners.forEach(fn=>{ try{fn();}catch(e){} }); }
 function ensureAuth() {
   if (_authReady) return _authReady;
   _authReady = new Promise((resolve) => {
-    onAuthStateChanged(auth, (u) => { if (u) resolve(u); });
-    signInAnonymously(auth).catch((e) => { console.warn("匿名登入失敗,改用未登入模式", e); resolve(null); });
+    let done=false;
+    const fin=(u,msg)=>{ if(done) return; done=true; fstatSet({auth:msg}); resolve(u); };
+    onAuthStateChanged(auth, (u) => { if (u) fin(u, "已連線"); });
+    signInAnonymously(auth).catch((e) => { fin(null, `登入失敗:${e.code||e.message}`); });
+    setTimeout(()=>fin(null, "登入逾時"), 8000);   // 不讓它永遠卡住
   });
   return _authReady;
 }
@@ -37,15 +42,20 @@ ensureAuth();
 const FS = {
   async saveDoc(name, obj) {
     await ensureAuth();
-    try { await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) }); } catch(e) {}
+    try { await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) }); fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})}); }
+    catch(e) { console.error("儲存失敗", name, e); fstatSet({err:`儲存失敗(${name}):${e.code||e.message}`}); }
   },
   async loadDoc(name) {
     await ensureAuth();
     try {
       const snap = await getDoc(doc(db, "jinher", name));
       if (snap.exists()) return JSON.parse(snap.data().data);
-    } catch(e) {}
-    return null;
+      return null;                      // 文件不存在(正常,例如第一次用)
+    } catch(e) {
+      console.error("讀取失敗", name, e);
+      fstatSet({err:`讀取失敗(${name}):${e.code||e.message}`});
+      return undefined;                 // undefined = 讀取「失敗」,跟「沒有資料」要分清楚
+    }
   },
   subscribeDoc(name, callback) {
     let inner = null, cancelled = false;
@@ -1240,7 +1250,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v107</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v109</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2765,7 +2775,7 @@ function HandoverBox({ todayStr, staffList, open, setOpen }) {
         </span>
         {allDone
           ? <span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>
-          : !open&&left>0&&<span className="blinkExcl" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"1px 7px"}}>還有 {left} 項</span>}
+          : !open&&left>0&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 8px"}}>還有 {left} 項</span>}
         {outNow&&<span style={{fontSize:"10px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 7px"}}>🟢 {outNow.name} 放休中</span>}
       </div>
 
@@ -2934,6 +2944,22 @@ function HandoverBox({ todayStr, staffList, open, setOpen }) {
   );
 }
 
+// 連線狀態:正常=綠色;有錯誤=紅色並顯示原因(以前錯誤都被吞掉,看不到)
+function FsStatus(){
+  const [,tick]=useState(0);
+  useEffect(()=>{ const fn=()=>tick(t=>t+1); FSTAT.listeners.add(fn); return ()=>FSTAT.listeners.delete(fn); },[]);
+  // 紅 = 真的讀寫失敗(資料有危險);黃 = 沒登入但讀寫正常(規則開放中);綠 = 一切正常
+  const err = !!FSTAT.err;
+  const noAuth = FSTAT.auth.includes("失敗") || FSTAT.auth.includes("逾時");
+  const c = err ? {bg:"#c02020",fg:"#fff",bd:"1px solid #8a1010",t:`⚠ ${FSTAT.err}`}
+          : noAuth ? {bg:"#fdf0d0",fg:"#8a5210",bd:"1px solid #d8b860",t:"⚠ 未登入模式"}
+          : {bg:"#e2f2e8",fg:"#2a7a4a",bd:"none",t:"🔥 即時同步"};
+  return (
+    <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
+      color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
+  );
+}
+
 function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [filter,setFilter]=useState("");
   const [showMaiOnly,setShowMaiOnly]=useState(false);
@@ -2946,13 +2972,23 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [hoOpen,setHoOpen]=useState(false);
   const [todoFreq,setTodoFreq]=useState("once");   // once=只有今天 daily=每天 weekly=每週
   const [todoDays,setTodoDays]=useState([1,3,5]);
-  const toggleTodo=(key)=>{ const nn={...todoChecks,[key]:!todoChecks[key]}; setTodoChecks(nn); FS.saveDoc("todo",nn); };
+  const todoLoaded=useRef(false);   // todo 讀到了才准寫(避免用空的蓋掉整份代辦清單)
+  const saveTodo=(nn)=>{
+    if(!todoLoaded.current){ window.alert("⚠ 代辦還沒從雲端讀到,請先重新整理再操作(這次沒有存,以免蓋掉資料)"); return false; }
+    setTodoChecks(nn); FS.saveDoc("todo",nn); return true;
+  };
+  const toggleTodo=(key)=>{ saveTodo({...todoChecks,[key]:!todoChecks[key]}); };
   const todayStr=(()=>{const d=new Date();return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;})();
   useEffect(()=>{
     const unsub=FS.subscribeDoc("dingwe",d=>{ if(d&&d.lastImport!==undefined) setLastResvImport(d.lastImport); });
-    const unsub2=FS.subscribeDoc("todo",d=>{ if(d) setTodoChecks(d); });
+    FS.loadDoc("todo").then(d=>{ if(d!==undefined){ if(d) setTodoChecks(d); todoLoaded.current=true; } });
+    const unsub2=FS.subscribeDoc("todo",d=>{ if(d){ setTodoChecks(d); todoLoaded.current=true; } });
     // 設定逾期基準日:第一次使用當天,之後才會提醒「昨天沒做完」
-    FS.loadDoc("todo").then(d=>{ if(!d || d._since===undefined) FS.saveDoc("todo",{...(d||{}),_since:todayStr}); });
+    // ⚠ 只有「確認這份文件不存在(null)」才初始化;讀取失敗(undefined)絕不寫入,否則會清空整份代辦
+    FS.loadDoc("todo").then(d=>{
+      if(d===undefined) return;                                  // 讀取失敗 → 什麼都不做
+      if(d===null || d._since===undefined) FS.saveDoc("todo",{...(d||{}),_since:todayStr});
+    });
     return ()=>{ unsub&&unsub(); unsub2&&unsub2(); };
   },[]);
   const [showAdd,setShowAdd]=useState(false);
@@ -3102,9 +3138,9 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v107</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v109</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
-            <div style={{fontSize:"9px",color:"#2a7a4a",background:"#e2f2e8",borderRadius:"6px",padding:"3px 7px"}}>🔥 即時同步</div>
+            <FsStatus/>
             {[
               {t:"👥 員工",  fn:()=>setShowStaff(true)},
               {t:"📅 假日",  fn:()=>setShowHoliday(true)},
@@ -3221,7 +3257,7 @@ const rowBg=(g)=>{
                 </span>
                 {allDone
                   ? <span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>
-                  : !todoOpen&&<span className="blinkExcl" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"1px 7px"}}>還有 {todoLeft} 項</span>}
+                  : !todoOpen&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 8px"}}>還有 {todoLeft} 項</span>}
                 <span style={{flex:1}}/>
                 <button onClick={()=>{setNewTodo("");setTodoFreq("once");setTodoDays([1,3,5]);setTodoAdd(true);}}
                   title="新增代辦"
@@ -3287,7 +3323,7 @@ const rowBg=(g)=>{
                       <span onClick={()=>toggleTodo(k)} style={{fontSize:"13px",cursor:"pointer"}}>{done?"✅":"🔴"}</span>
                       <span onClick={()=>toggleTodo(k)} style={{fontSize:"13px",color:done?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:done?"line-through":"none",cursor:"pointer",flex:1}}>📝 {t.text}</span>
                       {fq&&<span style={{fontSize:"9px",fontWeight:"700",color:"#8a5210",background:"#f8e8b8",border:"1px solid #d8b860",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>{fq}</span>}
-                      <span onClick={()=>{if(!window.confirm(`刪除代辦「${t.text}」?`))return;const nn={...todoChecks,customList:(todoChecks.customList||[]).filter(x=>x.id!==t.id)};delete nn[k];setTodoChecks(nn);FS.saveDoc("todo",nn);}} style={{fontSize:"11px",color:"#a06050",cursor:"pointer",padding:"0 4px"}}>✕</span>
+                      <span onClick={()=>{if(!window.confirm(`刪除代辦「${t.text}」?`))return;const nn={...todoChecks,customList:(todoChecks.customList||[]).filter(x=>x.id!==t.id)};delete nn[k];saveTodo(nn);}} style={{fontSize:"11px",color:"#a06050",cursor:"pointer",padding:"0 4px"}}>✕</span>
                     </div>
                   );
                 })}
@@ -3391,7 +3427,7 @@ const rowBg=(g)=>{
                          <div>
                            <EditCell g={g} field={c.key} w={c.w-8} onSave={save}/>
                            {(()=>{const n=phoneCplMap[normPhone(g.phone)];return n?(
-                             <div className="blinkExcl" style={{marginTop:"2px",fontSize:"10px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 7px",display:"inline-block",letterSpacing:"1px"}}>客訴{n>1?` ×${n}`:""}</div>
+                             <div className="blinkTag" style={{marginTop:"2px",fontSize:"10px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 7px",letterSpacing:"1px"}}>客訴{n>1?` ×${n}`:""}</div>
                            ):null;})()}
                          </div>
                        ):
@@ -3632,7 +3668,7 @@ const rowBg=(g)=>{
                   if(todoFreq==="weekly"&&todoDays.length===0){ window.alert("請至少選一天"); return; }
                   const item={id:`${Date.now()}`,text:t,freq:todoFreq,days:todoFreq==="weekly"?todoDays:[],date:todayStr};
                   const nn={...todoChecks,customList:[...(todoChecks.customList||[]),item]};
-                  setTodoChecks(nn); FS.saveDoc("todo",nn); setNewTodo(""); setTodoAdd(false);
+                  if(!saveTodo(nn)) return; setNewTodo(""); setTodoAdd(false);
                 }}
                 style={{flex:2,padding:"12px",borderRadius:"10px",background:"#8a5210",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>加入代辦</button>
             </div>
@@ -3918,6 +3954,8 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
   const [progress, setProgress] = useState(null); // {by,at,status,lastDate}
   const [viewDay, setViewDay] = useState(null);
   const [dupOpen, setDupOpen] = useState(false);
+  const dwLoaded = useRef(false);      // dingwe 是否已成功載入(沒載入不准寫)
+  const [dwErr,setDwErr] = useState(false);
   const [cplWarn,setCplWarn]=useState([]);      // 有客訴紀錄的訂位(比對全部訂位,不只大訂)
   const [cplWarnOpen,setCplWarnOpen]=useState(false);
   const [walkinCpl,setWalkinCpl]=useState([]);  // 散客/Google 客訴(比對電話用)
@@ -3947,7 +3985,11 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
   },[]);
 
   useEffect(()=>{
-    FS.loadDoc("dingwe").then(v=>{ if(v){ if(v.peopleMap)setPeopleMap(v.peopleMap); if(v.closeMap)setCloseMap(v.closeMap); if(v.progress)setProgress(v.progress); if(v.dupReservations)setDupReservations(v.dupReservations); if(v.lastImport!==undefined)setLastImport(v.lastImport); if(v.noReopen)setNoReopen(v.noReopen); } });
+    FS.loadDoc("dingwe").then(v=>{
+      if(v===undefined){ dwLoaded.current=false; setDwErr(true); return; }   // 讀取失敗 → 禁止寫入
+      if(v){ if(v.peopleMap)setPeopleMap(v.peopleMap); if(v.closeMap)setCloseMap(v.closeMap); if(v.progress)setProgress(v.progress); if(v.dupReservations)setDupReservations(v.dupReservations); if(v.lastImport!==undefined)setLastImport(v.lastImport); if(v.noReopen)setNoReopen(v.noReopen); }
+      dwLoaded.current=true; setDwErr(false);       // 讀到了(或確認沒這份文件)→ 才可以寫
+    });
     const unsub = FS.subscribeDoc("dingwe", v=>{ if(v){ if(v.peopleMap)setPeopleMap(v.peopleMap); if(v.closeMap)setCloseMap(v.closeMap); if(v.progress!==undefined)setProgress(v.progress); if(v.dupReservations!==undefined)setDupReservations(v.dupReservations); if(v.lastImport!==undefined)setLastImport(v.lastImport); if(v.noReopen!==undefined)setNoReopen(v.noReopen); } });
     return ()=>unsub&&unsub();
   },[]);
@@ -3962,9 +4004,20 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
     const u=FS.subscribeDoc("todo",d=>{ if(d) setCloseTaskDone(!!d[k]); });
     return ()=>u&&u();
   },[]);
-  const markCloseDone=()=>{ FS.loadDoc("todo").then(d=>{ const nd={...(d||{}),[`close_${todayStr}`]:true}; FS.saveDoc("todo",nd); setCloseTaskDone(true); }); };
+  const markCloseDone=()=>{ FS.loadDoc("todo").then(d=>{
+    if(d===undefined){ window.alert("雲端連線異常,這次的「完成關訂位」沒存到,請重新整理後再試一次"); return; }
+    const nd={...(d||{}),[`close_${todayStr}`]:true}; FS.saveDoc("todo",nd); setCloseTaskDone(true);
+  }); };
   const [noReopen,setNoReopen]=useState({}); // {date-time:true} = 已確認不開放
-  const persistDW=(pm,cm,pg,dup,li,nr)=>FS.saveDoc("dingwe",{peopleMap:pm,closeMap:cm,progress:pg,dupReservations:dup!==undefined?dup:dupReservations,lastImport:li!==undefined?li:lastImport,noReopen:nr!==undefined?nr:noReopen});
+  // ⚠ 安全鎖:資料還沒從雲端讀進來之前,絕對不可以寫回去 —— 否則會用「空的」蓋掉關訂紀錄
+  const persistDW=(pm,cm,pg,dup,li,nr)=>{
+    if(!dwLoaded.current){
+      console.warn("dingwe 尚未載入完成,已擋下這次寫入(避免蓋掉雲端資料)");
+      setDwErr(true);
+      return;
+    }
+    return FS.saveDoc("dingwe",{peopleMap:pm,closeMap:cm,progress:pg,dupReservations:dup!==undefined?dup:dupReservations,lastImport:li!==undefined?li:lastImport,noReopen:nr!==undefined?nr:noReopen});
+  };
   const toggleNoReopen=(key)=>{ const nn={...noReopen,[key]:!noReopen[key]}; setNoReopen(nn); persistDW(peopleMap,closeMap,progress,undefined,undefined,nn); };
   const [missedPick,setMissedPick]=useState(null);
   // ✕ 移除一筆重複訂位 → 從人數扣掉、重算
@@ -4215,16 +4268,22 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
   };
 
   const confirmImport = (staffName, forceUpdate=false) => {
+    if(!dwLoaded.current){
+      window.alert("⚠ 雲端資料還沒讀到,現在匯入會蓋掉關訂紀錄!\n\n請先「重新整理」頁面,等資料出現後再匯入。");
+      setDwErr(true);
+      return;
+    }
     const {agg} = importStaff;
     const now=new Date();
     const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
     const todayLI=`${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()}`;
     setLastImport(todayLI);
     // 重複訂位:合併,不要整個蓋掉 → 保留「未接」記錄、已確認的不再跳出來(#2 #6)
-    const prevByPhone={}; (dupReservations||[]).forEach(d=>{ prevByPhone[normPhone(d.phone)]=d; });
+    // 用「電話+這組訂位內容」當識別:同一筆確認過才跳過;新的重複訂位照樣要提醒
+    const sig=(d)=>`${normPhone(d.phone)}|${(d.items||[]).map(it=>`${it.date} ${it.time} ${it.a}/${it.ch}`).sort().join("|")}`;
+    const prevBySig={}; (dupReservations||[]).forEach(d=>{ prevBySig[sig(d)]=d; });
     const mergedDup=(importStaff.dupWarn||[])
-      .filter(d=>{ const pv=prevByPhone[normPhone(d.phone)]; return !(pv&&pv.confirmed); })
-      .map(d=>{ const pv=prevByPhone[normPhone(d.phone)]; return pv?{...d,missed:pv.missed,missedAt:pv.missedAt,missedBy:pv.missedBy,confirmed:pv.confirmed}:d; });
+      .map(d=>{ const pv=prevBySig[sig(d)]; return pv?{...d,missed:pv.missed,missedAt:pv.missedAt,missedBy:pv.missedBy,confirmed:pv.confirmed}:d; });
     setPeopleMap(p=>{
       const n={...p};
       Object.entries(agg).forEach(([key,v])=>{
@@ -4569,7 +4628,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v107</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v109</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -4612,10 +4671,20 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       )}
 
       {/* 重複訂位提醒(同電話多筆)— 按✕移除重複,人數自動重算;未接記夥伴 */}
+      {dwErr&&(
+        <div className="np" style={{padding:"9px 12px",background:"#c02020",flexShrink:0}}>
+          <div style={{fontSize:"13px",color:"#fff",fontWeight:"800",lineHeight:"1.6"}}>
+            ⚠ 雲端資料還沒讀到 —— 請先「重新整理」再操作
+          </div>
+          <div style={{fontSize:"11px",color:"#ffd0d0",marginTop:"2px",lineHeight:"1.6"}}>
+            為了保護你的關訂紀錄,系統已暫停儲存(不會蓋掉雲端資料)。重新整理後這條會消失。{FSTAT.err?`　[${FSTAT.err}]`:""}
+          </div>
+        </div>
+      )}
       {cplWarn&&cplWarn.filter(c=>!c.ack).length>0&&(
         <div className="np" style={{padding:"5px 12px",background:"#fbe0e0",borderBottom:"1.5px solid #d09090",flexShrink:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cplWarnOpen?"5px":"0",gap:"8px"}}>
-            <span className="blinkExcl" style={{fontSize:"12px",color:"#c02020",fontWeight:"800",flex:1}}>
+            <span className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"800",flex:1}}>
               ⚠ 這批訂位有 {cplWarn.filter(c=>!c.ack).length} 位客人有客訴紀錄
             </span>
             <button onClick={()=>setCplWarnOpen(o=>!o)} style={{fontSize:"11px",background:cplWarnOpen?"#8a2020":"#c02020",border:"none",borderRadius:"6px",padding:"5px 10px",color:"#fff",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{cplWarnOpen?"▲ 收合":"▼ 展開"}</button>
@@ -4834,14 +4903,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
         </table>
       </div>
 
-      {/* 完成關訂位:主要入口在「返回」時的提醒視窗;這裡保留一顆備用 */}
-      <div className="np" style={{padding:"6px 14px",background:"#ede2d0",flexShrink:0}}>
-        <button onClick={()=>setFinishOpen(true)}
-          style={{width:"100%",padding:"10px",borderRadius:"10px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
-          🔒 完成關訂位（記錄關到哪＋夥伴）
-        </button>
-        <div style={{fontSize:"9px",color:"#8a6a4a",textAlign:"center",marginTop:"3px"}}>按「← 返回」也會跳出提醒,可以在那裡直接完成</div>
-      </div>
+
     </div>
   );
 }
@@ -5310,7 +5372,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v107</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v109</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -6569,6 +6631,7 @@ const GS=`
   @keyframes blinkExcl{0%,100%{opacity:1}50%{opacity:0.12}}
   @keyframes blinkStep{0%,100%{box-shadow:0 0 0 0 rgba(224,144,10,0.0);transform:scale(1)}50%{box-shadow:0 0 0 4px rgba(224,144,10,0.45);transform:scale(1.05)}}
   .blinkStep{animation:blinkStep 0.9s ease-in-out infinite}
+  .blinkTag{animation:blinkExcl 0.8s ease-in-out infinite;display:inline-block;white-space:nowrap}
   .blinkExcl{display:inline-flex;align-items:center;justify-content:center;color:#fff;background:#e01010;border-radius:50%;width:18px;height:18px;font-size:13px;font-weight:900;margin-left:5px;animation:blinkExcl 0.8s ease-in-out infinite;box-shadow:0 0 0 2px rgba(224,16,16,0.35);vertical-align:middle}
   body{background:#f5efe2}
   ::-webkit-scrollbar{width:4px;height:4px}
