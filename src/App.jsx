@@ -315,6 +315,8 @@ const MENU = {
 
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
+const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
+const SET_DRINK_CATS = DRINK_CATS.filter(c=>!ALCOHOL_CATS.includes(c));  // 套餐可選的飲料分類
 const MAIN_CATS  = ["brunch","pasta","pizza","risotto"];
 const SET_MEALS  = [
   {id:"A",label:"A 經典套餐",price:150,desc:"湯品、麵包、任選飲品折抵80元"},
@@ -446,7 +448,7 @@ function DrinkModal({ onSelect, onClose, discount = 0, itemVisible }) {
   const [ice, setIce] = useState(null);
   const [sugar, setSugar] = useState(null);
   const [mascot, setMascot] = useState(null);
-  const items = (MENU[cat]?.items || []).filter(i=>!itemVisible||itemVisible(i));
+  const items = ALCOHOL_CATS.includes(cat) ? [] : (MENU[cat]?.items || []).filter(i=>!itemVisible||itemVisible(i));
   const item = items.find(i => i.id === chosen);
   const iceOpts = item ? getIceOptions(item) : null;
 
@@ -463,7 +465,7 @@ function DrinkModal({ onSelect, onClose, discount = 0, itemVisible }) {
           {discount>0 && <div style={{fontSize:"13px",color:"#b06010"}}>套餐飲品折抵 ${discount}</div>}
         </div>
         <div style={{display:"flex",overflowX:"auto",padding:"8px 12px",gap:"6px",borderBottom:"1px solid #e6d6bd"}}>
-          {DRINK_CATS.map(k=>(
+          {SET_DRINK_CATS.map(k=>(
             <button key={k} onClick={()=>{setCat(k);setChosen(null);setIce(null);setSugar(null);setMascot(null);}}
               style={{flexShrink:0,padding:"5px 12px",borderRadius:"20px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
                 background:cat===k?"#b07840":"#e6d6bd",color:cat===k?"#fff":"#b06010"}}>
@@ -1356,7 +1358,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v112</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v113</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3253,7 +3255,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v112</div>
+          <div style={S.logo}>✦ 大訂追蹤表 v113</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
             <FsStatus/>
             {[
@@ -3511,7 +3513,7 @@ const rowBg=(g)=>{
       </div>
 
       <div style={{overflowX:"auto",overflowY:"auto",flex:1}}>
-        <table style={{borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap",width:"100%",minWidth:"max-content"}}>
+        <table style={{borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap",width:"100%"}}>
           <thead>
             <tr style={{background:"#efe6d4",position:"sticky",top:0,zIndex:5}}>
               <th style={{...TH,minWidth:80}}>代碼</th>
@@ -4779,7 +4781,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v112</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v113</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5523,7 +5525,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v112</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v113</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -6104,7 +6106,8 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
   const allLines = allOrders.flatMap(o => o.lines || []);
   const memberFeeInfo = calcMemberFee(allLines, group.memberType);
   const grandSubtotal = grandTotal + memberFeeInfo.fee;
-  const grandTotalWithService = Math.round(grandSubtotal * 1.1);
+  // 入會費 $100 不收 10% 服務費 → 餐點先加服務費,再加入會費
+  const grandTotalWithService = Math.round(grandTotal * 1.1) + memberFeeInfo.fee;
 
   return (
     <div style={S.page}>
@@ -6180,7 +6183,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
               <MIcon size={19} color={col}/>
               <div style={{flex:1}}>
                 <div style={{fontSize:"14px",fontWeight:"800",color:col}}>{label}</div>
-                {isNew&&<div style={{fontSize:"10px",color:"#5a7a60",marginTop:"1px"}}>整組一次$100・結帳時若有前菜或酒類可折$100</div>}
+                {isNew&&<div style={{fontSize:"10px",color:"#3a6a48",marginTop:"2px",lineHeight:"1.6"}}>整組一次收 $100，<b>不加10%服務費</b><br/>結帳時若有點<b>前菜</b>或<b>酒類</b>，此 $100 可折抵</div>}
               </div>
               <div style={{fontSize:"17px",fontWeight:"900",color:fee>0?col:"#a09070"}}>${fee}</div>
             </div>
@@ -6436,13 +6439,8 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
             <span>全組小計（{allOrders.length}人）</span>
             <span style={{color:"#aa8060"}}>${grandTotal}</span>
           </div>
-          {memberFeeInfo.fee>0&&(
-            <div style={{fontSize:"13px",color:"#2a7a4a",marginBottom:"4px",fontWeight:"700"}}>
-              ★ 入會費 +${memberFeeInfo.fee}｜結帳時若有前菜或酒類，折$100
-            </div>
-          )}
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"20px",color:"#8a5210",fontWeight:"700",marginTop:"4px"}}>
-            <span>全組含10%服務費</span>
+            <span>全組含10%服務費{memberFeeInfo.fee>0?<span style={{fontSize:"11px",fontWeight:"600",color:"#2a7a4a"}}><br/>（含入會$100，入會費不收服務費）</span>:null}</span>
             <span>${grandTotalWithService}</span>
           </div>
         </div>
