@@ -1358,7 +1358,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v115</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v116</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2726,17 +2726,37 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
   const dishCnt={};
   all.forEach(c=>(c.dishes||[]).forEach(d=>{ const id=typeof d==="object"?d.id:d; const it=findItem(id); const nm=it?it.name:id; dishCnt[nm]=(dishCnt[nm]||0)+1; }));
   const topDishes=Object.entries(dishCnt).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const pendingTreats=all.filter(c=>c.treat&&String(c.treat).trim()&&!c.treatDone);
-  const markTreatDone=(rec)=>{
-    const nm=window.prompt("誰送的?(填名字)"); if(nm===null) return;
-    const now=new Date(); const at=`${now.getMonth()+1}/${now.getDate()}`;
+  // 待招待:只顯示「用餐日在今天起 7 天內」有訂位的客訴客人(前1週訂位再顯示)
+  const _tToday=new Date(); _tToday.setHours(0,0,0,0);
+  const _t7=new Date(_tToday); _t7.setDate(_t7.getDate()+7);
+  const upcomingByPhone={};
+  (groups||[]).forEach(g=>{
+    if(g.cancelled||g.archived) return;
+    const p2=normPhone(g.phone); if(!p2||!g.date) return;
+    const mm=g.date.match(/^(\d{1,2})\/(\d{1,2})$/); if(!mm) return;
+    const md=new Date(_tToday.getFullYear(),+mm[1]-1,+mm[2]);
+    if(md>=_tToday&&md<=_t7){ if(!upcomingByPhone[p2]||md<upcomingByPhone[p2]._d) upcomingByPhone[p2]={_d:md,date:g.date,time:g.time||""}; }
+  });
+  const pendingTreats=all
+    .filter(c=>c.treat&&String(c.treat).trim()&&!c.treatDone&&upcomingByPhone[normPhone(c._phone)])
+    .map(c=>({...c,_visit:upcomingByPhone[normPhone(c._phone)]}));
+  const patchCpl=(rec,patch)=>{
     if(rec._wid!==undefined){
-      const nl=(walkinCpl||[]).map(c=>c.id===rec._wid?{...c,treatDone:true,treatBy:nm,treatAt:at}:c);
+      const nl=(walkinCpl||[]).map(c=>c.id===rec._wid?{...c,...patch}:c);
       setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
-    } else if(rec._gid!==undefined && typeof setGroupsCpl==="function"){
-      setGroupsCpl(rec._gid, rec._ci, {treatDone:true,treatBy:nm,treatAt:at});
+    } else if(rec._gid!==undefined){
+      setGroupsCpl(rec._gid, rec._ci, patch);
     }
   };
+  const markTreatNoted=(rec)=>{
+    const nm=window.prompt("誰備註的?(填名字,例如已寫在訂位單上)"); if(nm===null) return;
+    const now=new Date(); patchCpl(rec,{treatNoted:true,treatNotedBy:nm,treatNotedAt:`${now.getMonth()+1}/${now.getDate()}`});
+  };
+  const markTreatDone=(rec)=>{
+    const nm=window.prompt("誰送的?(填名字)"); if(nm===null) return;
+    const now=new Date(); patchCpl(rec,{treatDone:true,treatBy:nm,treatAt:`${now.getMonth()+1}/${now.getDate()}`});
+  };
+  const [treatOpen,setTreatOpen]=useState(true);
   const qq=q.trim();
   const shown=all.filter(c=>(!fType||c.type===fType)&&(!fSrc||c.source===fSrc)
       &&(!qq||String(c._phone||"").includes(qq)||String(c._who||"").includes(qq)))
@@ -2768,18 +2788,31 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
         {tab==="stats"&&(<>
           {pendingTreats.length>0&&(
             <div style={{background:"#eef8f0",border:"2px solid #2a7a4a",borderRadius:"12px",padding:"11px 12px",marginBottom:"10px"}}>
-              <div style={{fontSize:"13px",fontWeight:"800",color:"#1a6a3a",marginBottom:"6px"}}>🎁 待兌現招待（{pendingTreats.length}）</div>
-              {pendingTreats.map(c=>(
-                <div key={c._key} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:"1px solid #d8ecd8"}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:"13px",fontWeight:"800",color:"#2a3a2a"}}>{c._who||"—"} <span style={{fontSize:"11px",fontWeight:"400",color:"#6a8a6a"}}>{c._phone||""}</span></div>
-                    <div style={{fontSize:"12px",color:"#1a6a3a",fontWeight:"700"}}>→ {c.treat}<span style={{fontSize:"10px",color:"#8aa08a",fontWeight:"400"}}>　({c.date} 的客訴)</span></div>
+              <div onClick={()=>setTreatOpen(v=>!v)} style={{fontSize:"13px",fontWeight:"800",color:"#1a6a3a",marginBottom:treatOpen?"6px":"0",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px"}}>
+                <span style={{fontSize:"11px"}}>{treatOpen?"▼":"▶"}</span>
+                🎁 近 7 天回訪要招待（{pendingTreats.length}）
+                {!treatOpen&&pendingTreats.some(c=>!c.treatNoted)&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c06030",borderRadius:"5px",padding:"1px 7px"}}>{pendingTreats.filter(c=>!c.treatNoted).length} 筆未備註</span>}
+              </div>
+              {treatOpen&&(<>
+                {pendingTreats.map(c=>(
+                  <div key={c._key} style={{padding:"7px 0",borderTop:"1px solid #d8ecd8"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
+                      <span style={{fontSize:"12px",fontWeight:"900",color:"#b05a10"}}>📅 {c._visit.date} {c._visit.time}</span>
+                      <span style={{fontSize:"13px",fontWeight:"800",color:"#2a3a2a"}}>{c._who||"—"}</span>
+                      <span style={{fontSize:"11px",color:"#6a8a6a"}}>{c._phone||""}</span>
+                      {c.treatNoted&&<span style={{fontSize:"10px",fontWeight:"700",color:"#1a6a3a",background:"#d8f0dc",borderRadius:"5px",padding:"1px 6px"}}>📝 已備註（{c.treatNotedBy} {c.treatNotedAt}）</span>}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"3px"}}>
+                      <div style={{flex:1,fontSize:"12px",color:"#1a6a3a",fontWeight:"700"}}>→ 招待:{c.treat}<span style={{fontSize:"10px",color:"#8aa08a",fontWeight:"400"}}>　({c.date} 的客訴)</span></div>
+                      {!c.treatNoted&&<button onClick={()=>markTreatNoted(c)}
+                        style={{padding:"6px 10px",borderRadius:"8px",border:"1.5px solid #b07840",background:"#fff",color:"#8a5210",fontSize:"11px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>📝 已備註</button>}
+                      <button onClick={()=>markTreatDone(c)}
+                        style={{padding:"6px 10px",borderRadius:"8px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"11px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已兌現</button>
+                    </div>
                   </div>
-                  <button onClick={()=>markTreatDone(c)}
-                    style={{padding:"7px 12px",borderRadius:"8px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已兌現</button>
-                </div>
-              ))}
-              <div style={{fontSize:"10px",color:"#6a8a6a",marginTop:"5px"}}>客人再訂位時,人數統計表的紅色橫幅也會提醒「這次要招待」</div>
+                ))}
+                <div style={{fontSize:"10px",color:"#6a8a6a",marginTop:"5px"}}>📝已備註=已寫進訂位單/交接;✓已兌現=當天送完。兌現後不再顯示、下次匯入也不再提醒。</div>
+              </>)}
             </div>
           )}
           <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
@@ -2854,7 +2887,7 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
                   {c.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"1px 6px"}}>{c.type}</span>}
                   <span style={{flex:1}}/>
                   {pics.length>0&&<span style={{fontSize:"11px"}}>📷</span>}
-                  {c.treat&&!c.treatDone&&<span style={{fontSize:"10px",fontWeight:"800",background:"#dff0e6",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 6px"}}>🎁 待招待</span>}
+                  {c.treat&&!c.treatDone&&upcomingByPhone[normPhone(c._phone)]&&<span style={{fontSize:"10px",fontWeight:"800",background:c.treatNoted?"#d8f0dc":"#dff0e6",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 6px"}}>{c.treatNoted?"📝 已備註":"🎁 待招待"} {upcomingByPhone[normPhone(c._phone)].date}來</span>}
                   {c.treatDone&&<span style={{fontSize:"10px",color:"#8aa08a"}}>🎁 已兌現</span>}
                   <span style={{display:"inline-flex",alignItems:"center",gap:"3px",fontSize:"9px",color:"#8a5a30"}}>{srcIcon(c.source)}</span>
                 </div>
@@ -2867,7 +2900,7 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
                     <R l="態度" v={[...(c.attitudes||[]),c.attitude].filter(Boolean).join("、")}/>
                     <R l="原因" v={c.reason}/>
                     <R l="調整" v={c.adjust||c.note}/>
-                    <R l="招待" v={c.treat?`${c.treat}${c.treatDone?`　✓已兌現（${c.treatBy||""} ${c.treatAt||""}）`:""}`:""}/>
+                    <R l="招待" v={c.treat?`${c.treat}${c.treatDone?`　✓已兌現（${c.treatBy||""} ${c.treatAt||""}）`:c.treatNoted?`　📝已備註（${c.treatNotedBy||""} ${c.treatNotedAt||""}）`:""}`:""}/>
                     {pics.length>0&&(
                       <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginTop:"7px"}}>
                         {pics.map((p,pi)=>(
@@ -3356,7 +3389,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v115</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v116</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4882,7 +4915,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v115</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v116</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5626,7 +5659,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v115</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v116</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
