@@ -1358,7 +1358,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v113</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v115</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2701,16 +2701,23 @@ function ItemsOffPage({ onBack }) {
 }
 
 // ─── 客訴中心:統計 + 清單 + 新增(散客/Google)────────────────────────────
-function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
+function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
+  const setGroupsCpl=(gid,ci,patch)=>{
+    setGroups(p=>p.map(g=>g.id!==gid?g:{...g,complaints:(g.complaints||[]).map((c,i)=>i===ci?{...c,...patch}:c)}));
+  };
   const [tab,setTab]=useState("stats");
   const [fType,setFType]=useState("");
   const [fSrc,setFSrc]=useState("");
   const [addOpen,setAddOpen]=useState(false);
+  const [bigPic,setBigPic]=useState(null);
+  const [q,setQ]=useState("");                    // 搜尋:電話或姓名
+  const [openIds,setOpenIds]=useState({});        // 展開的卡片
+  const [editRec,setEditRec]=useState(null);      // 編輯中(walkinCpl 限定)
   const [f,setF]=useState({name:"",phone:"",source:"現場餐評",type:"",kinds:[],dishes:[],photo:null,attitudes:[],attitude:"",reason:"",adjust:"",treat:""});
   // 匯總:大訂餐評(訂位上的) + 散客/Google(walkinCpl)
   const all=[];
-  (groups||[]).forEach(g=>(g.complaints||[]).forEach(c=>all.push({...c,source:c.source||"大訂餐評",_who:g.name,_phone:g.phone,_when:`${g.date||""} ${g.time||""}`})));
-  (walkinCpl||[]).forEach(c=>all.push({...c,source:c.source||"現場餐評",_who:c.name,_phone:c.phone,_when:""}));
+  (groups||[]).forEach(g=>(g.complaints||[]).forEach((c,ci)=>all.push({...c,source:c.source||"大訂餐評",_who:g.name,_phone:g.phone,_when:`${g.date||""} ${g.time||""}`,_key:`g_${g.id}_${ci}`,_gid:g.id,_ci:ci})));
+  (walkinCpl||[]).forEach(c=>all.push({...c,source:c.source||"現場餐評",_who:c.name,_phone:c.phone,_when:"",_key:`w_${c.id}`,_wid:c.id}));
   const ymOf=(d)=>{const m=(d||"").match(/^(\d{1,2})\//);return m?+m[1]:0;};
   const nowM=new Date().getMonth()+1;
   const thisM=all.filter(c=>ymOf(c.date)===nowM), lastM=all.filter(c=>ymOf(c.date)===(nowM===1?12:nowM-1));
@@ -2719,7 +2726,20 @@ function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
   const dishCnt={};
   all.forEach(c=>(c.dishes||[]).forEach(d=>{ const id=typeof d==="object"?d.id:d; const it=findItem(id); const nm=it?it.name:id; dishCnt[nm]=(dishCnt[nm]||0)+1; }));
   const topDishes=Object.entries(dishCnt).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const shown=all.filter(c=>(!fType||c.type===fType)&&(!fSrc||c.source===fSrc))
+  const pendingTreats=all.filter(c=>c.treat&&String(c.treat).trim()&&!c.treatDone);
+  const markTreatDone=(rec)=>{
+    const nm=window.prompt("誰送的?(填名字)"); if(nm===null) return;
+    const now=new Date(); const at=`${now.getMonth()+1}/${now.getDate()}`;
+    if(rec._wid!==undefined){
+      const nl=(walkinCpl||[]).map(c=>c.id===rec._wid?{...c,treatDone:true,treatBy:nm,treatAt:at}:c);
+      setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+    } else if(rec._gid!==undefined && typeof setGroupsCpl==="function"){
+      setGroupsCpl(rec._gid, rec._ci, {treatDone:true,treatBy:nm,treatAt:at});
+    }
+  };
+  const qq=q.trim();
+  const shown=all.filter(c=>(!fType||c.type===fType)&&(!fSrc||c.source===fSrc)
+      &&(!qq||String(c._phone||"").includes(qq)||String(c._who||"").includes(qq)))
     .sort((a,b)=>{const p=x=>{const m=(x.date||"0/0").split("/").map(Number);return (m[0]||0)*100+(m[1]||0);};return p(b)-p(a);});
   const chip=(on)=>({padding:"7px 12px",borderRadius:"8px",border:`1.5px solid ${on?"#a04020":"#c8b89c"}`,fontSize:"13px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#f0e6d4",color:on?"#fff":"#6a4a2e"});
   const srcIcon=(k)=>{const s2=CPL_SOURCES.find(x=>x.k===k);return s2?<s2.Icon size={14} color="#8a5a30"/>:null;};
@@ -2746,6 +2766,22 @@ function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
 
       <div style={{overflowY:"auto",flex:1,padding:"12px"}}>
         {tab==="stats"&&(<>
+          {pendingTreats.length>0&&(
+            <div style={{background:"#eef8f0",border:"2px solid #2a7a4a",borderRadius:"12px",padding:"11px 12px",marginBottom:"10px"}}>
+              <div style={{fontSize:"13px",fontWeight:"800",color:"#1a6a3a",marginBottom:"6px"}}>🎁 待兌現招待（{pendingTreats.length}）</div>
+              {pendingTreats.map(c=>(
+                <div key={c._key} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:"1px solid #d8ecd8"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"13px",fontWeight:"800",color:"#2a3a2a"}}>{c._who||"—"} <span style={{fontSize:"11px",fontWeight:"400",color:"#6a8a6a"}}>{c._phone||""}</span></div>
+                    <div style={{fontSize:"12px",color:"#1a6a3a",fontWeight:"700"}}>→ {c.treat}<span style={{fontSize:"10px",color:"#8aa08a",fontWeight:"400"}}>　({c.date} 的客訴)</span></div>
+                  </div>
+                  <button onClick={()=>markTreatDone(c)}
+                    style={{padding:"7px 12px",borderRadius:"8px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已兌現</button>
+                </div>
+              ))}
+              <div style={{fontSize:"10px",color:"#6a8a6a",marginTop:"5px"}}>客人再訂位時,人數統計表的紅色橫幅也會提醒「這次要招待」</div>
+            </div>
+          )}
           <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
             <div style={{flex:1,background:"#fff",border:"2px solid #e0a080",borderRadius:"12px",padding:"12px",textAlign:"center"}}>
               <div style={{fontSize:"11px",color:"#8a6a4a"}}>本月客訴</div>
@@ -2786,36 +2822,96 @@ function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
         </>)}
 
         {tab==="list"&&(<>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 搜電話或姓名" inputMode="search"
+            style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:"10px",border:"1.5px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"14px",marginBottom:"8px"}}/>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
             <button style={{...chip(!fType&&!fSrc),padding:"5px 10px",fontSize:"12px"}} onClick={()=>{setFType("");setFSrc("");}}>全部</button>
             {CPL_TYPES.map(({k,Icon})=><button key={k} style={{...chip(fType===k),padding:"5px 10px",fontSize:"12px",display:"inline-flex",alignItems:"center",gap:"4px"}} onClick={()=>setFType(fType===k?"":k)}><Icon size={13} color={fType===k?"#fff":"#8a6a4a"}/>{k}</button>)}
             {CPL_SOURCES.map(({k,Icon})=><button key={k} style={{...chip(fSrc===k),padding:"5px 10px",fontSize:"12px",display:"inline-flex",alignItems:"center",gap:"4px"}} onClick={()=>setFSrc(fSrc===k?"":k)}><Icon size={13} color={fSrc===k?"#fff":"#8a6a4a"}/>{k}</button>)}
           </div>
           {shown.length===0?<div style={{textAlign:"center",padding:"40px",color:"#a09070",fontSize:"13px"}}>沒有符合的紀錄</div>
-            :shown.map((c,i)=>(
-              <div key={i} style={{background:"#fff",border:"1.5px solid #e0c8b8",borderRadius:"11px",padding:"11px 12px",marginBottom:"8px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"5px",flexWrap:"wrap"}}>
-                  <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{c.date}</span>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"10px",fontWeight:"700",background:"#f5ece0",border:"1px solid #d8c8b0",borderRadius:"5px",padding:"2px 6px",color:"#8a5a30"}}>{srcIcon(c.source)}{c.source}</span>
-                  {c.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"2px 7px"}}>{c.type}</span>}
-                  <span style={{flex:1}}/>
-                  <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c._who||"—"} {c._phone||""}</span>
+            :shown.map((c)=>{
+              const isOpen=!!openIds[c._key];
+              const pics=[];
+              if(c.photo) pics.push({src:c.photo,cap:c.type||"客訴照片"});
+              (c.dishes||[]).forEach(d=>{ if(typeof d==="object"&&d.photo){ const it=findItem(d.id); pics.push({src:d.photo,cap:it?it.name:d.id}); } });
+              const dishTxt=(c.dishes||[]).map(d=>{const id=typeof d==="object"?d.id:d;const it=findItem(id);const dk=(typeof d==="object"?d.kinds:[])||[];const nt=(typeof d==="object"&&d.note)?`「${d.note}」`:"";return `${it?it.name:id}${dk.length?`（${dk.join("、")}）`:""}${nt}`;}).join("、");
+              const R=({l,v})=>v?(
+                <div style={{display:"flex",gap:"8px",padding:"4px 0",borderTop:"1px solid #f5ede0",fontSize:"12px",lineHeight:"1.65"}}>
+                  <span style={{fontWeight:"800",color:"#8a5a30",flexShrink:0,width:"52px"}}>{l}</span>
+                  <span style={{color:"#4a3520",flex:1}}>{v}</span>
                 </div>
-                {(c.kinds||[]).length>0&&<div style={{fontSize:"11px",color:"#8a4a10",marginBottom:"3px"}}>{(c.kinds||[]).join("、")}</div>}
-                {(c.dishes||[]).map((d,j)=>{const id=typeof d==="object"?d.id:d;const it=findItem(id);const dk=(typeof d==="object"?d.kinds:[])||[];
-                  return <div key={j} style={{fontSize:"11px",color:"#8a4a10",lineHeight:"1.6"}}>🍽 <b>{it?it.name:id}</b>{dk.length>0?`　${dk.join("、")}`:""}{(typeof d==="object"&&d.note)?`　—「${d.note}」`:""}</div>;})}
-                {(c.attitudes||[]).length>0&&<div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginTop:"4px"}}>{(c.attitudes||[]).map(a=><span key={a} style={{fontSize:"10px",fontWeight:"700",background:a==="願意回訪"?"#dff0e6":"#f0e8f4",border:`1px solid ${a==="願意回訪"?"#7ab88a":"#c0a0d0"}`,color:a==="願意回訪"?"#1a6a3a":"#6a3a8a",borderRadius:"5px",padding:"2px 6px"}}>{a}</span>)}</div>}
-                {c.reason&&<div style={{fontSize:"11px",color:"#5a4030",marginTop:"4px",lineHeight:"1.5"}}>原因:{c.reason}</div>}
-                {c.treat&&<div style={{fontSize:"11px",color:"#1a6a3a",fontWeight:"700",marginTop:"2px"}}>下次招待:{c.treat}</div>}
+              ):null;
+              return (
+              <div key={c._key} style={{background:"#fff",border:"1.5px solid #e0c8b8",borderRadius:"11px",marginBottom:"7px",overflow:"hidden"}}>
+                {/* 摘要列(點了展開) */}
+                <div onClick={()=>setOpenIds(p=>({...p,[c._key]:!p[c._key]}))}
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"10px 12px",cursor:"pointer",flexWrap:"wrap"}}>
+                  <span style={{fontSize:"11px",color:"#a08a70"}}>{isOpen?"▾":"▸"}</span>
+                  <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{c.date}</span>
+                  <span style={{fontSize:"13px",fontWeight:"800",color:"#3a2a1a"}}>{c._who||"—"}</span>
+                  <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c._phone||""}</span>
+                  {c.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"1px 6px"}}>{c.type}</span>}
+                  <span style={{flex:1}}/>
+                  {pics.length>0&&<span style={{fontSize:"11px"}}>📷</span>}
+                  {c.treat&&!c.treatDone&&<span style={{fontSize:"10px",fontWeight:"800",background:"#dff0e6",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 6px"}}>🎁 待招待</span>}
+                  {c.treatDone&&<span style={{fontSize:"10px",color:"#8aa08a"}}>🎁 已兌現</span>}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:"3px",fontSize:"9px",color:"#8a5a30"}}>{srcIcon(c.source)}</span>
+                </div>
+                {/* 展開:對齊的欄位列 */}
+                {isOpen&&(
+                  <div style={{padding:"2px 12px 11px"}}>
+                    <R l="來源" v={c.source}/>
+                    <R l="細項" v={(c.kinds||[]).join("、")}/>
+                    <R l="餐點" v={dishTxt}/>
+                    <R l="態度" v={[...(c.attitudes||[]),c.attitude].filter(Boolean).join("、")}/>
+                    <R l="原因" v={c.reason}/>
+                    <R l="調整" v={c.adjust||c.note}/>
+                    <R l="招待" v={c.treat?`${c.treat}${c.treatDone?`　✓已兌現（${c.treatBy||""} ${c.treatAt||""}）`:""}`:""}/>
+                    {pics.length>0&&(
+                      <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginTop:"7px"}}>
+                        {pics.map((p,pi)=>(
+                          <div key={pi} onClick={()=>setBigPic(p)} style={{cursor:"pointer",textAlign:"center"}}>
+                            <img src={p.src} style={{width:"58px",height:"58px",objectFit:"cover",borderRadius:"7px",border:"1.5px solid #d8c0b0",display:"block"}}/>
+                            <div style={{fontSize:"8px",color:"#a08070",maxWidth:"58px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.cap}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:"6px",marginTop:"9px"}}>
+                      {c.treat&&!c.treatDone&&(
+                        <button onClick={()=>markTreatDone(c)}
+                          style={{flex:1,padding:"8px",borderRadius:"8px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>🎁 已兌現招待</button>
+                      )}
+                      {c._wid!==undefined&&(
+                        <button onClick={()=>{setEditRec(c);setF({name:c.name||"",phone:c.phone||"",source:c.source||"現場餐評",type:c.type||"",kinds:c.kinds||[],dishes:c.dishes||[],photo:c.photo||null,attitudes:c.attitudes||[],attitude:c.attitude||"",reason:c.reason||"",adjust:c.adjust||"",treat:c.treat||""});setAddOpen(true);}}
+                          style={{padding:"8px 14px",borderRadius:"8px",border:"1.5px solid #b07840",background:"#fff",color:"#8a5210",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✏️ 編輯</button>
+                      )}
+                      <button onClick={()=>{
+                          if(!window.confirm(`刪除 ${c.date} ${c._who||""} 的客訴紀錄?`)) return;
+                          if(c._wid!==undefined){ const nl=(walkinCpl||[]).filter(x=>x.id!==c._wid); setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl); }
+                          else { setGroups(p=>p.map(g=>g.id!==c._gid?g:{...g,complaints:(g.complaints||[]).filter((_,i)=>i!==c._ci)})); }
+                        }}
+                        style={{padding:"8px 14px",borderRadius:"8px",border:"1.5px solid #d09090",background:"#fff",color:"#c02020",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>🗑 刪除</button>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
+            );})}
         </>)}
       </div>
 
+      {bigPic&&createPortal(
+        <div onClick={()=>setBigPic(null)} style={{position:"fixed",inset:0,zIndex:9600,background:"rgba(0,0,0,0.9)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px"}}>
+          <img src={bigPic.src} style={{maxWidth:"100%",maxHeight:"82vh",objectFit:"contain",borderRadius:"10px"}}/>
+          <div style={{color:"#fff",fontSize:"13px",fontWeight:"700",marginTop:"10px"}}>{bigPic.cap}</div>
+          <div style={{color:"#bbb",fontSize:"11px",marginTop:"4px"}}>點任意處關閉</div>
+        </div>, document.body
+      )}
       {addOpen&&createPortal(
         <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={()=>setAddOpen(false)}>
           <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"430px",maxHeight:"88vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"10px"}}>＋ 記錄客訴</div>
+            <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"10px"}}>{editRec?"✏️ 編輯客訴":"＋ 記錄客訴"}</div>
             <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>來源</div>
             <div style={{display:"flex",gap:"6px",marginBottom:"10px"}}>
               {CPL_SOURCES.filter(x=>x.k!=="大訂餐評").map(({k,Icon,desc})=>(
@@ -2840,17 +2936,22 @@ function CplCenterPage({ onBack, groups, walkinCpl, setWalkinCpl }) {
               </div>
             ))}
             <div style={{display:"flex",gap:"8px"}}>
-              <button onClick={()=>setAddOpen(false)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{setEditRec(null);setAddOpen(false);}} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
               <button onClick={()=>{
                   const has=f.type||(f.kinds||[]).length>0||(f.dishes||[]).length>0||f.reason.trim();
                   if(!has){ window.alert("至少選一個類型或填原因"); return; }
-                  const now=new Date();
-                  const rec={id:`w${Date.now()}`,date:`${now.getMonth()+1}/${now.getDate()}`,...f};
-                  const nl=[...(walkinCpl||[]),rec];
-                  setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
-                  setAddOpen(false);
+                  if(editRec&&editRec._wid!==undefined){
+                    const nl=(walkinCpl||[]).map(c=>c.id===editRec._wid?{...c,...f}:c);
+                    setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+                  } else {
+                    const now=new Date();
+                    const rec={id:`w${Date.now()}`,date:`${now.getMonth()+1}/${now.getDate()}`,...f};
+                    const nl=[...(walkinCpl||[]),rec];
+                    setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+                  }
+                  setEditRec(null); setAddOpen(false);
                 }}
-                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#c02020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>儲存客訴</button>
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#c02020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{editRec?"儲存修改":"儲存客訴"}</button>
             </div>
           </div>
         </div>, document.body
@@ -3227,7 +3328,7 @@ const rowBg=(g)=>{
   if(showDingwe) return <DingwePage groups={groups} onBack={()=>setShowDingwe(false)} staffList={staffList} setGroups={setGroups}/>;
   if(showStats) return <StatsPage onBack={()=>setShowStats(false)} staffList={staffList}/>;
   if(showItemsOff) return <ItemsOffPage onBack={()=>setShowItemsOff(false)}/>;
-  if(showCplCenter) return <CplCenterPage onBack={()=>setShowCplCenter(false)} groups={groups} walkinCpl={walkinCpl} setWalkinCpl={setWalkinCpl}/>;
+  if(showCplCenter) return <CplCenterPage onBack={()=>setShowCplCenter(false)} groups={groups} setGroups={setGroups} walkinCpl={walkinCpl} setWalkinCpl={setWalkinCpl}/>;
 
   const COLS=[
     {key:"date",       label:"日期",    w:50, text:true},
@@ -3254,9 +3355,9 @@ const rowBg=(g)=>{
 
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-          <div style={S.logo}>✦ 大訂追蹤表 v113</div>
-          <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v115</div>
+          <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
               {t:"👥 員工",  fn:()=>setShowStaff(true)},
@@ -3316,7 +3417,7 @@ const rowBg=(g)=>{
             </div>
           </div>
         )}
-        <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+        <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
           <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const n=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
@@ -4389,7 +4490,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
             date:rec.date, time:rec.time, name:rec.name, phone:rec.phone,
             a:rec.a, ch:rec.ch, n:cs.length,
             type:last.type||"", kinds:(last.kinds||[]).join("、"), dishes:dishNames.join("、"),
-            treat:last.treat||"", src:last.source||"", ack:false
+            treat:(last.treat&&!last.treatDone)?last.treat:"", src:last.source||"", ack:false
           };
         });
       // 取消 → 自動封存對應大訂(取消的時段、且沒有同時段的有效訂位才封存)
@@ -4781,7 +4882,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v113</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v115</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5525,7 +5626,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v113</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v115</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -6789,6 +6890,7 @@ export default function App() {
 const GS=`
   @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}
+  html,body{max-width:100%;overflow-x:hidden}
   @keyframes blinkExcl{0%,100%{opacity:1}50%{opacity:0.12}}
   @keyframes blinkStep{0%,100%{box-shadow:0 0 0 0 rgba(224,144,10,0.0);transform:scale(1)}50%{box-shadow:0 0 0 4px rgba(224,144,10,0.45);transform:scale(1.05)}}
   .blinkStep{animation:blinkStep 0.9s ease-in-out infinite}
