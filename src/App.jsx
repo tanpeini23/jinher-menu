@@ -1358,7 +1358,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v116</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v119</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3219,7 +3219,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [todoChecks,setTodoChecks]=useState({}); // 手動代辦打勾(關訂位、打電話)，跨裝置同步
   const [newTodo,setNewTodo]=useState("");
   const [todoAdd,setTodoAdd]=useState(false);
-  const [todoOpen,setTodoOpen]=useState(true);
+  const [todoOpen,setTodoOpen]=useState(false);   // 預設收合,要看再打開
   const [hoOpen,setHoOpen]=useState(false);
   const [todoFreq,setTodoFreq]=useState("once");   // once=只有今天 daily=每天 weekly=每週
   const [todoDays,setTodoDays]=useState([1,3,5]);
@@ -3313,6 +3313,18 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const overdueGs=groups.filter(g=>depositUrgency(g)==="overdue");
   const urgentGs =groups.filter(g=>depositUrgency(g)==="urgent");
 
+// 同時段規則:大人數 >=10 的大訂獨佔該時段;<10 的同時段最多 2 組
+const adultsOf=(g)=>{ const hc=(g.headcount||"").toLowerCase(); const p=+((hc.match(/(\d+)p/)||[])[1]||0); return p||parseInt(hc)||0; };
+const BIG_MIN = 8;                          // 8 位大人以上才算「要線上點餐的大訂」
+const slotRuleCheck=(gs)=>{                 // gs=同一時段的組
+  // 只看大訂(>=8位大人);不到 8 位的只需打電話確認人數,不佔大訂配額
+  // 已註記「客人可接受較晚出餐」的組,視同已協調,不列入計算
+  const big=gs.filter(g=>adultsOf(g)>=BIG_MIN && !g.lateOK);
+  if(big.length<2) return null;
+  if(big.some(g=>adultsOf(g)>=10)) return "有 10 位大人以上的大訂,此時段只能接 1 組";
+  if(big.length>2) return "10 位以下的大訂,同時段最多接 2 組";
+  return null;
+};
 const rowBg=(g)=>{
     if(g.cancelled)return"#f0dcdc";
     if(g.archived)return"#dce8dc";
@@ -3389,7 +3401,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v116</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v119</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -3462,6 +3474,12 @@ const rowBg=(g)=>{
           const maiN=groups.filter(g=>g.fromMai&&!g.cancelled).length;
           const pastN=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g)).length;
           const importedToday = lastResvImport===todayStr;
+          // 同時段大訂規則衝突掃描(手動新增+麥訂匯入都抓得到)
+          // 同時段 = 固定半小時格(11:00~11:29 算一格、11:30~11:59 算一格)
+          const halfSlot=(t)=>{ const m=(t||"").match(/^(\d{1,2}):(\d{2})$/); if(!m) return t||""; const h=+m[1]; return `${String(h).padStart(2,"0")}:${+m[2]<30?"00":"30"}`; };
+          const slotMap={};
+          groups.filter(g=>!g.cancelled&&!g.archived&&!isPastMeal(g)&&g.date&&g.time).forEach(g=>{ const k=`${g.date} ${halfSlot(g.time)}`; (slotMap[k]=slotMap[k]||[]).push(g); });
+          const slotConflicts=Object.entries(slotMap).map(([k,gs])=>({slot:k,gs,msg:slotRuleCheck(gs)})).filter(x=>x.msg);
           // ⏰ 快截止還沒點完的訂位 → 夥伴要主動催(客人逾時只能現場點餐,等40分鐘以上)
           const chaseGs = groups.filter(g=>{
             if(g.fromMai||g.cancelled||g.archived||g.locked) return false;
@@ -3473,6 +3491,9 @@ const rowBg=(g)=>{
             const p=+((hc.match(/(\d+)p/)||[])[1]||0), c2=+((hc.match(/(\d+)c/)||[])[1]||0);
             const need=(p+c2)||parseInt(hc)||0;
             const done=(g.orders||[]).length;
+            // 點餐狀態已選「已提醒點餐/已加LINE/現場點餐/餐點封存」→ 夥伴已處理,不再催
+            const st=(g.statusLog&&g.statusLog.status)||"";
+            if(["已提醒點餐","已加LINE","現場點餐","餐點封存"].includes(st)) return false;
             return need>0 && done<need;                          // 還沒點完
           });
           const dow=new Date().getDay(); // 0日 1一 2二 3三 4四 5五 6六
@@ -3509,8 +3530,8 @@ const rowBg=(g)=>{
             if([3,4].includes(wd)&&!todoChecks[`call_${ds}`]) overdueTasks.push({key:`call_${ds}`,text:`📞 ${ds}（${wl}）的打電話確認還沒做`});
             if([1,3,5].includes(wd)&&!todoChecks[`save_${ds}`]) overdueTasks.push({key:`save_${ds}`,text:`💰 ${ds}（${wl}）的存錢還沒做`});
           }
-          const allDone = chaseGs.length===0 && importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
-          const todoLeft = [chaseGs.length>0, !importedToday, maiN>0, pastN>0, overdueGs.length>0, urgentGs.length>0, overdueTasks.length>0,
+          const allDone = slotConflicts.length===0 && chaseGs.length===0 && importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
+          const todoLeft = [slotConflicts.length>0, chaseGs.length>0, !importedToday, maiN>0, pastN>0, overdueGs.length>0, urgentGs.length>0, overdueTasks.length>0,
             needClose&&!closeDone, needCall&&!callDone, needSave&&!saveDone, needKey&&!keyDone, !fbDone, !igDone]
             .filter(Boolean).length + customToday.filter(t=>!todoChecks[ckey(t)]).length;
           return (
@@ -3529,6 +3550,36 @@ const rowBg=(g)=>{
                   style={{width:"26px",height:"26px",lineHeight:"1",borderRadius:"7px",border:"1.5px solid #c08a20",background:"#fff",color:"#8a5210",fontSize:"16px",fontWeight:"900",cursor:"pointer",padding:0,flexShrink:0}}>＋</button>
               </div>
               {todoOpen&&<div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                {slotConflicts.length>0&&(
+                  <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 同時段大訂超收 {slotConflicts.length} 個時段!</div>
+                    {slotConflicts.map(x=>(
+                      <div key={x.slot} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"4px",marginTop:"4px"}}>
+                        <b>{x.slot}~{(()=>{const p=x.slot.split(" ")[1].split(":");return `${p[0]}:${p[1]==="00"?"29":"59"}`;})()}</b>
+                        <div style={{color:"#c02020",fontWeight:"700",marginBottom:"3px"}}>{x.msg} —— 打電話跟<b>比較晚訂位</b>的客人協調</div>
+                        {x.gs.filter(g=>adultsOf(g)>=BIG_MIN&&!g.lateOK)
+                          .sort((a,b)=>String(a.bookDate||"").localeCompare(String(b.bookDate||"")))
+                          .map((g,gi,arr)=>(
+                          <div key={g.id} style={{display:"flex",alignItems:"center",gap:"6px",padding:"3px 0",flexWrap:"wrap"}}>
+                            <span style={{fontSize:"11px",fontWeight:"800",color:"#3a2a1a"}}>{g.time} {g.name}（{g.headcount}）</span>
+                            <span style={{fontSize:"10px",color:"#8a6a4a"}}>{g.phone}</span>
+                            <span style={{fontSize:"9px",color:gi===arr.length-1?"#c02020":"#a09070",fontWeight:gi===arr.length-1?"800":"400"}}>
+                              {g.bookDate?`${g.bookDate}訂`:""}{gi===arr.length-1?"（最晚訂・優先協調）":""}
+                            </span>
+                            <span style={{flex:1}}/>
+                            <button onClick={()=>{
+                                const nm=window.prompt(`${g.name} 同意較晚出餐?\n填確認的夥伴名字:`); if(nm===null) return;
+                                const now=new Date();
+                                setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:true,lateOKBy:nm,lateOKAt:`${now.getMonth()+1}/${now.getDate()}`}));
+                              }}
+                              style={{fontSize:"10px",background:"#2a7a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 8px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 可接受較晚出餐</button>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    <div style={{fontSize:"9px",color:"#a06050",marginTop:"4px"}}>8 位大人以上才算大訂;不到 8 位只需打電話確認人數,不佔配額。客人同意較晚出餐即可解除警示。</div>
+                  </div>
+                )}
                 {chaseGs.length>0&&(
                   <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
                     <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>
@@ -3671,6 +3722,8 @@ const rowBg=(g)=>{
                     {g.memberType&&g.memberType!=="private" && <button onClick={()=>copyCode(g.code)} style={{fontSize:"9px",padding:"1px 6px",borderRadius:"4px",background:"#ddd0bc",border:"1px solid #d0c0a8",color:"#6a4a2e",cursor:"pointer",marginTop:"2px"}}>複製</button>}
                     {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
                     {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
+                    {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
+                      style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
                     {depositUrgency(g)==="overdue"&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>逾期</div>}
                     {depositUrgency(g)==="urgent" &&<div style={{fontSize:"9px",background:"#5a3a10",color:"#ffd080",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>待付訂</div>}
                     {depositUrgency(g)&&(()=>{const dd=depDeadlineOf(g);return dd?<div style={{fontSize:"8px",color:"#b06020",marginTop:"1px",fontWeight:"800",whiteSpace:"nowrap"}}>{dd.lastMinute?"⏰訂後2hr內":`⏰${dd.label}前`}</div>:null;})()}
@@ -4133,6 +4186,15 @@ const rowBg=(g)=>{
               <button onClick={()=>setShowAdd(false)} style={{...S.ghostBtn,flex:1,margin:0,padding:"10px"}}>取消</button>
               <button onClick={()=>{
                 if(!newG.name.trim()) return;
+                // 同時段規則檢查
+                if(newG.date&&newG.time){
+                  const hs=(t)=>{const m=(t||"").match(/^(\d{1,2}):(\d{2})$/);if(!m)return t||"";return `${String(+m[1]).padStart(2,"0")}:${+m[2]<30?"00":"30"}`;};
+                  const same=groups.filter(g=>!g.cancelled&&!g.archived&&g.date===newG.date&&hs(g.time)===hs(newG.time));
+                  const hpChk=parseInt(newG.hcP)||parseInt(newG.headcount)||0;
+                  const msg=slotRuleCheck([...same,{headcount:`${hpChk}p`}]);
+                  const bigN=same.filter(g=>adultsOf(g)>=BIG_MIN&&!g.lateOK).length;
+                  if(msg&&!window.confirm(`⚠ ${newG.date} ${newG.time} 已有 ${bigN} 組大訂（8位以上）。\n規則:${msg}。\n\n若客人可接受較晚出餐,可先新增後在該筆註記。\n確定還是要新增嗎?`)) return;
+                }
                 const code=makeCode(groups.map(g=>g.code));
                 const hp=parseInt(newG.hcP)||0, hc2=parseInt(newG.hcC)||0, hs=parseInt(newG.hcS)||0;
                 const headcount=[hp>0?hp+"p":"",hc2>0?hc2+"c":"",hs>0?hs+"s":""].filter(Boolean).join("")||newG.headcount||"";
@@ -4915,7 +4977,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v116</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v119</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5659,7 +5721,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v116</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v119</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
