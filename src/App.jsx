@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v123</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v124</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1906,7 +1906,7 @@ function CplDetail({ val, onChange }) {
   const v = val||{};
   const kinds = v.kinds||[];
   const dishes = v.dishes||[];
-  const [cat,setCat] = useState("brunch");
+  const [cat,setCat] = useState("appetizer");
   const [busy,setBusy] = useState(false);
   const set = (patch)=>onChange({...v,...patch});
   const toggleKind = (k)=>set({kinds: kinds.includes(k)?kinds.filter(x=>x!==k):[...kinds,k]});
@@ -1945,21 +1945,25 @@ function CplDetail({ val, onChange }) {
       )}
       {v.type==="餐點"&&(
         <div style={{background:"#fff",border:"1px solid #e0d5c0",borderRadius:"10px",padding:"10px",marginBottom:"8px"}}>
-          <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>🍽 是哪道餐點?（先選分類 → 再選餐點,可複選;每道可各自寫原因）</div>
-          <div style={{display:"flex",gap:"6px"}}>
-            <select value={cat} onChange={e=>setCat(e.target.value)}
-              style={{flex:1,padding:"9px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700"}}>
-              {[...FOOD_CATS,...DRINK_CATS].map(c=><option key={c} value={c}>{MENU[c]?.label||c}</option>)}
-            </select>
-            <select value="" onChange={e=>addDish(e.target.value)}
-              style={{flex:1.4,padding:"9px",borderRadius:"8px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700"}}>
-              <option value="">選餐點…</option>
-              {(MENU[cat]?.items||[]).map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
-              <option value="__custom__">✏️ 找不到?自己打…</option>
-            </select>
+          <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>🍽 是哪道餐點?（先選分類 → 點餐點加入,可複選）</div>
+          <select value={cat} onChange={e=>setCat(e.target.value)}
+            style={{width:"100%",boxSizing:"border-box",padding:"9px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700",marginBottom:"7px"}}>
+            {[...FOOD_CATS,...DRINK_CATS].map(c=><option key={c} value={c}>{MENU[c]?.label||c}</option>)}
+          </select>
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"7px"}}>
+            {(MENU[cat]?.items||[]).map(i=>{
+              const on=dishes.some(d=>d.id===i.id);
+              return (
+                <button key={i.id} onClick={()=>{ if(on){ set({dishes:dishes.filter(d=>d.id!==i.id)}); } else { addDish(i.id); } }}
+                  style={{padding:"7px 10px",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                    border:`1.5px solid ${on?"#a04020":"#d8c8b0"}`, background:on?"#a04020":"#fff", color:on?"#fff":"#5a4030"}}>
+                  {on?"✓ ":""}{i.name}
+                </button>
+              );
+            })}
           </div>
           <button onClick={()=>addDish("__custom__")}
-            style={{width:"100%",marginTop:"6px",padding:"9px",borderRadius:"8px",border:"1.5px dashed #b07840",background:"#fdf6ea",color:"#8a5210",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
+            style={{width:"100%",padding:"9px",borderRadius:"8px",border:"1.5px dashed #b07840",background:"#fdf6ea",color:"#8a5210",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
             ✏️ 菜單找不到?直接打名稱（例如:牛排、燉飯）
           </button>
           {dishes.map((d,i2)=>{
@@ -3451,7 +3455,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v123</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v124</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5056,7 +5060,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v123</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v124</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5800,7 +5804,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v123</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v124</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
