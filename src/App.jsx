@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v121</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v123</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1958,6 +1958,10 @@ function CplDetail({ val, onChange }) {
               <option value="__custom__">✏️ 找不到?自己打…</option>
             </select>
           </div>
+          <button onClick={()=>addDish("__custom__")}
+            style={{width:"100%",marginTop:"6px",padding:"9px",borderRadius:"8px",border:"1.5px dashed #b07840",background:"#fdf6ea",color:"#8a5210",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
+            ✏️ 菜單找不到?直接打名稱（例如:牛排、燉飯）
+          </button>
           {dishes.map((d,i2)=>{
             const it=findItem(d.id);
             const dk=d.kinds||[];
@@ -3447,7 +3451,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v121</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v123</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -3532,6 +3536,7 @@ const rowBg=(g)=>{
           // ⏰ 快截止還沒點完的訂位 → 夥伴要主動催(客人逾時只能現場點餐,等40分鐘以上)
           const chaseGs = groups.filter(g=>{
             if(g.fromMai||g.cancelled||g.archived||g.locked) return false;
+            if(g.onsiteOrder) return false;                      // 現場點餐:不用線上點,不催
             if(!g.date||isPastMeal(g)) return false;
             const dl=getOrderDeadline(g.date); if(!dl) return false;
             const left=dl-new Date();
@@ -3540,9 +3545,9 @@ const rowBg=(g)=>{
             const p=+((hc.match(/(\d+)p/)||[])[1]||0), c2=+((hc.match(/(\d+)c/)||[])[1]||0);
             const need=(p+c2)||parseInt(hc)||0;
             const done=(g.orders||[]).length;
-            // 點餐狀態已選「已提醒點餐/已加LINE/現場點餐/餐點封存」→ 夥伴已處理,不再催
+            // 點餐狀態已選「已提醒點餐/已加LINE/餐點封存」→ 夥伴已處理,不再催
             const st=(g.statusLog&&g.statusLog.status)||"";
-            if(["已提醒點餐","已加LINE","現場點餐","餐點封存"].includes(st)) return false;
+            if(["已提醒點餐","已加LINE","餐點封存"].includes(st)) return false;
             return need>0 && done<need;                          // 還沒點完
           });
           const dow=new Date().getDay(); // 0日 1一 2二 3三 4四 5五 6六
@@ -5051,7 +5056,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v121</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v123</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5795,7 +5800,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v121</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v123</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
