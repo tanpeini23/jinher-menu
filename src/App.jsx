@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v128</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v129</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1893,6 +1893,7 @@ const CPL_TYPES = [
   {k:"餐點", Icon:IcoFood},
   {k:"服務", Icon:IcoService},
   {k:"環境", Icon:IcoEnv},
+  {k:"價格", Icon:IcoTag},
 ];
 const ATTITUDE_OPTS = ["客氣理性","情緒不滿","大聲激動","要求賠償","表示要給負評","當場已安撫","願意回訪","其他"];
 
@@ -1901,6 +1902,7 @@ const CPL_KINDS = {
   環境: ["桌況/清潔","冷氣溫度","噪音吵雜","廁所","停車","座位安排","其他"],
   服務: ["等待過久","服務態度","送錯餐","漏餐","結帳問題","訂位問題","其他"],
   餐點: ["不新鮮","味道太鹹","味道太淡","份量太少","溫度不對","異物","與圖不符","過敏原","其他"],
+  價格: ["價格偏高","與菜單不符","加收費用","服務費爭議","促銷/優惠問題","低消爭議","其他"],
 };
 function CplDetail({ val, onChange }) {
   const v = val||{};
@@ -1928,10 +1930,10 @@ function CplDetail({ val, onChange }) {
   const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
   return (
     <div style={{marginBottom:"12px"}}>
-      <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型（可複選）</div>
-      <div style={{display:"flex",gap:"6px",marginBottom:"8px"}}>
+      <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型</div>
+      <div style={{display:"flex",gap:"6px",marginBottom:"8px",flexWrap:"wrap"}}>
         {CPL_TYPES.map(({k,Icon})=>(
-          <button key={k} onClick={()=>set({type:k})} style={{...chip(v.type===k),flex:1,padding:"9px",display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>
+          <button key={k} onClick={()=>set({type:k})} style={{...chip(v.type===k),flex:"1 1 calc(50% - 3px)",padding:"9px",display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>
             <Icon size={16} color={v.type===k?"#fff":"#8a6a4a"}/>{k}
           </button>
         ))}
@@ -2964,7 +2966,7 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
           <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
             <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px"}}>依類型</div>
             {CPL_TYPES.map(({k,Icon})=>(
-              <Bar key={k} label={<span style={{display:"inline-flex",alignItems:"center",gap:"5px"}}><Icon size={13} color="#8a6a4a"/>{k}</span>} n={byType[k]||0} total={all.length} color={k==="餐點"?"#c06030":k==="服務"?"#8a6ac0":"#3a8a5a"}/>
+              <Bar key={k} label={<span style={{display:"inline-flex",alignItems:"center",gap:"5px"}}><Icon size={13} color="#8a6a4a"/>{k}</span>} n={byType[k]||0} total={all.length} color={k==="餐點"?"#c06030":k==="服務"?"#8a6ac0":k==="價格"?"#c0a030":"#3a8a5a"}/>
             ))}
           </div>
           <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
@@ -3024,6 +3026,12 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
                   {c.treatDone&&<span style={{fontSize:"10px",color:"#8aa08a"}}>🎁 已兌現</span>}
                   <span style={{display:"inline-flex",alignItems:"center",gap:"3px",fontSize:"9px",color:"#8a5a30"}}>{srcIcon(c.source)}</span>
                 </div>
+                {!isOpen&&dishTxt&&(
+                  <div onClick={()=>setOpenIds(p=>({...p,[c._key]:!p[c._key]}))}
+                    style={{padding:"0 12px 9px 30px",marginTop:"-4px",cursor:"pointer"}}>
+                    <span style={{fontSize:"11px",color:"#8a4a10",fontWeight:"700"}}>🍽 {dishTxt}</span>
+                  </div>
+                )}
                 {/* 展開:對齊的欄位列 */}
                 {isOpen&&(
                   <div style={{padding:"2px 12px 11px"}}>
@@ -3533,7 +3541,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v128</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v129</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5139,7 +5147,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v128</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v129</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5883,7 +5891,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v128</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v129</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
