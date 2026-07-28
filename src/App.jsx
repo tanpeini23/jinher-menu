@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v129</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v130</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3172,13 +3172,16 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
 
 // ─── 櫃檯交接:算錢 / 印訂位表 / 放休接力 ────────────────────────────────
 const CASH_SPOTS = ["金庫","備用金","錢櫃"];
+const OPEN_TASKS = ["開燈/開冷氣","開POS/刷卡機","煮咖啡/備飲料","擺放桌椅","檢查訂位表","備品補齊","門口地墊/招牌"];
+const CLOSE_TASKS = ["關燈/關冷氣","結帳關機","清潔桌面/地板","垃圾清運","確認訂金已收","檢查明日訂位","鎖門/設保全"];
 function HandoverBox({ todayStr, open, setOpen }) {
-  const [data,setData]=useState({});                 // {"7/16":{cash:{},printed:false,notes:[]}}
+  const [data,setData]=useState({});                 // {"7/16":{cash:{},printed:false,notes:[],openChk:{},closeChk:{}}}
   const [cashEdit,setCashEdit]=useState(null);       // 正在填不符的位置
   const [cashForm,setCashForm]=useState({diff:"少",amt:"",note:""});
   const [noteAdd,setNoteAdd]=useState(false);
   const [noteTxt,setNoteTxt]=useState("");
-  const day = data[todayStr]||{cash:{},printed:false,notes:[]};
+  const [phase,setPhase]=useState("mid");            // open / mid / close
+  const day = data[todayStr]||{cash:{},printed:false,notes:[],openChk:{},closeChk:{}};
   useEffect(()=>{
     FS.loadDoc("handover").then(v=>{ if(v) setData(v); });
     const u=FS.subscribeDoc("handover", v=>{ if(v) setData(v); });
@@ -3205,6 +3208,50 @@ function HandoverBox({ todayStr, open, setOpen }) {
       </div>
 
       {open&&(<>
+        {/* 三個時段分頁 */}
+        <div style={{display:"flex",gap:"6px",marginBottom:"9px"}}>
+          {[["open","☀️ 開早"],["mid","💰 中間結算"],["close","🌙 完結"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setPhase(k)}
+              style={{flex:1,padding:"9px 4px",borderRadius:"9px",fontSize:"12px",fontWeight:"800",cursor:"pointer",
+                border:`1.5px solid ${phase===k?"#1a4a7a":"#c8d8e8"}`, background:phase===k?"#1a4a7a":"#f4f8fc", color:phase===k?"#fff":"#5a7a9a"}}>{l}</button>
+          ))}
+        </div>
+
+        {/* ☀️ 開早:開店準備清單 */}
+        {phase==="open"&&(
+          <div style={{background:"#fff",border:"1.5px solid #e8d0a0",borderRadius:"10px",padding:"10px 11px"}}>
+            <div style={{fontSize:"12px",fontWeight:"800",color:"#a06a10",marginBottom:"6px"}}>☀️ 開店準備</div>
+            {OPEN_TASKS.map((t,i)=>{
+              const done=(day.openChk||{})[t];
+              return (
+                <div key={t} onClick={()=>save({openChk:{...(day.openChk||{}),[t]:!done}})}
+                  style={{display:"flex",alignItems:"center",gap:"8px",padding:"7px 0",borderTop:i>0?"1px solid #f4ecd8":"none",cursor:"pointer",opacity:done?0.55:1}}>
+                  <span style={{fontSize:"14px"}}>{done?"✅":"⬜"}</span>
+                  <span style={{fontSize:"13px",fontWeight:"700",color:done?"#9a9a8a":"#5a4020",textDecoration:done?"line-through":"none"}}>{t}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 🌙 完結:打烊結算清單 */}
+        {phase==="close"&&(
+          <div style={{background:"#fff",border:"1.5px solid #a0b0d0",borderRadius:"10px",padding:"10px 11px"}}>
+            <div style={{fontSize:"12px",fontWeight:"800",color:"#4a5a8a",marginBottom:"6px"}}>🌙 打烊結算</div>
+            {CLOSE_TASKS.map((t,i)=>{
+              const done=(day.closeChk||{})[t];
+              return (
+                <div key={t} onClick={()=>save({closeChk:{...(day.closeChk||{}),[t]:!done}})}
+                  style={{display:"flex",alignItems:"center",gap:"8px",padding:"7px 0",borderTop:i>0?"1px solid #e8ecf4":"none",cursor:"pointer",opacity:done?0.55:1}}>
+                  <span style={{fontSize:"14px"}}>{done?"✅":"⬜"}</span>
+                  <span style={{fontSize:"13px",fontWeight:"700",color:done?"#9a9a9a":"#3a4a6a",textDecoration:done?"line-through":"none"}}>{t}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {phase==="mid"&&(<>
         {/* 1. 算錢:平常一鍵完成,有不符才展開 */}
         <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
           {(()=>{
@@ -3271,6 +3318,7 @@ function HandoverBox({ todayStr, open, setOpen }) {
             <div style={{fontSize:"10px",color:"#b05a10",fontWeight:"700",marginTop:"5px"}}>還有 {notes.filter(n=>!n.done).length} 項沒做</div>
           )}
         </div>
+        </>)}
       </>)}
 
       {/* 不符金額視窗 */}
@@ -3541,7 +3589,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v129</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v130</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5147,7 +5195,7 @@ function DingwePage({ groups, onBack, staffList, setGroups }) {
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v129</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v130</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -5891,7 +5939,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v129</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v130</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
