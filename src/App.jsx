@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v133</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v135</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2384,13 +2384,13 @@ function HeadcountCell({ g, onSave, setGroups }) {
   };
   const toggleVip=()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,isVip:!x.isVip}));
   return (
-    <div style={{display:"flex",alignItems:"center",gap:"4px",justifyContent:"center"}}>
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"3px"}}>
       <div onClick={openEdit} style={{cursor:"pointer",fontSize:"14px",color:"#2e2010",fontWeight:"600"}}>
         {g.headcount||"—"}
       </div>
       <div onClick={toggleVip} title="包廂"
-        style={{cursor:"pointer",fontSize:"9px",fontWeight:"700",borderRadius:"5px",padding:"1px 5px",
-          background:g.isVip?"#8a5ab4":"#e0d5c0",color:g.isVip?"#fff":"#9a8a76"}}>
+        style={{cursor:"pointer",fontSize:g.isVip?"14px":"9px",fontWeight:g.isVip?"800":"700",borderRadius:"5px",padding:g.isVip?"2px 9px":"1px 5px",
+          background:g.isVip?"#8a5ab4":"#efe8dc",color:g.isVip?"#fff":"#b0a290"}}>
         {g.isVip?"包廂":"包"}
       </div>
       {open&&(
@@ -3176,9 +3176,10 @@ const OPEN_TASKS = ["開燈/開冷氣","開POS/刷卡機","煮咖啡/備飲料",
 const CLOSE_TASKS = ["關燈/關冷氣","結帳關機","清潔桌面/地板","垃圾清運","確認訂金已收","檢查明日訂位","鎖門/設保全"];
 // 錢幣面額(清點表A用)
 const CASH_DENOM = [1000,500,100,50,10,5,1];
-// 完結流程:10 步,每天獨立存檔,可回看
+// 完結流程:每天獨立存檔,可回看;分新手/老手版
 function CloseFlow({ day, save, bases, todayStr, groups }){
-  const [hint,setHint]=useState(true);          // 新手提示開關(預設開)
+  const pro = !!(day.close&&day.close._pro);    // 老手版(存在資料裡,跨裝置同步)
+  const hint=!pro;                              // 老手版不顯示提示
   const cl = day.close||{};                     // 完結資料存 day.close
   const saveCl=(patch)=>save({close:{...cl,...patch}});
   const now=()=>{const d=new Date();return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;};
@@ -3198,6 +3199,22 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
       </div>
     );
   };
+  // 老手版:把「純打勾」的步驟併成一排小勾勾
+  const MiniChecks=({items})=>(
+    <div style={{background:"#fff",border:"1.5px solid #c8d0e0",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+      <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+        {items.map(([k,label,n])=>{
+          const done=cl[k];
+          return (
+            <button key={k} onClick={()=>saveCl({[k]:done?null:now()})}
+              style={{fontSize:"12px",fontWeight:"800",borderRadius:"7px",padding:"7px 11px",cursor:"pointer",
+                border:`1.5px solid ${done?"#3a8a5a":"#c8d8e8"}`, background:done?"#eaf7ee":"#fff", color:done?"#2a7a4a":"#5a6a8a",
+                textDecoration:done?"line-through":"none"}}>{done?"✓":n} {label}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
   // 清點表A:填張數自動加總,跟基準比
   const countTable=(spotKey, baseAmt, label)=>{
     const counts=(cl.counts&&cl.counts[spotKey])||{};
@@ -3207,14 +3224,18 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
     return (
       <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
         <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 10px"}}>
-          {CASH_DENOM.map(d=>(
-            <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
-              <span style={{fontSize:"11px",color:"#5a7a9a",width:"42px",textAlign:"right",fontWeight:"700"}}>${d}</span>
-              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-              <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0"
-                style={{width:"46px",padding:"4px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"12px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"}}/>
-              <span style={{fontSize:"10px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+        <div style={{display:"flex",gap:"16px"}}>
+          {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+            <div key={ci} style={{flex:1,display:"flex",flexDirection:"column",gap:"5px"}}>
+              {col.map(d=>(
+                <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                  <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+                  <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                  <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0"
+                    style={{width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"}}/>
+                  <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -3276,7 +3297,10 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
       <div style={{display:"flex",alignItems:"center",marginBottom:"8px"}}>
         <span style={{fontSize:"12px",fontWeight:"800",color:"#4a5a8a"}}>🌙 完結流程</span>
         <span style={{flex:1}}/>
-        <button onClick={()=>setHint(v=>!v)} style={{fontSize:"10px",color:hint?"#1a4a7a":"#a0b0c0",background:hint?"#eaf2fa":"#f0f0f0",border:"1px solid #c8d8e8",borderRadius:"6px",padding:"3px 9px",cursor:"pointer",fontWeight:"700"}}>💡 新手提示 {hint?"開":"關"}</button>
+        <div style={{display:"flex",border:"1.5px solid #c8d8e8",borderRadius:"8px",overflow:"hidden"}}>
+          <button onClick={()=>saveCl({_pro:false})} style={{fontSize:"11px",fontWeight:"800",padding:"5px 11px",border:"none",cursor:"pointer",background:!pro?"#c06020":"#fff",color:!pro?"#fff":"#8a6a4a"}}>🐣 新手</button>
+          <button onClick={()=>saveCl({_pro:true})} style={{fontSize:"11px",fontWeight:"800",padding:"5px 11px",border:"none",cursor:"pointer",background:pro?"#1a4a7a":"#fff",color:pro?"#fff":"#5a7a9a"}}>⚡ 老手</button>
+        </div>
       </div>
 
       <Step n={1} title="key支出 → 確認報表 = POS金額" doneKey="s1">
@@ -3332,8 +3356,10 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         {photoBlock("bill","清帳單 & 信用卡單")}
       </Step>
 
-      <Step n={6} title="應包金額 + 信用卡單 + 清帳單 訂在一起" doneKey="s6"/>
-      <Step n={7} title="應包金額 + 備用金 → 放進金庫" doneKey="s7"/>
+      {pro
+        ? <MiniChecks items={[["s6","訂在一起","6"],["s7","放金庫","7"]]}/>
+        : <><Step n={6} title="應包金額 + 信用卡單 + 清帳單 訂在一起" doneKey="s6"/>
+          <Step n={7} title="應包金額 + 備用金 → 放進金庫" doneKey="s7"/></>}
       <Step n={8} title="報表填寫會員數據" doneKey="s8b">
         <Hint>9:00 後 POS 機才會更新，記得等更新再填</Hint>
         <div style={{fontSize:"10px",color:"#8a6a48",lineHeight:"1.7",marginTop:"4px",background:"#f8f4ec",borderRadius:"7px",padding:"7px 9px"}}>
@@ -3342,7 +3368,9 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           <b>大麥「折扣報表－優惠券」:</b><br/>回訪折抵100（優惠券）
         </div>
       </Step>
-      <Step n={9} title="金庫和錢櫃上鎖" doneKey="s8"/>
+      {pro
+        ? <MiniChecks items={[["s8","金庫錢櫃上鎖","9"]]}/>
+        : <Step n={9} title="金庫和錢櫃上鎖" doneKey="s8"/>}
 
       {/* ⑨ 分享 LINE */}
       <div style={{background:"#fff",border:"1.5px solid #c8d0e0",borderRadius:"10px",padding:"10px 11px",marginBottom:"7px"}}>
@@ -3368,21 +3396,6 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           disabled={tmrBig.length===0}
           style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:tmrBig.length?"#5a7a9a":"#c8d0d8",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:tmrBig.length?"pointer":"not-allowed"}}>🖨 印明天大訂單</button>
         {tmrBig.length===0&&<Hint>明天沒有已封存的大訂（現場點餐的不列入）</Hint>}
-      </div>
-
-      {/* 打烊清單 */}
-      <div style={{background:"#fff",border:"1.5px solid #a0b0d0",borderRadius:"10px",padding:"10px 11px",marginBottom:"7px"}}>
-        <div style={{fontSize:"12px",fontWeight:"800",color:"#4a5a8a",marginBottom:"6px"}}>🧹 打烊清單</div>
-        {CLOSE_TASKS.map((t,i)=>{
-          const done=(day.closeChk||{})[t];
-          return (
-            <div key={t} onClick={()=>save({closeChk:{...(day.closeChk||{}),[t]:!done}})}
-              style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:i>0?"1px solid #e8ecf4":"none",cursor:"pointer",opacity:done?0.55:1}}>
-              <span style={{fontSize:"14px"}}>{done?"✅":"⬜"}</span>
-              <span style={{fontSize:"13px",fontWeight:"700",color:done?"#9a9a9a":"#3a4a6a",textDecoration:done?"line-through":"none"}}>{t}</span>
-            </div>
-          );
-        })}
       </div>
 
       {/* 結束完結:記夥伴 */}
@@ -3435,7 +3448,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
           : !open&&left>0&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 8px"}}>還有 {left} 項</span>}
         <span style={{flex:1}}/>
         {bases.map(b=>(
-          <span key={b.id} style={{fontSize:"10px",color:"#3a5a7a",fontWeight:"700",background:"#dceaf6",borderRadius:"6px",padding:"2px 8px",whiteSpace:"nowrap"}}>{b.label} ${(+b.amt).toLocaleString()}</span>
+          <span key={b.id} style={{fontSize:"13px",color:"#1a4a7a",fontWeight:"800",background:"#dceaf6",borderRadius:"7px",padding:"4px 11px",whiteSpace:"nowrap"}}>{b.label} ${(+b.amt).toLocaleString()}</span>
         ))}
       </div>
       {open&&(
@@ -3495,14 +3508,20 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             </div>
           )}
           <div style={{background:"#fff",border:"1.5px solid #e8d0a0",borderRadius:"10px",padding:"10px 11px"}}>
-            <div style={{fontSize:"12px",fontWeight:"800",color:"#a06a10",marginBottom:"6px"}}>☀️ 開店準備</div>
-            {OPEN_TASKS.map((t,i)=>{
+            <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+              <span style={{fontSize:"12px",fontWeight:"800",color:"#a06a10"}}>☀️ 開店準備</span>
+              <span style={{flex:1}}/>
+              <button onClick={()=>{const t=window.prompt("新增開店準備項目");if(!t||!t.trim())return;const list=data._openTasks||OPEN_TASKS;const nd={...data,_openTasks:[...list,t.trim()]};setData(nd);FS.saveDoc("handover",nd);}}
+                style={{width:"22px",height:"22px",lineHeight:"1",borderRadius:"6px",border:"1.5px solid #d0a850",background:"#fff",color:"#a06a10",fontSize:"14px",fontWeight:"900",cursor:"pointer",padding:0}}>＋</button>
+            </div>
+            {(data._openTasks||OPEN_TASKS).map((t,i)=>{
               const done=(day.openChk||{})[t];
               return (
-                <div key={t} onClick={()=>save({openChk:{...(day.openChk||{}),[t]:!done}})}
-                  style={{display:"flex",alignItems:"center",gap:"8px",padding:"7px 0",borderTop:i>0?"1px solid #f4ecd8":"none",cursor:"pointer",opacity:done?0.55:1}}>
-                  <span style={{fontSize:"14px"}}>{done?"✅":"⬜"}</span>
-                  <span style={{fontSize:"13px",fontWeight:"700",color:done?"#9a9a8a":"#5a4020",textDecoration:done?"line-through":"none"}}>{t}</span>
+                <div key={t+i} style={{display:"flex",alignItems:"center",gap:"8px",padding:"7px 0",borderTop:i>0?"1px solid #f4ecd8":"none",opacity:done?0.55:1}}>
+                  <span onClick={()=>save({openChk:{...(day.openChk||{}),[t]:!done}})} style={{fontSize:"14px",cursor:"pointer"}}>{done?"✅":"⬜"}</span>
+                  <span onClick={()=>save({openChk:{...(day.openChk||{}),[t]:!done}})} style={{fontSize:"13px",fontWeight:"700",color:done?"#9a9a8a":"#5a4020",textDecoration:done?"line-through":"none",cursor:"pointer",flex:1}}>{t}</span>
+                  <button onClick={()=>{const list=data._openTasks||OPEN_TASKS;const nd={...data,_openTasks:list.filter((_,j)=>j!==i)};setData(nd);FS.saveDoc("handover",nd);}}
+                    style={{fontSize:"11px",border:"none",background:"none",color:"#c0a080",cursor:"pointer",padding:"0 3px"}}>✕</button>
                 </div>
               );
             })}
@@ -3701,7 +3720,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showItemsOff,setShowItemsOff]=useState(false);
   const [showHelp,setShowHelp]=useState(false);
   const [showCplCenter,setShowCplCenter]=useState(false);
-  const [compactMode,setCompactMode]=useState(typeof window!=="undefined"&&window.innerWidth<820);
+  const compactMode=false;   // 統一電腦版
   const [wOpen,setWOpen]=useState(false);   // 散客客訴視窗
   const [gCpl,setGCpl]=useState(null);      // {group} 任一訂位新增客訴(含已封存)
   const [gForm,setGForm]=useState({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
@@ -3850,14 +3869,13 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v133</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v135</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
               {t:"👥 員工",  fn:()=>setShowStaff(true)},
               {t:"📅 假日",  fn:()=>setShowHoliday(true)},
               {t:"🚫 品項",  fn:()=>setShowItemsOff(true)},
-              {t:compactMode?"📱 手機版":"💻 電腦版", fn:()=>setCompactMode(v=>!v)},
               {t:"❔ 說明",  fn:()=>setShowHelp(v=>!v), on:showHelp},
             ].map(b=>(
               <button key={b.t} onClick={b.fn}
@@ -5454,7 +5472,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v133</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v135</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6198,7 +6216,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v133</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v135</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
