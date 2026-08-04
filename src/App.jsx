@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v135</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v137</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2564,7 +2564,8 @@ const WD_TXT=["日","一","二","三","四","五","六"];
 function depDeadlineOf(g){
   const yr=new Date().getFullYear();
   const mm=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/);
-  const bm=(g.bookDate||"").match(/^(\d{1,2})\/(\d{1,2})$/);
+  // 若人數後來改到需訂金,訂金起算日改用 depositFrom(改人數那天),而非原訂位日
+  const bm=(g.depositFrom||g.bookDate||"").match(/^(\d{1,2})\/(\d{1,2})$/);
   if(!mm) return null;
   const meal=new Date(yr,+mm[1]-1,+mm[2]);
   // B:從用餐日前一天往前找,找到第一個銀行有上班的日子
@@ -3176,6 +3177,38 @@ const OPEN_TASKS = ["開燈/開冷氣","開POS/刷卡機","煮咖啡/備飲料",
 const CLOSE_TASKS = ["關燈/關冷氣","結帳關機","清潔桌面/地板","垃圾清運","確認訂金已收","檢查明日訂位","鎖門/設保全"];
 // 錢幣面額(清點表A用)
 const CASH_DENOM = [1000,500,100,50,10,5,1];
+// 清點表(獨立元件,避免每次輸入被重建而失焦)
+function CountTable({ counts, onChange, baseAmt, label }){
+  const setCount=(d,v)=>onChange({...counts,[d]:v.replace(/[^0-9]/g,"")});
+  const total=CASH_DENOM.reduce((s,d)=>s+d*(+counts[d]||0),0);
+  const diff=total-(+baseAmt||0);
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
+      <div style={{display:"flex",gap:"16px"}}>
+        {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+          <div key={ci} style={{flex:1,display:"flex",flexDirection:"column",gap:"5px"}}>
+            {col.map(d=>(
+              <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0"
+                  style={{width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"}}/>
+                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px"}}>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>合計 ${total.toLocaleString()}</span>
+        {total>0&&(diff===0
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
 // 完結流程:每天獨立存檔,可回看;分新手/老手版
 function CloseFlow({ day, save, bases, todayStr, groups }){
   const pro = !!(day.close&&day.close._pro);    // 老手版(存在資料裡,跨裝置同步)
@@ -3216,38 +3249,10 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
     </div>
   );
   // 清點表A:填張數自動加總,跟基準比
-  const countTable=(spotKey, baseAmt, label)=>{
-    const counts=(cl.counts&&cl.counts[spotKey])||{};
-    const setCount=(d,v)=>saveCl({counts:{...(cl.counts||{}),[spotKey]:{...counts,[d]:v.replace(/[^0-9]/g,"")}}});
-    const total=CASH_DENOM.reduce((s,d)=>s+d*(+counts[d]||0),0);
-    const diff=total-(+baseAmt||0);
-    return (
-      <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
-        <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
-        <div style={{display:"flex",gap:"16px"}}>
-          {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
-            <div key={ci} style={{flex:1,display:"flex",flexDirection:"column",gap:"5px"}}>
-              {col.map(d=>(
-                <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
-                  <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
-                  <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-                  <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0"
-                    style={{width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"}}/>
-                  <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-        <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px"}}>
-          <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>合計 ${total.toLocaleString()}</span>
-          {total>0&&(diff===0
-            ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
-            : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
-        </div>
-      </div>
-    );
-  };
+  const countTable=(spotKey, baseAmt, label)=>(
+    <CountTable counts={(cl.counts&&cl.counts[spotKey])||{}} baseAmt={baseAmt} label={label}
+      onChange={(nc)=>saveCl({counts:{...(cl.counts||{}),[spotKey]:nc}})}/>
+  );
   // 拍照上傳(保留歷史:存陣列)
   const photoBlock=(key,label)=>{
     const arr=(cl.photos&&cl.photos[key])||[];
@@ -3869,7 +3874,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v135</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v137</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4223,6 +4228,7 @@ const rowBg=(g)=>{
                     {depositUrgency(g)==="overdue"&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>逾期</div>}
                     {depositUrgency(g)==="urgent" &&<div style={{fontSize:"9px",background:"#5a3a10",color:"#ffd080",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>待付訂</div>}
                     {depositUrgency(g)&&(()=>{const dd=depDeadlineOf(g);return dd?<div style={{fontSize:"8px",color:"#b06020",marginTop:"1px",fontWeight:"800",whiteSpace:"nowrap"}}>{dd.lastMinute?"⏰訂後2hr內":`⏰${dd.label}前`}</div>:null;})()}
+                    {g.depositFrom&&<div title={`${g.depositFromNote||""}，訂金從此日算`} style={{fontSize:"8px",color:"#fff",background:"#c06020",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"800",whiteSpace:"nowrap"}}>📢 {g.depositFrom}改{g.depositFromNote||"人數"}</div>}
                   </td>
                   <td style={{padding:"5px 4px",borderRight:"1.5px solid #cbb99a"}}><MemberBadge g={g}/></td>
                   <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
@@ -5184,13 +5190,23 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       setGroups(prev=>prev.map(g=>aids.has(g.id)?{...g,archived:true,cancelled:true,archiveType:"cancelled"}:g));
     }
     const added=toAdd.length;
+    const _today=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
+    // 侦测「跨过10人门槛」→ 记录订金起算日为今天(汇入日≈改人数日)
+    const applyHc=(g,mm)=>{
+      const hc=[mm.newA>0?mm.newA+"p":"",mm.newC>0?mm.newC+"c":""].filter(Boolean).join("");
+      const wasDep=needsDeposit(g.headcount, g.isVip);
+      const nowDep=needsDeposit(hc, g.isVip);
+      if(!wasDep && nowDep){   // 从免订金 → 要订金:记录变更
+        return {...g, headcount:hc, depositFrom:_today, depositFromNote:`${(mm.oldA||0)+(mm.oldC||0)}→${(mm.newA||0)+(mm.newC||0)}人`};
+      }
+      return {...g, headcount:hc};
+    };
     if(forceUpdate && mismatches.length>0){
       // 全部更新:直接套用大麥人數
       setGroups(prev=>prev.map(g=>{
         const mm=mismatches.find(m=>m.id===g.id);
         if(!mm) return g;
-        const hc=[mm.newA>0?mm.newA+"p":"",mm.newC>0?mm.newC+"c":""].filter(Boolean).join("");
-        return {...g,headcount:hc};
+        return applyHc(g,mm);
       }));
     } else if(mismatches.length>0){
       setMismatchList(mismatches);
@@ -5348,7 +5364,13 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
                 </div>
                 <button onClick={()=>{
                   const hc=[m.newA>0?m.newA+"p":"",m.newC>0?m.newC+"c":""].filter(Boolean).join("");
-                  setGroups(p=>p.map(x=>x.id!==m.id?x:{...x,headcount:hc}));
+                  const _td=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
+                  setGroups(p=>p.map(x=>{
+                    if(x.id!==m.id) return x;
+                    const wasDep=needsDeposit(x.headcount,x.isVip), nowDep=needsDeposit(hc,x.isVip);
+                    if(!wasDep&&nowDep) return {...x,headcount:hc,depositFrom:_td,depositFromNote:`${(m.oldA||0)+(m.oldC||0)}→${(m.newA||0)+(m.newC||0)}人`};
+                    return {...x,headcount:hc};
+                  }));
                   setMismatchList(prev=>prev.filter((_,i)=>i!==idx));
                 }} style={{marginTop:"6px",padding:"6px 12px",borderRadius:"8px",border:"none",background:"#3a7a5a",color:"#fff",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>更新為大麥人數</button>
               </div>
@@ -5472,7 +5494,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v135</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v137</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6216,7 +6238,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v135</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v137</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
