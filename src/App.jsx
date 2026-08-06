@@ -387,6 +387,26 @@ function isDrink(item) {
   return DRINK_CATS.some(c => MENU[c]?.items.find(i => i.id === item.id));
 }
 
+// ─── 低消計算 ────────────────────────────────────────────────────────────────
+// 規則:每位「大人」要一份。單點主餐=1、單點飲料=1、套餐(主餐+升級飲料)=1
+//      主餐 + 另外單點飲料 = 2(分開點各算各的)
+//      前菜/甜點/沙拉/經典小品 不算
+function lowConsumeCount(lines){
+  let n=0;
+  (lines||[]).forEach(l=>{
+    const it=findItem(l.itemId);
+    if(!it) return;
+    if(isMainDish(it)) n++;        // 主餐(含升級套餐)算 1
+    else if(isDrink(it)) n++;      // 單點飲料算 1
+  });
+  return n;
+}
+// 大人數(5歲以上算大人;以 headcount 的 p 為準)
+function adultsOfG(g){
+  const hc=(g&&g.headcount||"").toLowerCase();
+  const p=+((hc.match(/(\d+)p/)||[])[1]||0);
+  return p||parseInt(hc)||0;
+}
 function makeLineId() { return Date.now() + Math.random().toString(36).slice(2,6); }
 
 function linePrice(line, isMember) {
@@ -1418,7 +1438,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v144</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v145</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4118,7 +4138,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v144</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v145</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5774,7 +5794,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v144</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v145</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6518,7 +6538,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v144</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v145</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -7127,6 +7147,20 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
               <span style={{...chipS,background:mBg,color:mColor,border:`1px solid ${mColor}55`}}><MIcon size={13} color={mColor}/>{mLabel}</span>
               {group.headcount&&<span style={{...chipS,background:"#f0eadf",color:"#6a4a2e",border:"1px solid #d8c8b0"}}><IcoPeople size={13} color="#6a4a2e"/>{group.headcount}</span>}
               {group.isVip&&<span style={{...chipS,background:"#f2e4f6",color:"#a85ab4",border:"1px solid #c88ad0"}}><IcoDoor size={13} color="#a85ab4"/>包廂</span>}
+              {(()=>{
+                const need=adultsOfG(group);
+                if(need<=0) return null;
+                const got=lowConsumeCount(allOrders.flatMap(o=>o.lines||[]));
+                const ok=got>=need;
+                return (
+                  <span style={{...chipS,background:ok?"#e2f2e8":"#fdeee0",color:ok?"#1a6a3a":"#a05a10",border:`1px solid ${ok?"#7ab88a":"#e0b070"}`,width:"100%",justifyContent:"flex-start",marginTop:"2px"}}>
+                    {ok?"✓":"⚠"} 低消 {got}/{need}
+                    <span style={{fontSize:"11px",fontWeight:"600",opacity:0.85}}>
+                      （每位大人一份主餐或飲料{ok?"，已達標":`，還差 ${need-got} 份`}）
+                    </span>
+                  </span>
+                );
+              })()}
             </div>
           );
         })()}
