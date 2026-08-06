@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v143</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v144</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2144,10 +2144,17 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                 </div>
               );
             })()}
-            {isPastMeal(g)&&!g.cancelled&&(
+            {isPastMeal(g)&&!g.cancelled&&(<>
               <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
                 style={{fontSize:"10px",background:"#fdeae0",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"5px",padding:"2px 7px",marginTop:"4px",fontWeight:"800",cursor:"pointer"}}>⚠ 補寫客訴</button>
-            )}
+              {!g.cplDone&&(
+                <button onClick={(e)=>{e.stopPropagation();
+                    if(!window.confirm(`把「${g.name}」從過期清單收起來?\n\n（客訴紀錄和照片都會保留，之後在客訴中心/封存還查得到）`)) return;
+                    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
+                  }}
+                  style={{fontSize:"10px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer",display:"block"}}>✓ 收起來</button>
+              )}
+            </>)}
           </div>
         ) : sl.status ? (
           <div>
@@ -2157,10 +2164,17 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
               background:sl.status==="未KEY-需優先KEY"?"#ffd0d0":"transparent",
               borderRadius:"4px",padding:sl.status==="未KEY-需優先KEY"?"2px 4px":"0"
             }}>{sl.status}{sl.status==="未接"&&g.missedCount>1?` ×${g.missedCount}`:""}</div>
-            {g.archived&&isPastMeal(g)&&!g.cancelled&&(
+            {g.archived&&isPastMeal(g)&&!g.cancelled&&(<>
               <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
                 style={{fontSize:"10px",background:"#fdeae0",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer"}}>⚠ 補寫客訴</button>
-            )}
+              {!g.cplDone&&(
+                <button onClick={(e)=>{e.stopPropagation();
+                    if(!window.confirm(`把「${g.name}」從過期清單收起來?\n\n（客訴紀錄和照片都會保留，之後在客訴中心/封存還查得到）`)) return;
+                    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
+                  }}
+                  style={{fontSize:"10px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer",display:"block"}}>✓ 收起來</button>
+              )}
+            </>)}
             <div style={{fontSize:"9px",color:"#7a5c3e"}}>{sl.operator} {sl.date}</div>
             {sl.status==="未接"&&(g.missedCount>=3||missedOverdue(g))&&(
               <div style={{fontSize:"9px",color:"#fff",background:"#c0302a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>⚠ 聯絡不上</div>
@@ -4104,7 +4118,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v143</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v144</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5760,7 +5774,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v143</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v144</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6504,7 +6518,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v143</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v144</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
