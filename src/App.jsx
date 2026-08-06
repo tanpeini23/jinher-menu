@@ -391,6 +391,7 @@ function isDrink(item) {
 // 規則:每位「大人」要一份。單點主餐=1、單點飲料=1、套餐(主餐+升級飲料)=1
 //      主餐 + 另外單點飲料 = 2(分開點各算各的)
 //      前菜/甜點/沙拉/經典小品 不算
+const VIP_MIN_SPEND = 6000;         // 包廂低消(餐點小計,不含服務費)
 function lowConsumeCount(lines){
   let n=0;
   (lines||[]).forEach(l=>{
@@ -1438,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v148</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v149</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4138,7 +4139,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v148</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v149</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5794,7 +5795,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v148</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v149</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6538,7 +6539,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v148</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v149</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -7148,24 +7149,29 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
               {group.headcount&&<span style={{...chipS,background:"#f0eadf",color:"#6a4a2e",border:"1px solid #d8c8b0"}}><IcoPeople size={13} color="#6a4a2e"/>{group.headcount}</span>}
               {group.isVip&&<span style={{...chipS,background:"#f2e4f6",color:"#a85ab4",border:"1px solid #c88ad0"}}><IcoDoor size={13} color="#a85ab4"/>包廂</span>}
               {(()=>{
-                const need=adultsOfG(group);
+                const isBox=!!group.isVip;
+                // 包廂:金額低消 $6,000(不含服務費、不含入會費);一般:每位大人一份
+                const need=isBox?VIP_MIN_SPEND:adultsOfG(group);
                 if(need<=0) return null;
-                const got=lowConsumeCount(allOrders.flatMap(o=>o.lines||[]));
+                const got=isBox?grandTotal:lowConsumeCount(allOrders.flatMap(o=>o.lines||[]));
                 const ok=got>=need;
+                const fmt=(v)=>isBox?`$${v.toLocaleString()}`:`${v}`;
                 return (
                   <div style={{width:"100%",marginTop:"6px",background:ok?"#eef8f0":"#fdf0f0",border:`2px solid ${ok?"#7ab88a":"#c02020"}`,borderRadius:"11px",padding:"10px 12px"}}>
                     <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap",marginBottom:"7px"}}>
                       <span className={ok?"":"blinkTag"} style={{fontSize:"17px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>
-                        {ok?"✓ 低消已達標":`⚠ 低消還差 ${need-got} 份`}
+                        {ok?(isBox?"✓ 包廂低消已達標":"✓ 低消已達標"):(isBox?`⚠ 包廂低消還差 $${(need-got).toLocaleString()}`:`⚠ 低消還差 ${need-got} 份`)}
                       </span>
                       <span style={{flex:1}}/>
-                      <span style={{fontSize:"16px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>{got} / {need}</span>
+                      <span style={{fontSize:"16px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>{fmt(got)} / {fmt(need)}</span>
                     </div>
                     <div style={{height:"11px",background:"#e8e0d8",borderRadius:"6px",overflow:"hidden"}}>
                       <div className={ok?"":"blinkBar"} style={{width:`${Math.min(100,got/need*100)}%`,height:"100%",background:ok?"#2a8a5a":"#c02020",borderRadius:"6px",transition:"width .3s"}}/>
                     </div>
                     <div style={{fontSize:"13px",color:ok?"#3a7a5a":"#a03020",marginTop:"6px",lineHeight:"1.6",fontWeight:"700"}}>
-                      每位大人需一份<b>單點主餐</b>或<b>單點飲料</b>（{need} 位大人）
+                      {isBox
+                        ? <>包廂低消 <b>${VIP_MIN_SPEND.toLocaleString()}</b>（餐點小計，不含 10% 服務費）</>
+                        : <>每位大人需一份<b>單點主餐</b>或<b>單點飲料</b>（{need} 位大人）</>}
                     </div>
                   </div>
                 );
