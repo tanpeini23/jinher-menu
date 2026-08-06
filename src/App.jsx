@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v142</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v143</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2236,6 +2236,15 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                 }}
                 style={{flex:2,padding:"13px",borderRadius:"10px",background:"#a05030",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{g.archived?"儲存客訴":"記錄並封存"}</button>
             </div>
+            {(g.complaints||[]).length>0&&(
+              <button onClick={()=>{
+                  setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
+                  setCplOpen(false);
+                }}
+                style={{width:"100%",marginTop:"8px",padding:"11px",borderRadius:"10px",background:"#8a6a4a",border:"none",color:"#fff",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>
+                僅收起來（已有 {(g.complaints||[]).length} 筆客訴，不再新增）
+              </button>
+            )}
           </div>
         </div>,
         document.body
@@ -3189,7 +3198,10 @@ function buildLineName(g, tight){
   const hc=(g.headcount||"").toLowerCase();
   const p=+((hc.match(/(\d+)p/)||[])[1]||0)||parseInt(hc)||0;
   const cnt=`${p}${g.isVip?"包":""}`;
-  const d=g.date||"", t=g.time||"";
+  // 日期正規化:不管 "8/9"、"2026/8/9"、"08/09" 都取成 8/9
+  const dm=String(g.date||"").match(/(\d{1,2})\/(\d{1,2})\s*$/);
+  const d=dm?`${+dm[1]}/${+dm[2]}`:String(g.date||"").trim();
+  const t=String(g.time||"").trim();
   if(tight===0) return `${d} ${t} ${sur} ${cnt}`;
   if(tight===1) return `${d} ${t}${sur} ${cnt}`;
   if(tight===2) return `${d} ${t}${sur}${cnt}`;
@@ -4092,7 +4104,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v142</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v143</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4434,8 +4446,8 @@ const rowBg=(g)=>{
                     {g.timeIssue&&<div title={`客人 ${g.timeIssue.by||""} 於 ${g.timeIssue.at||""} 回報`} className="blinkTag"
                       onClick={()=>setTimeIssueG(g)}
                       style={{fontSize:"9px",background:"#c02020",color:"#fff",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>⚠時間疑義</div>}
-                    <div onClick={()=>setLineG(g)} title="LINE 名稱 / 教學"
-                      style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 5px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>LINE</div>
+                    {g.fromMai&&<div onClick={()=>setLineG(g)} title="LINE 名稱 / 教學"
+                      style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 5px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>LINE</div>}
                     {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
                       style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
                     {depositUrgency(g)==="overdue"&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>逾期</div>}
@@ -5748,7 +5760,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v142</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v143</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6492,7 +6504,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v142</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v143</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
