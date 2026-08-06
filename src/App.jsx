@@ -1418,7 +1418,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v140</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v142</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -2230,7 +2230,8 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                   const hasContent=cpl.type||(cpl.kinds||[]).length>0||(cpl.dishes||[]).length>0||cpl.photo||cpl.reason.trim()||cpl.attitude.trim()||cpl.adjust.trim()||cpl.treat.trim();
                   setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,
                     complaints: hasContent?[...(x.complaints||[]),{...cpl,date,source:"大訂餐評"}]:(x.complaints||[]),
-                    archived:true, archiveType:x.archiveType==="menu"?"menu":"booking"}));
+                    archived:true, archiveType:x.archiveType==="menu"?"menu":"booking",
+                    cplDone:true}));   // 記完客訴 → 從過期清單收起來(照片/客訴仍可查)
                   setCplOpen(false);
                 }}
                 style={{flex:2,padding:"13px",borderRadius:"10px",background:"#a05030",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{g.archived?"儲存客訴":"記錄並封存"}</button>
@@ -3909,6 +3910,8 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [todoAdd,setTodoAdd]=useState(false);
   const [todoOpen,setTodoOpen]=useState(false);   // 預設收合,要看再打開
   const [hoOpen,setHoOpen]=useState(false);
+  const [lineG,setLineG]=useState(null);            // LINE 名稱工具
+  const [timeIssueG,setTimeIssueG]=useState(null);  // 時間疑義處理小窗口
   const [todoFreq,setTodoFreq]=useState("once");   // once=只有今天 daily=每天 weekly=每週
   const [todoDays,setTodoDays]=useState([1,3,5]);
   const todoLoaded=useRef(false);   // todo 讀到了才准寫(避免用空的蓋掉整份代辦清單)
@@ -3995,7 +3998,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
     ? groups.filter(g=>g.fromMai&&!(g.archived&&g.archiveType!=="menu"))
     : filter.trim()
     ? groups.filter(g=>(g.date||"").includes(filter.trim())||(g.phone||"").includes(filter.trim())||(g.name||"").includes(filter.trim()))
-    : groups.filter(g=>!g.fromMai&&!(g.archived&&g.archiveType!=="menu")&&(showPast?isPastMeal(g):!isPastMeal(g)));
+    : groups.filter(g=>!g.fromMai&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&(showPast?isPastMeal(g):!isPastMeal(g)));
   const parseDT=(g)=>{const[m,d]=(g.date||"0/0").split("/").map(Number);const[h,mi]=(g.time||"0:0").split(":").map(Number);return (m||0)*1000000+(d||0)*10000+(h||0)*100+(mi||0);};
   filtered.sort((a,b)=>parseDT(a)-parseDT(b));
   const overdueGs=groups.filter(g=>depositUrgency(g)==="overdue");
@@ -4089,7 +4092,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v140</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v142</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4153,14 +4156,14 @@ const rowBg=(g)=>{
         <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
           <button onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
-          <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
+          <button onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="篩選日期（如 5/3）"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
           {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
         </div>
         {(()=>{
           const maiN=groups.filter(g=>g.fromMai&&!g.cancelled).length;
-          const pastAll=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&g.archiveType!=="menu")&&isPastMeal(g));
+          const pastAll=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));
           const pastN=pastAll.filter(isPastMeal2d).length;          // 只催「過2天以上」的
           const pastWait=pastAll.length-pastN;                       // 昨天的:等客人回覆,不催
           const importedToday = lastResvImport===todayStr;
@@ -4429,14 +4432,7 @@ const rowBg=(g)=>{
                     {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
                     {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
                     {g.timeIssue&&<div title={`客人 ${g.timeIssue.by||""} 於 ${g.timeIssue.at||""} 回報`} className="blinkTag"
-                      onClick={()=>{
-                        const said=g.timeIssue.said;
-                        const c=window.confirm(`⚠ 客人回報訂位時間有誤\n\n系統:${g.time}\n客人說:${said}\n\n按「確定」= 改成客人說的 ${said}\n按「取消」= 維持 ${g.time}\n\n⚠ 兩種都要記得去大麥 POS 同步!`);
-                        const now=new Date(); const at=`${now.getMonth()+1}/${now.getDate()}`;
-                        if(c) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,time:said,timeIssue:null,timeFixed:`${at} 改為客人說的${said}`}));
-                        else   setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,timeIssue:null,timeFixed:`${at} 維持${g.time}`}));
-                        window.alert("記得去大麥 POS 確認/修改訂位時間!");
-                      }}
+                      onClick={()=>setTimeIssueG(g)}
                       style={{fontSize:"9px",background:"#c02020",color:"#fff",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>⚠時間疑義</div>}
                     <div onClick={()=>setLineG(g)} title="LINE 名稱 / 教學"
                       style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 5px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>LINE</div>
@@ -4808,6 +4804,47 @@ const rowBg=(g)=>{
           </div>
         </div>,
         document.body
+      )}
+      {lineG&&<LineNameModal g={lineG} onClose={()=>setLineG(null)}/>}
+      {timeIssueG&&createPortal(
+        <div onClick={()=>setTimeIssueG(null)} style={{position:"fixed",inset:0,zIndex:9500,background:"rgba(30,20,10,0.8)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fffaf2",borderRadius:"18px",padding:"22px 20px",width:"100%",maxWidth:"360px"}}>
+            <div style={{fontSize:"17px",fontWeight:"900",color:"#c02020",marginBottom:"3px"}}>⚠ 客人回報訂位時間有誤</div>
+            <div style={{fontSize:"11px",color:"#a08060",marginBottom:"14px"}}>{timeIssueG.name}　{timeIssueG.phone}{timeIssueG.timeIssue&&timeIssueG.timeIssue.at?`　${timeIssueG.timeIssue.at} 回報`:""}</div>
+            <div style={{display:"flex",gap:"10px",marginBottom:"16px",alignItems:"center"}}>
+              <div style={{flex:1,textAlign:"center",background:"#f4ece0",borderRadius:"11px",padding:"12px 8px"}}>
+                <div style={{fontSize:"10px",color:"#8a6a48",fontWeight:"700",marginBottom:"3px"}}>系統目前</div>
+                <div style={{fontSize:"22px",fontWeight:"900",color:"#5a3a28"}}>{timeIssueG.time}</div>
+              </div>
+              <div style={{fontSize:"18px",color:"#a08060"}}>→</div>
+              <div style={{flex:1,textAlign:"center",background:"#fbe4e4",borderRadius:"11px",padding:"12px 8px",border:"1.5px solid #e0a0a0"}}>
+                <div style={{fontSize:"10px",color:"#a04020",fontWeight:"700",marginBottom:"3px"}}>客人說</div>
+                <div style={{fontSize:"22px",fontWeight:"900",color:"#c02020"}}>{timeIssueG.timeIssue&&timeIssueG.timeIssue.said}</div>
+              </div>
+            </div>
+            <div style={{background:"#fff3d6",border:"1.5px solid #e0c060",borderRadius:"9px",padding:"8px 10px",marginBottom:"15px"}}>
+              <div style={{fontSize:"11px",color:"#8a5a10",fontWeight:"800",lineHeight:"1.6"}}>⚠ 大麥 POS 才是正式訂位系統<br/>不論選哪個,都要記得去大麥確認/修改</div>
+            </div>
+            <button onClick={()=>{
+                const gg=timeIssueG, said=gg.timeIssue&&gg.timeIssue.said; const d=new Date(); const at=`${d.getMonth()+1}/${d.getDate()}`;
+                setGroups(p=>p.map(y=>y.id!==gg.id?y:{...y,time:said,timeIssue:null,timeFixed:`${at} 改為客人說的${said}`}));
+                setTimeIssueG(null); window.alert(`已改為 ${said}\n\n⚠ 記得去大麥 POS 也改成 ${said}!`);
+              }}
+              style={{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"#c02020",color:"#fff",fontSize:"15px",fontWeight:"900",cursor:"pointer",marginBottom:"9px"}}>
+              改為客人說的 {timeIssueG.timeIssue&&timeIssueG.timeIssue.said}
+            </button>
+            <button onClick={()=>{
+                const gg=timeIssueG; const d=new Date(); const at=`${d.getMonth()+1}/${d.getDate()}`;
+                setGroups(p=>p.map(y=>y.id!==gg.id?y:{...y,timeIssue:null,timeFixed:`${at} 維持${gg.time}`}));
+                setTimeIssueG(null); window.alert(`維持 ${gg.time}\n\n⚠ 記得去大麥 POS 確認訂位時間是 ${gg.time}!`);
+              }}
+              style={{width:"100%",padding:"14px",borderRadius:"12px",border:"1.5px solid #b0a080",background:"#fff",color:"#5a3a28",fontSize:"15px",fontWeight:"800",cursor:"pointer",marginBottom:"9px"}}>
+              維持原本的 {timeIssueG.time}
+            </button>
+            <button onClick={()=>setTimeIssueG(null)}
+              style={{width:"100%",padding:"10px",borderRadius:"10px",border:"none",background:"transparent",color:"#8a6a48",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>先不處理,關閉</button>
+          </div>
+        </div>, document.body
       )}
       {showAdd&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:300,overflowY:"auto",padding:"20px 16px"}}>
@@ -5711,7 +5748,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v140</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v142</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6455,7 +6492,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v140</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v142</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
