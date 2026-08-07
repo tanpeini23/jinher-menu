@@ -1439,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v150</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v151</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3323,9 +3323,9 @@ function CountTable({ counts, onChange, baseAmt, label }){
   return (
     <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
       <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
-      <div style={{display:"flex",gap:"16px"}}>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
         {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
-          <div key={ci} style={{flex:1,display:"flex",flexDirection:"column",gap:"5px"}}>
+          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
             {col.map(d=>(
               <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
                 <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
@@ -3350,43 +3350,45 @@ function CountTable({ counts, onChange, baseAmt, label }){
 function CloseHint({ show, children }){ return show?<div style={{fontSize:"11px",color:"#8a6a48",lineHeight:"1.6",marginTop:"3px",paddingLeft:"2px"}}>💡 {children}</div>:null; }
 // 完結步驟標題:新手版(含動作說明) / 老手版(確認式)
 const CLOSE_TITLES = {
-  s1 :{nov:"輸入支出，確認 POS 帳對不對", pro:"POS 支出輸入完成",        hand:false},
-  s2 :{nov:"對一下信用卡機跟 POS 的金額",  pro:"信用卡機總額對過了",      hand:false},
-  s3 :{nov:"算錢（錢櫃 + 備用金）",         pro:"錢櫃與備用金算好了",      hand:true },
-  s4 :{nov:"拍錢櫃照片上傳",               pro:"錢櫃照片已上傳",          hand:true },
-  s5 :{nov:"印出清帳單",                   pro:"清帳單印出來了",          hand:true },
-  s6 :{nov:"把應包金額 + 刷卡單 + 清帳單釘在一起", pro:"單據釘在一起了",  hand:true },
-  s7 :{nov:"把應包金額跟備用金放進金庫",     pro:"應包金額與備用金放進金庫了", hand:true },
-  s8b:{nov:"填大麥會員跟折扣數據（9:00 後填）", pro:"大麥會員數據填好了",  hand:false},
-  s8 :{nov:"金庫跟錢櫃確定鎖上",            pro:"金庫與錢櫃都鎖好了",      hand:true },
-  s10:{nov:"傳結帳報告到 LINE 群組",        pro:"結帳報告發到 LINE 了",    hand:false},
-  s11:{nov:"印明天的預約大訂單",            pro:"明天大訂單印好了",        hand:false},
+  s1 :{nov:"Key 支出在【POS機】和【報表】",      pro:"POS 支出輸入完成",        hand:false,cam:false},
+  s2 :{nov:"對一下信用卡機跟 POS 的金額是否一致", pro:"信用卡機總額對過了",      hand:false,cam:false},
+  s3 :{nov:"算錢：【金庫、備用金】導正",          pro:"金庫、備用金導正完成",    hand:true, cam:false},
+  s4 :{nov:"桌位清空",                          pro:"桌位已清空",              hand:false,cam:false},
+  s5 :{nov:"拿出【應包金額】，攤開拍照後放入錢袋", pro:"應包金額已拍照入袋",      hand:true, cam:true },
+  s6 :{nov:"錢櫃算錢（算完截圖）",                pro:"錢櫃算好並截圖了",        hand:true, cam:true },
+  s7 :{nov:"印出清帳單",                        pro:"清帳單印出來了",          hand:true, cam:false},
+  s8 :{nov:"把應包金額 + 刷卡單 + 清帳單釘在一起", pro:"單據釘在一起了",          hand:true, cam:false},
+  s9 :{nov:"把應包金額跟備用金放進金庫",           pro:"應包金額與備用金放進金庫了",hand:true, cam:false},
+  s10:{nov:"填大麥會員跟折扣數據（9:00 後填）",    pro:"大麥會員數據填好了",      hand:false,cam:false},
+  s11:{nov:"金庫跟錢櫃確定鎖上",                  pro:"金庫與錢櫃都鎖好了",      hand:true, cam:false},
+  s12:{nov:"傳結帳報告到 LINE 群組",              pro:"結帳報告發到 LINE 了",    hand:false,cam:false},
+  s13:{nov:"明天的預約大訂單",                    pro:"明天大訂單確認了",        hand:false,cam:false},
 };
-const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s8b","s8","s10","s11"];
-// 「卡住了」的說明(先放預設,之後可改)
+const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13"];
 const CLOSE_HELP = {
-  s1 :"為什麼要做：支出沒 key，帳就對不起來，會計也查不到憑證。\n卡住的話：確認收據/發票號碼有沒有記；蝦皮的要另外註明。還是不確定就問店長。",
+  s1 :"為什麼要做：支出沒 key，帳就對不起來，會計也查不到憑證。\n記得備註：收據 / 發票號碼 / 蝦皮。\n多 key 了怎麼辦：到【現金支出】-【收入 A05 支出誤key】更正。",
   s2 :"為什麼要做：信用卡機跟 POS 對不起來，代表有漏刷或重複刷。\n卡住的話：先看兩邊的筆數對不對，再一筆筆比金額。",
-  s3 :"為什麼要做：先數錢才知道錢對不對，之後有問題才查得回來。\n卡住的話：錢櫃照面額一格一格數；金庫跟備用金只要確認金額對不對。",
-  s4 :"為什麼要做：拍照留證，之後發現錢不對可以翻回來對照。\n卡住的話：整個錢櫃拍清楚就好，看得到金額即可。",
-  s5 :"為什麼要做：清帳單是當天營業的總結，要跟現金一起交。\n卡住的話：先確認 POS 機桌子都空白；金額 = 應包金額 + 退訂金額 + 錢櫃 $10,000。",
-  s6 :"為什麼要做：單據分開放很容易掉，釘一起才不會缺件。\n卡住的話：應包金額、刷卡單、清帳單，三樣釘在一起。",
-  s7 :"為什麼要做：現金放金庫才安全。\n卡住的話：應包金額 + 備用金一起放進去。",
-  s8b:"為什麼要做：會員數據是店裡看客人回訪的依據。\n卡住的話：9:00 後 POS 才會更新；桌數跟前菜折抵在「店家報表－營業銷售」，前菜折抵30、回訪折抵100 在「折扣報表－結帳活動」和「優惠券」。",
-  s8 :"為什麼要做：沒鎖等於沒關店。\n卡住的話：金庫、錢櫃兩個都要確認鎖上，拉一下確認。",
-  s10:"為什麼要做：讓大家知道今天結完、金額有沒有問題。\n卡住的話：按分享鈕會叫出 LINE，選群組送出就好。",
-  s11:"為什麼要做：明天早班才知道有哪些大訂要準備。\n卡住的話：只會列已經封存餐點的大訂，現場點餐的不會出現。",
+  s3 :"為什麼要做：備用金付出去的錢要補回來，不然明天不夠用。\n怎麼做：備用金支出收據放進夾鏈袋，用錢櫃的現金營業額把備用金補回原本金額。",
+  s4 :"為什麼要做：POS 機桌位沒清空會無法清帳。\n卡住的話：檢查有沒有還沒結帳或掛著的桌。",
+  s5 :"應包金額 = 錢櫃 $10,000 + 現金營業額 − 支出\n把錢攤開拍照留證，再放進錢袋。",
+  s6 :"為什麼要拍照：之後發現錢不對，可以翻回來對照當天的樣子。\n照片都會留著，不會覆蓋。",
+  s7 :"先確認 POS 機桌子都是空白。\n輸入金額 = 應包金額 + 退訂金額 + 錢櫃 $10,000。\n有訂金的話，單要寫「訂金」和「應包金額」。",
+  s8 :"單據分開放很容易掉，釘一起才不會缺件。",
+  s9 :"現金放金庫才安全。應包金額 + 備用金一起放進去。",
+  s10:"9:00 後 POS 才會更新。\n桌數（新/舊/沒會員）、前菜折抵100 → 大麥「店家報表－營業銷售」\n前菜折抵30、回訪折抵100 → 大麥「折扣報表－結帳活動」\n回訪折抵100（優惠券）→ 大麥「折扣報表－優惠券」",
+  s11:"沒鎖等於沒關店。金庫、錢櫃兩個都要拉一下確認鎖上。",
+  s12:"讓大家知道今天結完、金額有沒有問題。按分享鈕會叫出 LINE，選群組送出。",
+  s13:"明天早班才知道有哪些大訂要準備。只列已經封存餐點的，現場點餐的不會出現。",
 };
-// 常錯提醒
 const CLOSE_WARN = {
-  s1:"付現金給廠商或包裹時，當下就要確認收據和內容物 —— 晚上才想起來，包裹拆了就查不回來",
+  s1:"【現金營業額】要足夠支付【支出】",
   s3:"先數錢確認金額，再導正備用金 —— 順序反了就分不清是備用金還是錢櫃的錢不對",
 };
 // 三個階段
 const CLOSE_PHASES = [
-  {k:"a", title:"先對帳",        steps:["s1","s2"]},
-  {k:"b", title:"數錢、收好",     steps:["s3","s4","s5","s6","s7"]},
-  {k:"c", title:"收尾 & 明天準備", steps:["s8b","s8","s10","s11"]},
+  {k:"a", title:"先對帳",        steps:["s1","s2","s3"]},
+  {k:"b", title:"數錢、收好",     steps:["s4","s5","s6","s7","s8","s9"]},
+  {k:"c", title:"收尾 & 明天準備", steps:["s10","s11","s12","s13"]},
 ];
 // 手繪小圖示:動手做 / 電腦操作
 const IcoHand=({size=13,color="#8a6a48"})=>(
@@ -3416,17 +3418,19 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
   const meta=CLOSE_TITLES[doneKey]||{};
   const title=pro?(meta.pro||""):(meta.nov||"");
   const warn=CLOSE_WARN[doneKey];
+  const cam=meta.cam;
   const [helpOpen,setHelpOpen]=useState(false);
   // 老手版:一律展開(只有勾勾);新手版:只展開目前這步
   const show = pro ? true : open;
   const Icon = meta.hand?IcoHand:IcoScreen;
   return (
-    <div style={{background:"#fff",border:`${show&&!pro?"2px":"1.5px"} solid ${done?"#a8d0b8":(show&&!pro?"#7a9ac0":"#dde4ec")}`,borderRadius:"10px",padding:pro?"7px 10px":(show?"11px 12px":"8px 10px"),marginBottom:"6px"}}>
+    <div style={{background:"#fff",border:`${show&&!pro?"2px":"1.5px"} solid ${done?"#a8d0b8":(cam?"#e0a060":(show&&!pro?"#7a9ac0":"#dde4ec"))}`,borderRadius:"10px",padding:pro?"7px 10px":(show?"11px 12px":"8px 10px"),marginBottom:"6px"}}>
       <div onClick={()=>{ if(!pro&&!show){ onOpen&&onOpen(doneKey); return; } saveCl({[doneKey]:done?null:hhmm()}); }}
         style={{display:"flex",alignItems:"center",gap:"7px",cursor:"pointer"}}>
         <span style={{fontSize:"15px"}}>{done?"✅":"⬜"}</span>
         <span style={{width:"18px",height:"18px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"10px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</span>
         {!pro&&<Icon size={13} color={done?"#8aaa9a":(meta.hand?"#b07840":"#5a7a9a")}/>}
+        {cam&&<span title="要拍照/截圖" style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>📷</span>}
         <span style={{fontSize:show&&!pro?"14px":"13px",fontWeight:"800",color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none",flex:1,lineHeight:"1.4"}}>{title}</span>
         {done&&<span style={{fontSize:"9px",color:"#9aaa9a"}}>{done}</span>}
       </div>
@@ -3557,24 +3561,16 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         </div>
       </div>
 
-      <PhaseHead title="先對帳" steps={["s1","s2"]} cl={cl}/>
-      <CloseStep n={1} doneKey="s1" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s1"} onOpen={setCurStep}>
-        <CloseHint show={hint}>記得備註:收據 / 發票號碼 / 蝦皮 —— 會計需要知道</CloseHint>
-      </CloseStep>
-
+      <PhaseHead title="先對帳" steps={["s1","s2","s3"]} cl={cl}/>
+      <CloseStep n={1} doneKey="s1" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s1"} onOpen={setCurStep}/>
       <CloseStep n={2} doneKey="s2" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s2"} onOpen={setCurStep}>
         <div style={{display:"flex",gap:"6px",marginTop:"3px"}}>
           <button onClick={()=>saveCl({cardEqPos:true})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos?"#2a8a5a":"#c8d8e8"}`,background:cl.cardEqPos?"#2a8a5a":"#fff",color:cl.cardEqPos?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✓ 一致</button>
           <button onClick={()=>saveCl({cardEqPos:false})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos===false?"#c02020":"#c8d8e8"}`,background:cl.cardEqPos===false?"#c02020":"#fff",color:cl.cardEqPos===false?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
         </div>
       </CloseStep>
-
-      <PhaseHead title="數錢、收好" steps={["s3","s4","s5","s6","s7"]} cl={cl}/>
       <CloseStep n={3} doneKey="s3" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s3"} onOpen={setCurStep}>
-        {bases.map(b=>{
-          const isDrawer = b.label.includes("錢櫃");
-          if(isDrawer) return <div key={b.id}>{countTable(b.id,b.amt,b.label)}</div>;   // 錢櫃:數張數
-          // 金庫/備用金:只確認金額對不對
+        {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
           const st=(cl.spotOk||{})[b.id];
           return (
             <div key={b.id} style={{background:st==="ok"?"#eef8f0":"#f8fafc",borderRadius:"8px",padding:"9px 10px",marginTop:"5px",opacity:st==="ok"?0.75:1}}>
@@ -3582,16 +3578,7 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
                 <span style={{fontSize:"12px",fontWeight:"800",color:st==="ok"?"#5a8a6a":"#3a5a7a",textDecoration:st==="ok"?"line-through":"none"}}>{b.label}</span>
                 <span style={{fontSize:"12px",color:st==="ok"?"#8aaa8a":"#5a7a9a",fontWeight:"700",textDecoration:st==="ok"?"line-through":"none"}}>基準 ${(+b.amt).toLocaleString()}</span>
                 <span style={{flex:1}}/>
-                <button onClick={()=>{
-                    const nsp={...(cl.spotOk||{}),[b.id]:"ok"};
-                    // 全部非錢櫃都確認 + 錢櫃清點金額正確 → 自動完成步驟3
-                    const others=bases.filter(x=>!x.label.includes("錢櫃"));
-                    const allOk=others.every(x=>nsp[x.id]==="ok");
-                    const dr=bases.find(x=>x.label.includes("錢櫃"));
-                    let drOk=true;
-                    if(dr){ const cnt=(cl.counts&&cl.counts[dr.id])||{}; const tot=CASH_DENOM.reduce((a,d)=>a+d*(+cnt[d]||0),0); drOk = tot>0 && tot===(+dr.amt||0); }
-                    saveCl({spotOk:nsp, ...((allOk&&drOk)?{s3:hhmm()}:{})});
-                  }}
+                <button onClick={()=>saveCl({spotOk:{...(cl.spotOk||{}),[b.id]:"ok"}})}
                   style={{fontSize:"12px",padding:"6px 12px",borderRadius:"7px",border:`1.5px solid ${st==="ok"?"#2a8a5a":"#c8d8e8"}`,background:st==="ok"?"#2a8a5a":"#fff",color:st==="ok"?"#fff":"#5a7a9a",fontWeight:"800",cursor:"pointer"}}>✓ 正確</button>
                 <button onClick={()=>{const amt=window.prompt(`${b.label} 實際金額?`);if(amt===null)return;saveCl({spotOk:{...(cl.spotOk||{}),[b.id]:`bad:${amt.replace(/[^0-9]/g,"")}`}});}}
                   style={{fontSize:"12px",padding:"6px 12px",borderRadius:"7px",border:`1.5px solid ${String(st).startsWith("bad")?"#c02020":"#c8d8e8"}`,background:String(st).startsWith("bad")?"#c02020":"#fff",color:String(st).startsWith("bad")?"#fff":"#5a7a9a",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
@@ -3604,67 +3591,81 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         })}
       </CloseStep>
 
-      <CloseStep n={4} doneKey="s4" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s4"} onOpen={setCurStep}>
-        <CloseHint show={hint}>金額對就上傳新照；錢不對時可翻前幾天的照片對照（照片都留著）</CloseHint>
-        {photoBlock("count","清點錢櫃照片")}
-      </CloseStep>
-
+      <PhaseHead title="數錢、收好" steps={["s4","s5","s6","s7","s8","s9"]} cl={cl}/>
+      <CloseStep n={4} doneKey="s4" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s4"} onOpen={setCurStep}/>
       <CloseStep n={5} doneKey="s5" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s5"} onOpen={setCurStep}>
-        <CloseHint show={hint}>先確認 POS 機桌子都是空白</CloseHint>
-        <CloseHint show={hint}>輸入金額 = 應包金額 + 退訂金額 + 錢櫃 $10,000</CloseHint>
-        <CloseHint show={hint}>有訂金的話，單要寫「訂金」和「應包金額」</CloseHint>
-        <div style={{display:"flex",alignItems:"center",gap:"6px",marginTop:"5px"}}>
-          <span style={{fontSize:"11px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
-          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="現金-支出後"
-            style={{width:"110px",padding:"6px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"12px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+        <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",background:"#fdf6ea",borderRadius:"7px",padding:"7px 9px",marginBottom:"6px",lineHeight:"1.7"}}>
+          應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出
         </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+          <span style={{fontSize:"12px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
+          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="算出來的金額"
+            style={{width:"130px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+        </div>
+        {photoBlock("pack","應包金額攤開照")}
+      </CloseStep>
+      <CloseStep n={6} doneKey="s6" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s6"} onOpen={setCurStep}>
+        {bases.filter(b=>b.label.includes("錢櫃")).map(b=>(
+          <div key={b.id}>{countTable(b.id,b.amt,b.label)}</div>
+        ))}
+        {photoBlock("count","錢櫃算錢截圖")}
+      </CloseStep>
+      <CloseStep n={7} doneKey="s7" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7"} onOpen={setCurStep}>
         {photoBlock("bill","清帳單 & 信用卡單")}
       </CloseStep>
-
       {pro
-        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s6","訂在一起","6"],["s7","放金庫","7"]]}/>
-        : <><CloseStep n={6} doneKey="s6" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s6"} onOpen={setCurStep}/>
-          <CloseStep n={7} doneKey="s7" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7"} onOpen={setCurStep}/></>}
-      <PhaseHead title="收尾 & 明天準備" steps={["s8b","s8","s10","s11"]} cl={cl}/>
-      <CloseStep n={8} doneKey="s8b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8b"} onOpen={setCurStep}>
-        <CloseHint show={hint}>9:00 後 POS 機才會更新，記得等更新再填</CloseHint>
-        <div style={{fontSize:"10px",color:"#8a6a48",lineHeight:"1.7",marginTop:"4px",background:"#f8f4ec",borderRadius:"7px",padding:"7px 9px"}}>
-          <b>大麥「店家報表－營業銷售」:</b><br/>桌數（新會員 / 舊會員 / 沒會員）、前菜折抵100<br/>
-          <b>大麥「折扣報表－結帳活動」:</b><br/>前菜折抵30、回訪折抵100<br/>
-          <b>大麥「折扣報表－優惠券」:</b><br/>回訪折抵100（優惠券）
+        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s8","釘在一起","8"],["s9","放金庫","9"]]}/>
+        : <><CloseStep n={8} doneKey="s8" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8"} onOpen={setCurStep}/>
+          <CloseStep n={9} doneKey="s9" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9"} onOpen={setCurStep}/></>}
+
+      <PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>
+      <CloseStep n={10} doneKey="s10" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s10"} onOpen={setCurStep}>
+        <div style={{fontSize:"11px",color:"#8a6a48",lineHeight:"1.8",background:"#f8f4ec",borderRadius:"7px",padding:"8px 10px"}}>
+          <b>大麥「店家報表－營業銷售」</b><br/>桌數（新會員／舊會員／沒會員）、<b>前菜折抵 100</b><br/>
+          <b>大麥「折扣報表－結帳活動」</b><br/><b>前菜折抵 30</b>、回訪折抵 100<br/>
+          <b>大麥「折扣報表－優惠券」</b><br/>回訪折抵 100
         </div>
       </CloseStep>
       {pro
-        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s8","金庫錢櫃上鎖","9"]]}/>
-        : <CloseStep n={9} doneKey="s8" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8"} onOpen={setCurStep}/>}
+        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s11","金庫錢櫃上鎖","11"]]}/>
+        : <CloseStep n={11} doneKey="s11" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s11"} onOpen={setCurStep}/>}
 
-      {/* ⑨ 分享 LINE */}
-      <div style={{background:"#fff",border:"1.5px solid #c8d0e0",borderRadius:"10px",padding:"10px 11px",marginBottom:"7px"}}>
-        <div style={{fontSize:"13px",fontWeight:"800",color:"#2a3a5a",marginBottom:"6px"}}><span style={{width:"20px",height:"20px",borderRadius:"50%",background:"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"inline-flex",alignItems:"center",justifyContent:"center",marginRight:"6px"}}>{cl.s10?"✓":"10"}</span>{pro?(CLOSE_TITLES.s10.pro):(CLOSE_TITLES.s10.nov)}{cl.s10&&<span style={{fontSize:"9px",color:"#9aaa9a",marginLeft:"6px",fontWeight:"400"}}>{cl.s10}</span>}</div>
+      <CloseStep n={12} doneKey="s12" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s12"} onOpen={setCurStep}>
         <button onClick={async()=>{
             const txt=shareTxt();
             if(navigator.share){ try{ await navigator.share({text:txt}); }catch(e){} }
             else { try{ await navigator.clipboard.writeText(txt); window.alert("已複製結算內容,請貼到 LINE 群組"); }catch(e){ window.prompt("複製以下內容貼到 LINE:",txt); } }
-            saveCl({s10:hhmm()});
+            saveCl({s12:hhmm()});
           }}
           style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:"#06c755",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>📤 分享結算到 LINE</button>
-        <CloseHint show={hint}>會叫出手機分享選單,選 LINE 群組送出（電腦版會複製文字,自己貼上）</CloseHint>
-      </div>
+      </CloseStep>
 
-      {/* ⑩ 印明天大訂單 */}
-      <div style={{background:"#fff",border:"1.5px solid #c8d0e0",borderRadius:"10px",padding:"10px 11px",marginBottom:"7px"}}>
-        <div style={{fontSize:"13px",fontWeight:"800",color:"#2a3a5a",marginBottom:"6px"}}><span style={{width:"20px",height:"20px",borderRadius:"50%",background:"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"inline-flex",alignItems:"center",justifyContent:"center",marginRight:"6px",fontSize:"10px"}}>{cl.s11?"✓":"11"}</span>{pro?(CLOSE_TITLES.s11.pro):(CLOSE_TITLES.s11.nov)}（已封存 {tmrBig.length} 組）{cl.s11&&<span style={{fontSize:"9px",color:"#9aaa9a",marginLeft:"6px",fontWeight:"400"}}>{cl.s11}</span>}</div>
+      <CloseStep n={13} doneKey="s13" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s13"} onOpen={setCurStep}>
+        <div style={{fontSize:"12px",fontWeight:"800",color:"#2a3a5a",marginBottom:"5px"}}>明天大訂（已封存 {tmrBig.length} 組）</div>
+        {tmrBig.length===0
+          ? <div style={{fontSize:"12px",color:"#a0b0c0",padding:"8px",textAlign:"center"}}>明天沒有已封存的大訂（現場點餐的不列入）</div>
+          : <div style={{background:"#f8fafc",borderRadius:"8px",overflow:"hidden"}}>
+              <div style={{display:"flex",background:"#e8eef4",fontSize:"11px",fontWeight:"800",color:"#3a5a7a",padding:"6px 8px"}}>
+                <span style={{width:"52px"}}>時間</span><span style={{flex:1}}>姓名</span><span style={{width:"62px"}}>人數</span><span style={{width:"58px",textAlign:"right"}}>訂金</span>
+              </div>
+              {tmrBig.map(g=>(
+                <div key={g.id} style={{display:"flex",fontSize:"12px",color:"#2a3a4a",padding:"7px 8px",borderTop:"1px solid #e4eaf0",fontWeight:"600"}}>
+                  <span style={{width:"52px",fontWeight:"800"}}>{g.time||"—"}</span>
+                  <span style={{flex:1}}>{g.name||"—"}{g.isVip?" 包":""}</span>
+                  <span style={{width:"62px"}}>{g.headcount||"—"}</span>
+                  <span style={{width:"58px",textAlign:"right",color:"#2a7a4a",fontWeight:"800"}}>{g.deposit?`$${g.deposit}`:"—"}</span>
+                </div>
+              ))}
+            </div>}
         <button onClick={()=>{
             const d=new Date(); d.setDate(d.getDate()+1); const wd=["日","一","二","三","四","五","六"][d.getDay()];
-            const rows=tmrBig.map(g=>`<tr><td style="padding:8px;border-bottom:1px solid #ccc">${g.time||""}</td><td style="padding:8px;border-bottom:1px solid #ccc">${g.name||""}</td><td style="padding:8px;border-bottom:1px solid #ccc">${g.headcount||""}</td><td style="padding:8px;border-bottom:1px solid #ccc">${g.deposit?`$${g.deposit}`:""}</td></tr>`).join("");
-            const html=`<html><head><meta charset="utf-8"><title>明天大訂 ${d.getMonth()+1}/${d.getDate()}</title></head><body style="font-family:sans-serif;padding:20px"><h2>明天大訂 ${d.getMonth()+1}/${d.getDate()}（${wd}）</h2><table style="width:100%;border-collapse:collapse"><tr style="background:#eee"><th style="padding:8px;text-align:left">時間</th><th style="padding:8px;text-align:left">姓名</th><th style="padding:8px;text-align:left">人數</th><th style="padding:8px;text-align:left">訂金</th></tr>${rows}</table><p style="margin-top:12px;color:#666">共 ${tmrBig.length} 組（已封存餐點）</p></body></html>`;
+            const rr=tmrBig.map(g=>`<tr><td style="padding:8px;border-bottom:1px solid #ccc">${g.time||""}</td><td style="padding:8px;border-bottom:1px solid #ccc">${g.name||""}</td><td style="padding:8px;border-bottom:1px solid #ccc">${g.headcount||""}</td><td style="padding:8px;border-bottom:1px solid #ccc">${g.deposit?`$${g.deposit}`:""}</td></tr>`).join("");
+            const html=`<html><head><meta charset="utf-8"><title>明天大訂</title></head><body style="font-family:sans-serif;padding:20px"><h2>明天大訂 ${d.getMonth()+1}/${d.getDate()}（${wd}）</h2><table style="width:100%;border-collapse:collapse"><tr style="background:#eee"><th style="padding:8px;text-align:left">時間</th><th style="padding:8px;text-align:left">姓名</th><th style="padding:8px;text-align:left">人數</th><th style="padding:8px;text-align:left">訂金</th></tr>${rr}</table></body></html>`;
             const w=window.open("","_blank"); if(w){ w.document.write(html); w.document.close(); setTimeout(()=>w.print(),300); }
-            saveCl({s11:hhmm()});
           }}
           disabled={tmrBig.length===0}
-          style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:tmrBig.length?"#5a7a9a":"#c8d0d8",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:tmrBig.length?"pointer":"not-allowed"}}>🖨 印明天大訂單</button>
-        {tmrBig.length===0&&<CloseHint show={hint}>明天沒有已封存的大訂（現場點餐的不列入）</CloseHint>}
-      </div>
+          style={{width:"100%",marginTop:"7px",padding:"9px",borderRadius:"8px",border:"1.5px solid #8aa0c0",background:"#fff",color:"#3a5a8a",fontSize:"12px",fontWeight:"800",cursor:tmrBig.length?"pointer":"not-allowed",opacity:tmrBig.length?1:0.5}}>🖨 需要列印的話按這裡</button>
+      </CloseStep>
 
       {/* 結束完結:記夥伴 */}
       <div style={{background:cl.doneBy?"#eef8f0":"#fff8f0",border:`2px solid ${cl.doneBy?"#2a8a5a":"#e0a060"}`,borderRadius:"10px",padding:"11px"}}>
@@ -4173,7 +4174,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v150</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v151</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -5844,7 +5845,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v150</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v151</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6588,7 +6589,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v150</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v151</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
