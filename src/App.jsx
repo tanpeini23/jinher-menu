@@ -1018,8 +1018,8 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
   const [activeCat, setActiveCat] = useState("brunch");
   const [menuOffMap, setMenuOffMap] = useState({}); // 品項上下架:該日期關閉的品項
   useEffect(()=>{
-    FS.loadDoc("menuOff").then(v=>{ if(v) setMenuOffMap(v); });
-    const u=FS.subscribeDoc("menuOff", v=>{ if(v) setMenuOffMap(v); });
+    FS.loadDoc("menuOff").then(v=>{ if(v){ setMenuOffMap(v); if(typeof window!=="undefined") window.__menuOffMap=v; } });
+    const u=FS.subscribeDoc("menuOff", v=>{ if(v){ setMenuOffMap(v); if(typeof window!=="undefined") window.__menuOffMap=v; } });
     return ()=>u&&u();
   },[]);
   const offSet = new Set(menuOffMap[normDate(group.date)]||[]);
@@ -1439,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v151</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v153</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -1951,22 +1951,26 @@ function CplDetail({ val, onChange }) {
   const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
   return (
     <div style={{marginBottom:"12px"}}>
-      <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型</div>
+      <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型（可複選）</div>
       <div style={{display:"flex",gap:"6px",marginBottom:"8px",flexWrap:"wrap"}}>
         {CPL_TYPES.map(({k,Icon})=>(
-          <button key={k} onClick={()=>set({type:k})} style={{...chip(v.type===k),flex:"1 1 calc(50% - 3px)",padding:"9px",display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>
-            <Icon size={16} color={v.type===k?"#fff":"#8a6a4a"}/>{k}
+          <button key={k} onClick={()=>{
+              const cur=Array.isArray(v.types)?v.types:(v.type?[v.type]:[]);
+              const nt=cur.includes(k)?cur.filter(x=>x!==k):[...cur,k];
+              set({types:nt, type:nt[0]||""});          // type 保留第一個(舊資料相容)
+            }} style={{...chip((Array.isArray(v.types)?v.types:(v.type?[v.type]:[])).includes(k)),flex:"1 1 calc(50% - 3px)",padding:"9px",display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>
+            <Icon size={16} color={(Array.isArray(v.types)?v.types:(v.type?[v.type]:[])).includes(k)?"#fff":"#8a6a4a"}/>{k}
           </button>
         ))}
       </div>
       {v.type&&v.type!=="餐點"&&(
         <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
-          {(CPL_KINDS[v.type]||[]).map(k=>(
+          {(Array.isArray(v.types)&&v.types.length?v.types:(v.type?[v.type]:[])).flatMap(t=>(CPL_KINDS[t]||[]).map(k=>`${k}`)).filter((x,i,a)=>a.indexOf(x)===i).map(k=>(
             <button key={k} onClick={()=>toggleKind(k)} style={chip(kinds.includes(k))}>{k}</button>
           ))}
         </div>
       )}
-      {v.type==="餐點"&&(
+      {((Array.isArray(v.types)?v.types:(v.type?[v.type]:[])).includes("餐點"))&&(
         <div style={{background:"#fff",border:"1px solid #e0d5c0",borderRadius:"10px",padding:"10px",marginBottom:"8px"}}>
           <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>🍽 是哪道餐點?（先選分類 → 點餐點加入,可複選）</div>
           <select value={cat} onChange={e=>setCat(e.target.value)}
@@ -2860,7 +2864,7 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
   const ymOf=(d)=>{const m=(d||"").match(/^(\d{1,2})\//);return m?+m[1]:0;};
   const nowM=new Date().getMonth()+1;
   const thisM=all.filter(c=>ymOf(c.date)===nowM), lastM=all.filter(c=>ymOf(c.date)===(nowM===1?12:nowM-1));
-  const byType={}; all.forEach(c=>{ if(c.type) byType[c.type]=(byType[c.type]||0)+1; });
+  const byType={}; all.forEach(c=>{ const ts=Array.isArray(c.types)&&c.types.length?c.types:(c.type?[c.type]:[]); ts.forEach(t=>byType[t]=(byType[t]||0)+1); });
   const bySrc={};  all.forEach(c=>{ bySrc[c.source]=(bySrc[c.source]||0)+1; });
   const dishCnt={};
   all.forEach(c=>(c.dishes||[]).forEach(d=>{ const id=typeof d==="object"?d.id:d; const it=findItem(id); const nm=it?it.name:id; dishCnt[nm]=(dishCnt[nm]||0)+1; }));
@@ -2925,10 +2929,10 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
         if(d.note) dishBits.push(d.note);                             // 每道菜備註
       } else { const it=findItem(d); dishBits.push(it?it.name:d); }
     });
-    const hay=[c._phone,c._who,c.type,(c.kinds||[]).join(" "),dishBits.join(" "),c.reason,c.adjust,c.treat,(c.attitudes||[]).join(" "),c.attitude].filter(Boolean).join(" ");
+    const hay=[c._phone,c._who,c.type,(c.types||[]).join(" "),(c.kinds||[]).join(" "),dishBits.join(" "),c.reason,c.adjust,c.treat,(c.attitudes||[]).join(" "),c.attitude].filter(Boolean).join(" ");
     return hay.includes(qq);
   };
-  const shown=all.filter(c=>(!fType||c.type===fType)&&(!fSrc||c.source===fSrc)&&matchQ(c))
+  const shown=all.filter(c=>(!fType||(Array.isArray(c.types)&&c.types.length?c.types:(c.type?[c.type]:[])).includes(fType))&&(!fSrc||c.source===fSrc)&&matchQ(c))
     .sort((a,b)=>{const p=x=>{const m=(x.date||"0/0").split("/").map(Number);return (m[0]||0)*100+(m[1]||0);};return p(b)-p(a);});
   const chip=(on)=>({padding:"7px 12px",borderRadius:"8px",border:`1.5px solid ${on?"#a04020":"#c8b89c"}`,fontSize:"13px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#f0e6d4",color:on?"#fff":"#6a4a2e"});
   const srcIcon=(k)=>{const s2=CPL_SOURCES.find(x=>x.k===k);return s2?<s2.Icon size={14} color="#8a5a30"/>:null;};
@@ -3065,7 +3069,7 @@ function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
                   <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{c.date}</span>
                   <span style={{fontSize:"13px",fontWeight:"800",color:"#3a2a1a"}}>{c._who||"—"}</span>
                   <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c._phone||""}</span>
-                  {c.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"1px 6px"}}>{c.type}</span>}
+                  {(Array.isArray(c.types)&&c.types.length?c.types:(c.type?[c.type]:[])).map(t=><span key={t} style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"1px 6px",marginRight:"3px"}}>{t}</span>)}
                   <span style={{flex:1}}/>
                   {pics.length>0&&<span style={{fontSize:"11px"}}>📷</span>}
                   {c.treat&&!c.treatDone&&upcomingByPhone[normPhone(c._phone)]&&<span style={{fontSize:"10px",fontWeight:"800",background:c.treatNoted?"#d8f0dc":"#dff0e6",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 6px"}}>{c.treatNoted?"📝 已備註":"🎁 待招待"} {upcomingByPhone[normPhone(c._phone)].date}來</span>}
@@ -3347,7 +3351,7 @@ function CountTable({ counts, onChange, baseAmt, label }){
     </div>
   );
 }
-function CloseHint({ show, children }){ return show?<div style={{fontSize:"11px",color:"#8a6a48",lineHeight:"1.6",marginTop:"3px",paddingLeft:"2px"}}>💡 {children}</div>:null; }
+function CloseHint({ show, children }){ return show?<div style={{fontSize:"12px",color:"#8a6a48",lineHeight:"1.75",marginTop:"6px",background:"#faf7f0",borderRadius:"7px",padding:"7px 9px"}}>💡 {children}</div>:null; }
 // 完結步驟標題:新手版(含動作說明) / 老手版(確認式)
 const CLOSE_TITLES = {
   s1 :{nov:"Key 支出在【POS機】和【報表】",      pro:"POS 支出輸入完成",        hand:false,cam:false},
@@ -3366,19 +3370,19 @@ const CLOSE_TITLES = {
 };
 const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13"];
 const CLOSE_HELP = {
-  s1 :"為什麼要做：支出沒 key，帳就對不起來，會計也查不到憑證。\n記得備註：收據 / 發票號碼 / 蝦皮。\n多 key 了怎麼辦：到【現金支出】-【收入 A05 支出誤key】更正。",
-  s2 :"為什麼要做：信用卡機跟 POS 對不起來，代表有漏刷或重複刷。\n卡住的話：先看兩邊的筆數對不對，再一筆筆比金額。",
-  s3 :"為什麼要做：備用金付出去的錢要補回來，不然明天不夠用。\n怎麼做：備用金支出收據放進夾鏈袋，用錢櫃的現金營業額把備用金補回原本金額。",
-  s4 :"為什麼要做：POS 機桌位沒清空會無法清帳。\n卡住的話：檢查有沒有還沒結帳或掛著的桌。",
-  s5 :"應包金額 = 錢櫃 $10,000 + 現金營業額 − 支出\n把錢攤開拍照留證，再放進錢袋。",
-  s6 :"為什麼要拍照：之後發現錢不對，可以翻回來對照當天的樣子。\n照片都會留著，不會覆蓋。",
-  s7 :"先確認 POS 機桌子都是空白。\n輸入金額 = 應包金額 + 退訂金額 + 錢櫃 $10,000。\n有訂金的話，單要寫「訂金」和「應包金額」。",
-  s8 :"單據分開放很容易掉，釘一起才不會缺件。",
-  s9 :"現金放金庫才安全。應包金額 + 備用金一起放進去。",
-  s10:"9:00 後 POS 才會更新。\n桌數（新/舊/沒會員）、前菜折抵100 → 大麥「店家報表－營業銷售」\n前菜折抵30、回訪折抵100 → 大麥「折扣報表－結帳活動」\n回訪折抵100（優惠券）→ 大麥「折扣報表－優惠券」",
-  s11:"沒鎖等於沒關店。金庫、錢櫃兩個都要拉一下確認鎖上。",
-  s12:"讓大家知道今天結完、金額有沒有問題。按分享鈕會叫出 LINE，選群組送出。",
-  s13:"明天早班才知道有哪些大訂要準備。只列已經封存餐點的，現場點餐的不會出現。",
+  s1 :"【為什麼要做】\n支出沒 key，帳就對不起來，會計也查不到憑證。\n\n【記得備註】\n收據 / 發票號碼 / 蝦皮\n\n【多 key 了怎麼辦】\n到【現金支出】-【收入 A05 支出誤key】更正",
+  s2 :"【為什麼要做】\n對不起來代表有漏刷或重複刷。\n\n【怎麼查】\n先看兩邊筆數對不對，再一筆筆比金額",
+  s3 :"【為什麼要做】\n備用金付出去的錢要補回來，不然明天不夠用。\n\n【怎麼做】\n備用金支出收據放進夾鏈袋\n用錢櫃的現金營業額，把備用金補回原本金額",
+  s4 :"【為什麼要做】\nPOS 機桌位沒清空會無法清帳。\n\n【怎麼查】\n看有沒有還沒結帳或掛著的桌",
+  s5 :"【怎麼算】\n應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出\n\n【為什麼要拍照】\n之後金額有疑問時可以回頭對照\n攤開拍清楚，再放進錢袋",
+  s6 :"【為什麼要截圖】\n之後發現錢不對，可以翻回來對照當天的樣子。\n\n【提醒】\n照片都會留著，不會被覆蓋",
+  s7 :"【印之前先確認】\nPOS 機桌子都是空白\n\n【輸入金額】\n應包金額 ＋ 退訂金額 ＋ 錢櫃 $10,000\n\n【有訂金的話】\n單上要寫「訂金」和「應包金額」",
+  s8 :"【為什麼要做】\n單據分開放很容易掉，釘一起才不會缺件",
+  s9 :"【為什麼要做】\n現金放金庫才安全。\n\n【放什麼】\n應包金額 ＋ 備用金，一起放進去",
+  s10:"【什麼時候填】\n9:00 後 POS 機才會更新，太早填抓不到資料\n\n【資料在哪】\n看上面三個區塊，各自對應大麥的報表位置",
+  s11:"【為什麼要做】\n沒鎖等於沒關店。\n\n【怎麼確認】\n金庫、錢櫃兩個都拉一下確認鎖上",
+  s12:"【為什麼要做】\n讓大家知道今天結完、金額有沒有問題。\n\n【怎麼傳】\n按分享鈕會叫出 LINE，選群組送出",
+  s13:"【為什麼要做】\n明天早班才知道有哪些大訂要準備。\n\n【提醒】\n只列已經封存餐點的，現場點餐的不會出現",
 };
 const CLOSE_WARN = {
   s1:"【現金營業額】要足夠支付【支出】",
@@ -3436,7 +3440,7 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
       </div>
       {show&&(<>
         {children&&<div style={{marginTop:"7px"}}>{children}</div>}
-        {!pro&&warn&&<div style={{fontSize:"11px",color:"#a03020",background:"#fdeeea",border:"1px solid #f0c0b0",borderRadius:"7px",padding:"6px 8px",marginTop:"7px",lineHeight:"1.6",fontWeight:"700"}}>⚠ 常錯：{warn}</div>}
+        {!pro&&warn&&<div style={{fontSize:"13px",color:"#a03020",background:"#fdeeea",border:"1.5px solid #f0b8a4",borderRadius:"8px",padding:"9px 11px",marginTop:"9px",lineHeight:"1.7",fontWeight:"800"}}><div style={{fontSize:"11px",opacity:0.8,marginBottom:"2px"}}>⚠ 最常出錯</div>{warn}</div>}
         {!pro&&(
           <div style={{marginTop:"9px",display:"flex",gap:"7px",alignItems:"center"}}>
             <button onClick={(e)=>{e.stopPropagation();
@@ -3452,7 +3456,7 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
           </div>
         )}
         {!pro&&helpOpen&&(
-          <div style={{fontSize:"11px",color:"#5a6a7a",background:"#f6f9fc",borderRadius:"7px",padding:"8px 10px",marginTop:"5px",lineHeight:"1.75",whiteSpace:"pre-line"}}>{CLOSE_HELP[doneKey]||""}</div>
+          <div style={{fontSize:"12.5px",color:"#3a4a5a",background:"#f6f9fc",border:"1px solid #dce6f0",borderRadius:"8px",padding:"11px 12px",marginTop:"6px",lineHeight:"2",whiteSpace:"pre-line"}}>{CLOSE_HELP[doneKey]||""}</div>
         )}
       </>)}
     </div>
@@ -3620,10 +3624,15 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
 
       <PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>
       <CloseStep n={10} doneKey="s10" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s10"} onOpen={setCurStep}>
-        <div style={{fontSize:"11px",color:"#8a6a48",lineHeight:"1.8",background:"#f8f4ec",borderRadius:"7px",padding:"8px 10px"}}>
-          <b>大麥「店家報表－營業銷售」</b><br/>桌數（新會員／舊會員／沒會員）、<b>前菜折抵 100</b><br/>
-          <b>大麥「折扣報表－結帳活動」</b><br/><b>前菜折抵 30</b>、回訪折抵 100<br/>
-          <b>大麥「折扣報表－優惠券」</b><br/>回訪折抵 100
+        <div style={{display:"flex",flexDirection:"column",gap:"7px"}}>
+          {[["店家報表－營業銷售","桌數（新會員／舊會員）"],
+            ["折扣報表－結帳活動","前菜折抵 100、前菜折抵 30"],
+            ["折扣報表－優惠券","回訪折抵 100"]].map(([src,what])=>(
+            <div key={src} style={{background:"#f8f4ec",borderRadius:"8px",padding:"8px 10px",borderLeft:"3px solid #c9a45c"}}>
+              <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"2px"}}>大麥「{src}」</div>
+              <div style={{fontSize:"13px",fontWeight:"700",color:"#4a3520"}}>{what}</div>
+            </div>
+          ))}
         </div>
       </CloseStep>
       {pro
@@ -3840,7 +3849,49 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
           {day.printed&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>{day.printedAt}</span>}
         </div>
 
-        {/* 3. 額外交接內容:自己寫,做完劃掉 */}
+        {/* 3. 錢櫃清點 + 應包金額試算 */}
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"5px"}}>
+            <span style={{fontSize:"12px",fontWeight:"800",color:"#1a4a7a"}}>💵 錢櫃清點</span>
+            <span style={{flex:1}}/>
+            <button onClick={()=>save({midOpen:!day.midOpen})}
+              style={{fontSize:"11px",color:"#5a7a9a",background:"#f0f4f8",border:"1px solid #c8d8e8",borderRadius:"6px",padding:"3px 10px",cursor:"pointer",fontWeight:"700"}}>{day.midOpen?"收起":"展開"}</button>
+          </div>
+          {day.midOpen&&(<>
+            {(bases.filter(b=>b.label.includes("錢櫃"))[0]||bases[0])&&(()=>{
+              const b=bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0];
+              return <CountTable counts={(day.midCounts&&day.midCounts[b.id])||{}} baseAmt={b.amt} label={b.label}
+                onChange={(nc)=>save({midCounts:{...(day.midCounts||{}),[b.id]:nc}})}/>;
+            })()}
+            <div style={{background:"#f8f4ec",borderRadius:"8px",padding:"9px 10px",marginTop:"7px"}}>
+              <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>應包金額試算</div>
+              <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"5px",flexWrap:"wrap"}}>
+                <span style={{fontSize:"12px",color:"#5a6a8a",fontWeight:"700",width:"84px"}}>現金營業額 $</span>
+                <input value={day.midSales||""} onChange={e=>save({midSales:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="0"
+                  style={{width:"110px",padding:"6px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"7px",flexWrap:"wrap"}}>
+                <span style={{fontSize:"12px",color:"#5a6a8a",fontWeight:"700",width:"84px"}}>支出總額 $</span>
+                <input value={day.midExp||""} onChange={e=>save({midExp:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="0"
+                  style={{width:"110px",padding:"6px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+              </div>
+              {(()=>{
+                const drawer=+((bases.filter(x=>x.label.includes("錢櫃"))[0]||{}).amt||10000);
+                const sales=+(day.midSales||0), exp=+(day.midExp||0);
+                const pack=drawer+sales-exp;
+                return (
+                  <div style={{borderTop:"1px solid #e4dcc8",paddingTop:"7px"}}>
+                    <div style={{fontSize:"11px",color:"#8a7a5a",marginBottom:"3px"}}>錢櫃 ${drawer.toLocaleString()} ＋ 現金營業額 ${sales.toLocaleString()} － 支出 ${exp.toLocaleString()}</div>
+                    <div style={{fontSize:"18px",fontWeight:"900",color:"#8a5210"}}>應包金額 ${pack.toLocaleString()}</div>
+                    {sales>0&&exp>sales&&<div style={{fontSize:"11px",color:"#c02020",fontWeight:"800",marginTop:"4px"}}>⚠ 支出比現金營業額多，錢不夠補支出</div>}
+                  </div>
+                );
+              })()}
+            </div>
+          </>)}
+        </div>
+
+        {/* 4. 額外交接內容:自己寫,做完劃掉 */}
         <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px"}}>
           <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
             <span style={{fontSize:"12px",fontWeight:"800",color:"#1a4a7a"}}>📝 交接事項</span>
@@ -3953,6 +4004,12 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showMaiOnly,setShowMaiOnly]=useState(false);
   const [showPast,setShowPast]=useState(false);
   const [weekView,setWeekView]=useState(0);   // 0=本週 1=下週
+  const [menuOffAll,setMenuOffAll]=useState({});   // 品項關閉表(給代辦提醒用)
+  useEffect(()=>{
+    FS.loadDoc("menuOff").then(v=>{ if(v) setMenuOffAll(v); });
+    const u=FS.subscribeDoc("menuOff", v=>{ if(v) setMenuOffAll(v); });
+    return ()=>u&&u();
+  },[]);
   const [lastResvImport,setLastResvImport]=useState("");
   const [todoChecks,setTodoChecks]=useState({}); // 手動代辦打勾(關訂位、打電話)，跨裝置同步
   const [newTodo,setNewTodo]=useState("");
@@ -4174,7 +4231,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v151</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v153</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4338,6 +4395,24 @@ const rowBg=(g)=>{
                           <div style={{fontSize:"9px",color:"#a06050"}}>{g.timeIssue.at} 回報 —— 打電話確認,並到大麥 POS 同步</div>
                         </div>
                       ))}
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  const mo=menuOffAll||{};
+                  const t=new Date(); const days=[];
+                  for(let i=0;i<7;i++){ const d=new Date(t); d.setDate(t.getDate()+i); days.push(`${d.getMonth()+1}/${d.getDate()}`); }
+                  const hits=days.map(dstr=>({d:dstr,ids:(mo[dstr]||[])})).filter(x=>x.ids.length>0);
+                  if(hits.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c06030",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div style={{fontSize:"12px",color:"#a04010",fontWeight:"900",marginBottom:"3px"}}>🚫 近 7 天有關閉的品項（記得提早開回來）</div>
+                      {hits.map(h=>(
+                        <div key={h.d} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0d0",paddingTop:"3px",marginTop:"3px"}}>
+                          <b>{h.d}</b>　{h.ids.map(id=>{const it=findItem(id);return it?it.name:id;}).join("、")}
+                        </div>
+                      ))}
+                      <div style={{fontSize:"9px",color:"#a06050",marginTop:"4px"}}>到「🚫 品項」可以開回來</div>
                     </div>
                   );
                 })()}
@@ -4517,8 +4592,8 @@ const rowBg=(g)=>{
             {rows.map((g,ri)=>(
               <>
                 <tr key={g.id} style={{background:rowBg(g),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),
-                  borderBottom: ri===gapAfter ? "10px solid transparent" : (ri===weekEndIdx ? "3px solid #8a6a4a" : "1.5px solid #cbb99a"),
-                  boxShadow: inWeek(g) ? "inset 4px 0 0 0 #8a6a4a" : "none"}}>
+                  borderBottom: ri===gapAfter ? "26px solid #f0e6d2" : (ri===weekEndIdx ? "5px solid #8a6a4a" : "1.5px solid #cbb99a"),
+                  boxShadow: inWeek(g) ? "inset 5px 0 0 0 #8a6a4a" : "none"}}>
                   <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
                     {g.memberType==="private"
                       ? <div style={{fontSize:"14px",fontWeight:"700",color:"#a85ab4"}}>🎉 包場</div>
@@ -5845,7 +5920,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v151</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v153</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6589,7 +6664,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v151</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v153</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
