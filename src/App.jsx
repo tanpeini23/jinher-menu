@@ -1439,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v157</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v158</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4116,7 +4116,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const filtered=showMaiOnly
     ? groups.filter(g=>g.fromMai&&!(g.archived&&g.archiveType!=="menu"))
     : filter.trim()
-    ? groups.filter(g=>(g.date||"").includes(filter.trim())||(g.phone||"").includes(filter.trim())||(g.name||"").includes(filter.trim()))
+    ? groups.filter(g=>!g.fromMai&&((g.date||"").includes(filter.trim())||(g.phone||"").includes(filter.trim())||(g.name||"").includes(filter.trim())))
     : groups.filter(g=>!g.fromMai&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&(showPast?isPastMeal(g):!isPastMeal(g)));
   const parseDT=(g)=>{const[m,d]=(g.date||"0/0").split("/").map(Number);const[h,mi]=(g.time||"0:0").split(":").map(Number);return (m||0)*1000000+(d||0)*10000+(h||0)*100+(mi||0);};
   filtered.sort((a,b)=>parseDT(a)-parseDT(b));
@@ -4137,18 +4137,21 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   };
   // 待處理:需訂金但沒收 / 還沒點完(用截止日判斷)
   // 處理完 = 現場點餐 或 已封存餐點;其他都算待處理
+  // 待處理判斷:未付訂金一律待處理;只有「現場點餐」或「已封存餐點」才算處理完
   const isTodo=(g)=>{
-    if(g.cancelled) return false;
+    if(needsDeposit(g.headcount,g.isVip) && !g.deposit) return true;   // 未付訂金 → 一定待處理
     const st=(g.statusLog&&g.statusLog.status)||"";
-    if(g.onsiteOrder) return false;                       // 現場點餐 → 處理完
-    if(st==="餐點封存"||g.archiveType==="menu") return false;  // 已封存餐點 → 處理完
-    return true;
+    if(g.onsiteOrder) return false;                          // 現場點餐 → 處理完
+    if(st==="餐點封存"||g.archiveType==="menu") return false; // 已封存餐點 → 處理完
+    return true;                                             // 其他(含已鎖、未KEY)都是待處理
   };
-  const weekGs=filtered.filter(inWeek);
-  const weekTodo=weekGs.filter(isTodo), weekDone=weekGs.filter(g=>!isTodo(g));
-  const restGs=filtered.filter(g=>!inWeek(g));
+  // 麥訂區:全部都要處理,不分類
+  const noGroup = showMaiOnly || !!filter.trim() || showPast;
+  const weekGs=noGroup?[]:filtered.filter(inWeek);
+  const weekTodo=noGroup?[]:weekGs.filter(isTodo), weekDone=noGroup?[]:weekGs.filter(g=>!isTodo(g));
+  const restGs=noGroup?filtered:filtered.filter(g=>!inWeek(g));
   // 顯示順序:本週待處理 → 本週已處理 → 其他
-  const rows=[...weekTodo,...weekDone,...restGs];
+  const rows=noGroup?filtered:[...weekTodo,...weekDone,...restGs];
   const gapAfter = weekTodo.length>0 ? weekTodo.length-1 : -1;        // 待處理最後一列後面留空隙
   const weekEndIdx = weekGs.length-1;
   const overdueGs=groups.filter(g=>depositUrgency(g)==="overdue");
@@ -4242,7 +4245,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v157</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v158</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4615,7 +4618,7 @@ const rowBg=(g)=>{
           );
         })()}
         <HandoverBox todayStr={todayStr} open={hoOpen} setOpen={setHoOpen} groups={groups}/>
-        <div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
+        {!noGroup&&<div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
           <div style={{display:"flex",border:"1.5px solid #b8a888",borderRadius:"8px",overflow:"hidden"}}>
             <button onClick={()=>setWeekView(0)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===0?"#8a6a4a":"#fff",color:weekView===0?"#fff":"#8a6a4a"}}>本週</button>
             <button onClick={()=>setWeekView(1)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===1?"#8a6a4a":"#fff",color:weekView===1?"#fff":"#8a6a4a"}}>下週 →</button>
@@ -4627,7 +4630,7 @@ const rowBg=(g)=>{
             {weekTodo.length>0?`待處理 ${weekTodo.length} 筆`:"都處理完了 ✓"}
           </span>
           <span style={{fontSize:"10px",color:"#a09070"}}>（左側粗線＝{weekView===0?"本週":"下週"}）</span>
-        </div>
+        </div>}
         <div style={{fontSize:"10px",color:"#5a3a28",marginTop:"6px"}}>{rows.length} 組 · {compactMode?"手機版:點一列展開看全部欄位":"左右滑動查看所有欄位"}</div>
       </div>
 
@@ -4655,17 +4658,17 @@ const rowBg=(g)=>{
             })()}
             {rows.map((g,ri)=>(
               <>
-                {ri===0&&weekTodo.length>0&&(
+                {!noGroup&&ri===0&&weekTodo.length>0&&(
                   <tr key="h-todo"><td colSpan={shownCols.length+4} style={{background:"#fdf0e4",padding:"5px 10px",fontSize:"11px",fontWeight:"900",color:"#a04010",borderBottom:"1.5px solid #e0b090"}}>
                     ━ {weekView===0?"本週":"下週"}待處理（{weekTodo.length} 筆）—— 還沒現場點餐、也還沒封存餐點
                   </td></tr>
                 )}
-                {ri===weekTodo.length&&weekDone.length>0&&(
+                {!noGroup&&ri===weekTodo.length&&weekDone.length>0&&(
                   <tr key="h-done"><td colSpan={shownCols.length+4} style={{background:"#eef4ea",padding:"5px 10px",fontSize:"11px",fontWeight:"900",color:"#3a7a4a",borderBottom:"1.5px solid #a8c8a8"}}>
                     ━ {weekView===0?"本週":"下週"}已處理（{weekDone.length} 筆）—— 現場點餐或已封存
                   </td></tr>
                 )}
-                {ri===weekGs.length&&restGs.length>0&&(
+                {!noGroup&&ri===weekGs.length&&restGs.length>0&&(
                   <tr key="h-rest"><td colSpan={shownCols.length+4} style={{background:"#f0ece4",padding:"5px 10px",fontSize:"11px",fontWeight:"900",color:"#7a6a5a",borderBottom:"1.5px solid #c8b8a0"}}>
                     ━ 其他日期（{restGs.length} 筆）
                   </td></tr>
@@ -6018,7 +6021,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v157</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v158</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6762,7 +6765,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v157</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v158</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
