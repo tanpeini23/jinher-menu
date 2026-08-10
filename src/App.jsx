@@ -1439,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v156</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v157</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4242,7 +4242,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v156</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v157</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4459,7 +4459,8 @@ const rowBg=(g)=>{
                           <b>{arr[0].date} {arr[0].name}</b> {arr[0].phone}
                           {arr.map(g=>(
                             <div key={g.id} style={{display:"flex",alignItems:"center",gap:"6px",paddingLeft:"8px"}}>
-                              <span>・{g.time||"無時間"}　{g.headcount}　已點{(g.orders||[]).length}人{g.deposit?`　訂金$${g.deposit}`:""}</span>
+                              <span>・{g.time||"無時間"}　{g.headcount}　已點{(g.orders||[]).length}人{g.deposit?`　訂金$${g.deposit}`:""}
+                                <b style={{color:g.fromMai?"#1a6a3a":"#8a5210",marginLeft:"5px"}}>{g.fromMai?"[麥訂]":"[大訂表]"}</b></span>
                               <button onClick={()=>{ if(window.confirm(`刪除這筆?\n${g.date} ${g.time} ${g.name}\n\n（保留另一筆）`)) setGroups(p=>p.filter(x=>x.id!==g.id)); }}
                                 style={{fontSize:"10px",background:"#fff",color:"#c02020",border:"1px solid #d09090",borderRadius:"4px",padding:"1px 7px",cursor:"pointer",fontWeight:"800"}}>刪除這筆</button>
                             </div>
@@ -4643,6 +4644,15 @@ const rowBg=(g)=>{
           </thead>
           <tbody>
             {rows.length===0&&<tr><td colSpan={shownCols.length+4} style={{textAlign:"center",padding:"40px",color:"#a09070"}}>尚無紀錄</td></tr>}
+            {showMaiOnly&&(()=>{
+              const bk={};
+              groups.filter(g=>!g.cancelled&&!g.archived&&g.phone&&g.date).forEach(g=>{const k=`${(g.phone||"").replace(/\D/g,"")}|${g.date}`;(bk[k]=bk[k]||[]).push(g);});
+              const dn=Object.values(bk).filter(a=>a.length>1).length;
+              if(dn===0) return null;
+              return <tr><td colSpan={shownCols.length+4} style={{background:"#fbe0e0",padding:"7px 10px",fontSize:"12px",fontWeight:"900",color:"#c02020",borderBottom:"2px solid #c02020"}}>
+                ⚠ 有 {dn} 組客人同一天出現重複（時間改動造成）—— 到「櫃檯代辦」可以直接清理
+              </td></tr>;
+            })()}
             {rows.map((g,ri)=>(
               <>
                 {ri===0&&weekTodo.length>0&&(
@@ -6008,7 +6018,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v156</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v157</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6752,7 +6762,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v156</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v157</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
