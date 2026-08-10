@@ -1439,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v155</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v156</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4242,7 +4242,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v155</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v156</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4439,6 +4439,34 @@ const rowBg=(g)=>{
                         </div>
                       );})}
                       <div style={{fontSize:"9px",color:"#a06050",marginTop:"4px"}}>封存只保留 7 天，過期餐點訂單會消失，請重新拍照封存</div>
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  // 同一客人同一天出現兩筆以上 → 之前時間改動造成的重複
+                  const byKey={};
+                  groups.filter(g=>!g.cancelled&&!g.archived&&g.phone&&g.date).forEach(g=>{
+                    const k=`${(g.phone||"").replace(/\D/g,"")}|${g.date}`;
+                    (byKey[k]=byKey[k]||[]).push(g);
+                  });
+                  const dups=Object.values(byKey).filter(a=>a.length>1);
+                  if(dups.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 同一客人同一天有重複 {dups.length} 組</div>
+                      {dups.map((arr,i)=>(
+                        <div key={i} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.8",borderTop:"1px solid #f0e0e0",paddingTop:"4px",marginTop:"4px"}}>
+                          <b>{arr[0].date} {arr[0].name}</b> {arr[0].phone}
+                          {arr.map(g=>(
+                            <div key={g.id} style={{display:"flex",alignItems:"center",gap:"6px",paddingLeft:"8px"}}>
+                              <span>・{g.time||"無時間"}　{g.headcount}　已點{(g.orders||[]).length}人{g.deposit?`　訂金$${g.deposit}`:""}</span>
+                              <button onClick={()=>{ if(window.confirm(`刪除這筆?\n${g.date} ${g.time} ${g.name}\n\n（保留另一筆）`)) setGroups(p=>p.filter(x=>x.id!==g.id)); }}
+                                style={{fontSize:"10px",background:"#fff",color:"#c02020",border:"1px solid #d09090",borderRadius:"4px",padding:"1px 7px",cursor:"pointer",fontWeight:"800"}}>刪除這筆</button>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                      <div style={{fontSize:"9px",color:"#a06050",marginTop:"4px"}}>留下資料完整的那筆(有點餐/訂金的),刪掉另一筆</div>
                     </div>
                   );
                 })()}
@@ -5631,13 +5659,16 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
     if(importStaff.bigOrders&&importStaff.bigOrders.length>0&&setGroups){
       const cur=groups||[];
       importStaff.bigOrders.forEach(bo=>{
-        const eg=cur.find(g=>(g.phone||"").replace(/\D/g,"")===bo.phone&&(g.date||"").trim()===bo.date&&(g.time||"").trim()===bo.time);
+        // 同一客人同一天只會有一組 → 用「電話+日期」判斷是不是同一筆(時間改了不算新的一筆)
+        const eg=cur.find(g=>(g.phone||"").replace(/\D/g,"")===bo.phone&&(g.date||"").trim()===bo.date&&!g.cancelled);
         if(eg){
           const h=(eg.headcount||"").toLowerCase();
           const oldA=parseInt((h.match(/(\d+)p/)||[])[1])||0;
           const oldC=parseInt((h.match(/(\d+)c/)||[])[1])||0;
-          if(oldA!==bo.adults||oldC!==bo.children){
-            mismatches.push({name:eg.name,phone:bo.phone,date:bo.date,time:bo.time,oldA,oldC,newA:bo.adults,newC:bo.children,id:eg.id});
+          const timeChanged=(eg.time||"").trim()!==(bo.time||"").trim();
+          if(oldA!==bo.adults||oldC!==bo.children||timeChanged){
+            mismatches.push({name:eg.name,phone:bo.phone,date:bo.date,time:bo.time,oldA,oldC,newA:bo.adults,newC:bo.children,
+              oldTime:(eg.time||""),newTime:(bo.time||""),timeChanged,id:eg.id});
           }
         } else {
           toAdd.push(bo);
@@ -5670,10 +5701,10 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       const hc=[mm.newA>0?mm.newA+"p":"",mm.newC>0?mm.newC+"c":""].filter(Boolean).join("");
       const wasDep=needsDeposit(g.headcount, g.isVip);
       const nowDep=needsDeposit(hc, g.isVip);
-      if(!wasDep && nowDep){   // 从免订金 → 要订金:记录变更
-        return {...g, headcount:hc, depositFrom:_today, depositFromNote:`${(mm.oldA||0)+(mm.oldC||0)}→${(mm.newA||0)+(mm.newC||0)}人`};
-      }
-      return {...g, headcount:hc};
+      const patch={headcount:hc};
+      if(mm.timeChanged) patch.time=mm.newTime;
+      if(!wasDep && nowDep){ patch.depositFrom=_today; patch.depositFromNote=`${(mm.oldA||0)+(mm.oldC||0)}→${(mm.newA||0)+(mm.newC||0)}人`; }
+      return {...g, ...patch};
     };
     if(forceUpdate && mismatches.length>0){
       // 全部更新:直接套用大麥人數
@@ -5828,25 +5859,34 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       {mismatchList&&mismatchList.length>0&&(
         <div style={{position:"fixed",inset:0,zIndex:380,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"20px"}} onClick={()=>setMismatchList(null)}>
           <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"340px",maxHeight:"80vh",overflowY:"auto"}} onClick={ev=>ev.stopPropagation()}>
-            <div style={{fontSize:"14px",color:"#c02020",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>⚠ 人數有變動（{mismatchList.length}筆）</div>
-            <div style={{fontSize:"11px",color:"#8a6a4a",textAlign:"center",marginBottom:"12px"}}>大麥的人數和追蹤表不一致</div>
+            <div style={{fontSize:"14px",color:"#c02020",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>⚠ 訂位有變動（{mismatchList.length}筆）</div>
+            <div style={{fontSize:"11px",color:"#8a6a4a",textAlign:"center",marginBottom:"12px"}}>大麥跟追蹤表不一致（人數或時間）</div>
             {mismatchList.map((m,idx)=>(
               <div key={idx} style={{background:"#fff",borderRadius:"10px",padding:"10px",marginBottom:"8px",border:"1px solid #e0d5c0"}}>
-                <div style={{fontSize:"12px",fontWeight:"700",color:"#3a2a1a"}}>{m.name}　{m.date} {m.time}</div>
-                <div style={{fontSize:"12px",color:"#6a4a2e",marginTop:"4px"}}>
-                  追蹤表：大{m.oldA}{m.oldC>0?` 童${m.oldC}`:""} → 大麥：<b style={{color:"#c02020"}}>大{m.newA}{m.newC>0?` 童${m.newC}`:""}</b>
-                </div>
+                <div style={{fontSize:"12px",fontWeight:"700",color:"#3a2a1a"}}>{m.name}　{m.date}</div>
+                {m.timeChanged&&(
+                  <div style={{fontSize:"13px",color:"#6a4a2e",marginTop:"5px",fontWeight:"800",background:"#fdf0e4",borderRadius:"6px",padding:"5px 8px"}}>
+                    🕐 時間：{m.oldTime||"—"} → <b style={{color:"#c02020"}}>{m.newTime}</b>
+                  </div>
+                )}
+                {(m.oldA!==m.newA||m.oldC!==m.newC)&&(
+                  <div style={{fontSize:"12px",color:"#6a4a2e",marginTop:"4px"}}>
+                    👥 人數：大{m.oldA}{m.oldC>0?` 童${m.oldC}`:""} → <b style={{color:"#c02020"}}>大{m.newA}{m.newC>0?` 童${m.newC}`:""}</b>
+                  </div>
+                )}
                 <button onClick={()=>{
                   const hc=[m.newA>0?m.newA+"p":"",m.newC>0?m.newC+"c":""].filter(Boolean).join("");
                   const _td=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
                   setGroups(p=>p.map(x=>{
                     if(x.id!==m.id) return x;
                     const wasDep=needsDeposit(x.headcount,x.isVip), nowDep=needsDeposit(hc,x.isVip);
-                    if(!wasDep&&nowDep) return {...x,headcount:hc,depositFrom:_td,depositFromNote:`${(m.oldA||0)+(m.oldC||0)}→${(m.newA||0)+(m.newC||0)}人`};
-                    return {...x,headcount:hc};
+                    const patch={headcount:hc};
+                    if(m.timeChanged) patch.time=m.newTime;
+                    if(!wasDep&&nowDep){ patch.depositFrom=_td; patch.depositFromNote=`${(m.oldA||0)+(m.oldC||0)}→${(m.newA||0)+(m.newC||0)}人`; }
+                    return {...x,...patch};
                   }));
                   setMismatchList(prev=>prev.filter((_,i)=>i!==idx));
-                }} style={{marginTop:"6px",padding:"6px 12px",borderRadius:"8px",border:"none",background:"#3a7a5a",color:"#fff",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>更新為大麥人數</button>
+                }} style={{marginTop:"7px",padding:"8px 14px",borderRadius:"8px",border:"none",background:"#3a7a5a",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>更新為大麥的資料</button>
               </div>
             ))}
             <button onClick={()=>setMismatchList(null)} style={{width:"100%",marginTop:"6px",padding:"9px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>關閉（不更新）</button>
@@ -5968,7 +6008,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v155</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v156</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6712,7 +6752,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v155</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v156</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
