@@ -1439,7 +1439,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v160</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v161</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4253,7 +4253,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v160</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v161</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <FsStatus/>
             {[
@@ -4439,7 +4439,11 @@ const rowBg=(g)=>{
                   );
                 })()}
                 {(()=>{
-                  const expiring=groups.filter(g=>{const a=archiveAgeDays(g);return a!==null&&a>=6&&!g.cancelled;});
+                  // 只提醒「還沒用餐」的:已經吃完的不用再重新封存
+                  const expiring=groups.filter(g=>{
+                    if(g.cancelled||isPastMeal(g)) return false;
+                    const a=archiveAgeDays(g); return a!==null&&a>=6;
+                  });
                   if(expiring.length===0) return null;
                   return (
                     <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
@@ -4722,6 +4726,7 @@ const rowBg=(g)=>{
                     {(()=>{
                       const age=archiveAgeDays(g);
                       if(age===null) return null;
+                      if(isPastMeal(g)) return <div title={`封存第 ${age} 天`} style={{fontSize:"9px",background:"#f0ece4",color:"#8a7a6a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>已封存</div>;
                       if(age>=7) return <div className="blinkTag" title="封存已超過 7 天,餐點訂單可能已經消失,請立刻重新封存" style={{fontSize:"9px",background:"#c02020",color:"#fff",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"900"}}>⚠封存{age}天·要重封</div>;
                       if(age>=6) return <div className="blinkTag" title="封存滿 6 天,明天就會過期,請重新封存" style={{fontSize:"9px",background:"#e08030",color:"#fff",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"900"}}>⚠封存{age}天·快過期</div>;
                       return <div title={`封存第 ${age} 天(保留 7 天)`} style={{fontSize:"9px",background:"#eef4ea",color:"#5a7a5a",border:"1px solid #b8d0b8",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>封存{age}天</div>;
@@ -6055,7 +6060,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v160</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v161</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6799,7 +6804,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v160</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v161</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
