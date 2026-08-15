@@ -1447,7 +1447,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v168</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v169</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4279,6 +4279,12 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showPast,setShowPast]=useState(false);
   const [weekView,setWeekView]=useState(0);   // 0=本週 1=下週
   const [gearOpen,setGearOpen]=useState(false);   // ⚙ 低頻功能收納
+  const [hoData,setHoData]=useState({});         // 交接資料(給首頁判斷這時段做完沒)
+  useEffect(()=>{
+    FS.loadDoc("handover").then(v=>{ if(v) setHoData(v); });
+    const u=FS.subscribeDoc("handover", v=>{ if(v) setHoData(v); });
+    return ()=>u&&u();
+  },[]);
   const [secOpen,setSecOpen]=useState({});       // 分區收合 {todo,done,rest}
   const [menuOffAll,setMenuOffAll]=useState({});   // 品項關閉表(給待辦提醒用)
   useEffect(()=>{
@@ -4508,7 +4514,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v168</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v169</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>setShowItemsOff(true)}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -4684,10 +4690,42 @@ const rowBg=(g)=>{
                   <div style={{fontSize:"11px",color:"#a08060",marginTop:"3px"}}>詳細內容和處理按鈕在下面「櫃檯待辦」裡</div>
                 </div>
               )}
-              <div style={{marginTop:"8px",paddingTop:"7px",borderTop:`1px solid ${_nowJobs.length?"#f0dcc0":"#c8e4cc"}`,fontSize:"12px",color:"#7a6a5a",fontWeight:"700"}}>
-                這個時段要做：{_phase.k==="open"?"開店準備、看昨天沒做完的交接":_phase.k==="mid"?"算錢、印訂位表、寫交接事項":"晚結流程（15 步）"}
-                　<span style={{color:"#8a6a4a",fontWeight:"600"}}>→ 在下面「🤝 櫃檯交接」的「{_phase.k==="open"?"☀️ 開早":_phase.k==="mid"?"💰 中間結算":"🌙 完結"}」</span>
-              </div>
+              {(()=>{
+                const day=hoData[todayStr]||{};
+                const cl=day.close||{};
+                // 各時段的項目 + 完成狀態
+                let items=[];
+                if(_phase.k==="open"){
+                  const ot=hoData._openTasks||OPEN_TASKS;
+                  const oc=day.openChk||{};
+                  items=[{t:"開店準備",done:ot.length>0&&ot.every(x=>oc[x])}];
+                  const yStr=(()=>{const d=new Date();d.setDate(d.getDate()-1);return `${d.getMonth()+1}/${d.getDate()}`;})();
+                  const yU=((hoData[yStr]||{}).notes||[]).filter(n=>!n.done);
+                  if(yU.length>0) items.push({t:`昨天沒做完 ${yU.length} 件`,done:false});
+                } else if(_phase.k==="mid"){
+                  const cashDone=CASH_SPOTS.every(k=>day.cash&&day.cash[k]);
+                  const notesLeft=(day.notes||[]).filter(n=>!n.done).length;
+                  items=[{t:"算錢",done:cashDone},{t:"印訂位表",done:!!day.printed},{t:"交接事項",done:notesLeft===0}];
+                } else {
+                  const dn=CLOSE_ORDER.filter(k=>cl[k]).length;
+                  items=[{t:`晚結流程（${dn}/${CLOSE_ORDER.length}）`,done:dn===CLOSE_ORDER.length}];
+                }
+                const allOk=items.every(x=>x.done);
+                return (
+                  <div style={{marginTop:"8px",paddingTop:"7px",borderTop:`1px solid ${_nowJobs.length?"#f0dcc0":"#c8e4cc"}`,fontSize:"12px",color:"#7a6a5a",fontWeight:"700"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                      <span>這個時段要做：</span>
+                      {items.map((x,i)=>(
+                        <span key={i} style={{color:x.done?"#8aaa8a":"#8a5210",textDecoration:x.done?"line-through":"none",fontWeight:"800"}}>
+                          {x.done?"✓ ":""}{x.t}
+                        </span>
+                      ))}
+                      {allOk&&<span style={{fontSize:"11px",fontWeight:"900",color:"#1a6a3a",background:"#dff0e6",borderRadius:"5px",padding:"1px 8px"}}>都完成了</span>}
+                    </div>
+                    <div style={{color:"#8a6a4a",fontWeight:"600",marginTop:"3px"}}>→ 在下面「🤝 櫃檯交接」的「{_phase.k==="open"?"☀️ 開早":_phase.k==="mid"?"💰 中間結算":"🌙 完結"}」</div>
+                  </div>
+                );
+              })()}
             </div>
             <div style={{background:"#fdf4dd",borderRadius:"12px",border:"2.5px solid #d8a840",padding:"11px 13px"}}>
               <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"800",marginBottom:(allDone||!todoOpen)?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>
@@ -6441,7 +6479,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v168</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v169</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -7188,7 +7226,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v168</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v169</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
