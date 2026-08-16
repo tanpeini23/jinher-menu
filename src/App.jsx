@@ -1447,7 +1447,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v171</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v172</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3402,6 +3402,36 @@ ${SITE_URL}
 
 逾時無法線上點餐，當天需現場點餐、現場排單製作，等候約 40 分鐘以上`;
 }
+// LINE 風格對話泡泡(手繪,非官方 logo)
+const IcoLine=({size=13,color="#06C755"})=>(
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <path d="M12 3.2c-4.9 0-8.9 3.2-8.9 7.2 0 3.6 3.2 6.6 7.5 7.1.3.06.7.2.8.45.1.23.06.58.03.81l-.13.78c-.04.23-.18.9.79.49 .97-.41 5.24-3.09 7.15-5.29 1.32-1.45 1.95-2.92 1.95-4.55 0-4-4-7.2-8.9-7.2z"
+      stroke={color} strokeWidth="1.5" strokeLinejoin="round"/>
+  </svg>
+);
+// 催訂金:逾期 / 今天到期 語氣不同
+function msgDepChase(g){
+  const dep=depDeadlineOf(g);
+  const amt=depositAmountOf(g);
+  const over=dep&&(new Date()>dep.dl);
+  const head=over
+    ? `您好～提醒您訂金匯款期限已過 🙏\n目前尚未收到款項，座位暫時無法保留`
+    : `您好～提醒您訂金匯款即將到期 ⏰`;
+  return `今鶴 JINHER
+${g.name} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
+
+${head}
+
+💰 訂金 $${amt.toLocaleString()}
+匯款期限：${dep?dep.label:"請洽店家"} 前
+
+${BANK_INFO.bank}
+戶名：${BANK_INFO.name}
+帳號：${BANK_INFO.acct}
+
+匯款後請回傳末5碼
+${over?"如已完成匯款，請回覆我們核對；若需取消訂位也請告知，謝謝 🙇":"※ 逾時未收到訂金，恕不保留座位"}`;
+}
 function msgEarlyLock(g){
   return `今鶴 JINHER
 ${g.name} ${g.date}${wdOf(g.date)} ${g.time}
@@ -4289,6 +4319,12 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [showPast,setShowPast]=useState(false);
   const [weekView,setWeekView]=useState(0);   // 0=本週 1=下週
   const [gearOpen,setGearOpen]=useState(false);   // ⚙ 低頻功能收納
+  const [copiedId,setCopiedId]=useState("");     // 剛複製的那筆(顯示已複製)
+  const copyMsg=async(id,txt)=>{
+    try{ await navigator.clipboard.writeText(txt); }
+    catch(e){ window.prompt("複製這段貼到 LINE:",txt); return; }
+    setCopiedId(id); setTimeout(()=>setCopiedId(""),1800);
+  };
   const [hoData,setHoData]=useState({});         // 交接資料(給首頁判斷這時段做完沒)
   useEffect(()=>{
     FS.loadDoc("handover").then(v=>{ if(v) setHoData(v); });
@@ -4541,7 +4577,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v171</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v172</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>setShowItemsOff(true)}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -4874,7 +4910,7 @@ const rowBg=(g)=>{
                               {!g.deposit&&needsDeposit(g.headcount,g.isVip,g.takeout)&&<span style={{color:"#c02020",fontWeight:"800"}}>　⚠未收訂金</span>}</span>
                             <span style={{flex:1}}/>
                             <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
-                              style={{fontSize:"10px",background:"#c06030",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap"}}>前往 KEY 單 →</button>
+                              style={{fontSize:"11px",background:"#c06030",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>前往 KEY 單 →</button>
                           </div>
                         </div>
                       ))}
@@ -4937,10 +4973,19 @@ const rowBg=(g)=>{
                       const p=+((hc.match(/(\d+)p/)||[])[1]||0), c2=+((hc.match(/(\d+)c/)||[])[1]||0);
                       const need=(p+c2)||parseInt(hc)||0;
                       return (
-                        <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"3px",marginTop:"3px"}}>
-                          <b>{g.date} {g.time} {g.name}</b> {g.phone}　
-                          <span style={{color:"#c02020",fontWeight:"800"}}>已點 {(g.orders||[]).length}/{need} 人</span>　
-                          <span style={{color:"#8a5a10",fontWeight:"700"}}>剩 {hh}小時{mm2}分</span>
+                        <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"5px",marginTop:"5px"}}>
+                          <span>
+                            <b>{g.date} {g.time} {g.name}</b> {g.phone}　
+                            <span style={{color:"#c02020",fontWeight:"800"}}>已點 {(g.orders||[]).length}/{need} 人</span>　
+                            <span style={{color:"#8a5a10",fontWeight:"700"}}>剩 {hh}小時{mm2}分</span>
+                          </span>
+                          <span style={{flex:1}}/>
+                          <button onClick={()=>copyMsg(`chase_${g.id}`,msgChase(g))}
+                            style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                              background:copiedId===`chase_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                            {copiedId===`chase_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>催點餐</>}
+                          </button>
                         </div>
                       );
                     })}
@@ -5023,15 +5068,37 @@ const rowBg=(g)=>{
                   </div>
                 )}
                 {overdueGs.length>0&&(
-                  <div style={{display:"flex",alignItems:"flex-start",gap:"8px"}}>
-                    <span style={{fontSize:"13px"}}>🔴</span>
-                    <span style={{fontSize:"13px",color:"#e87a5a",fontWeight:"700"}}>💰 逾期未付訂：{overdueGs.map(g=>`${g.name} ${g.date}`).join("、")}</span>
+                  <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>💰 逾期未付訂 {overdueGs.length} 筆</div>
+                    {overdueGs.map(g=>(
+                      <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"5px",marginTop:"5px"}}>
+                        <span><b>{g.date} {g.time} {g.name}</b> {g.phone}　<span style={{color:"#c02020",fontWeight:"800"}}>${depositAmountOf(g)}</span></span>
+                        <span style={{flex:1}}/>
+                        <button onClick={()=>copyMsg(`dep_${g.id}`,msgDepChase(g))}
+                          style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                            background:copiedId===`dep_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                            padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                          {copiedId===`dep_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>催訂金</>}
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {urgentGs.length>0&&(
-                  <div style={{display:"flex",alignItems:"flex-start",gap:"8px"}}>
-                    <span style={{fontSize:"13px"}}>⚠️</span>
-                    <span style={{fontSize:"12px",color:"#caa060"}}>即將到期：{urgentGs.map(g=>{const dd=depDeadlineOf(g);return `${g.name} ${dd?(dd.lastMinute?"訂後2hr內":`${dd.label}前`):""}`;}).join("、")}</span>
+                  <div style={{background:"#fff",border:"2px solid #d8a840",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div style={{fontSize:"12px",color:"#8a5210",fontWeight:"900",marginBottom:"3px"}}>⚠ 訂金即將到期 {urgentGs.length} 筆</div>
+                    {urgentGs.map(g=>{const dd=depDeadlineOf(g);return (
+                      <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e4d0",paddingTop:"5px",marginTop:"5px"}}>
+                        <span><b>{g.date} {g.time} {g.name}</b>　<span style={{color:"#8a5210",fontWeight:"800"}}>${depositAmountOf(g)}</span>　{dd?(dd.lastMinute?"訂後2hr內":`${dd.label}前`):""}</span>
+                        <span style={{flex:1}}/>
+                        <button onClick={()=>copyMsg(`dep_${g.id}`,msgDepChase(g))}
+                          style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                            background:copiedId===`dep_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                            padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                          {copiedId===`dep_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>催訂金</>}
+                        </button>
+                      </div>
+                    );})}
                   </div>
                 )}
               </div>}
@@ -5136,8 +5203,27 @@ const rowBg=(g)=>{
                     {g.timeIssue&&<div title={`客人 ${g.timeIssue.by||""} 於 ${g.timeIssue.at||""} 回報`} className="blinkTag"
                       onClick={()=>setTimeIssueG(g)}
                       style={{fontSize:"9px",background:"#c02020",color:"#fff",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>⚠時間疑義</div>}
-                    {<div onClick={()=>setLineG(g)} title={TIP_TXT.lineBtn}
-                      style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 5px",marginTop:"2px",fontWeight:"800",cursor:"pointer"}}>LINE</div>}
+                    {(()=>{
+                      // 依狀況顯示現在該傳什麼:催訂金 / 催點餐 / 一般
+                      const needDep=needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit;
+                      const hc=(g.headcount||"").toLowerCase();
+                      const p2=+((hc.match(/(\d+)p/)||[])[1]||0), c2=+((hc.match(/(\d+)c/)||[])[1]||0);
+                      const need2=(p2+c2)||parseInt(hc)||0;
+                      const dl2=getOrderDeadline(g.date);
+                      const near=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
+                      const notDone=need2>0&&(g.orders||[]).length<need2;
+                      const label = needDep?"催訂金" : (near&&notDone?"催點餐":"LINE");
+                      const hot = needDep||(near&&notDone);
+                      return (
+                        <div onClick={()=>setLineG(g)} title={TIP_TXT.lineBtn}
+                          style={{display:"inline-flex",alignItems:"center",gap:"3px",fontSize:"10px",
+                            background:hot?"#06C755":"#e2f2e8",color:hot?"#fff":"#1a6a3a",
+                            border:`1px solid ${hot?"#049a44":"#7ab88a"}`,borderRadius:"5px",padding:"3px 7px",marginTop:"3px",
+                            fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",minHeight:"22px"}}>
+                          <IcoLine size={12} color={hot?"#fff":"#06C755"}/>{label}
+                        </div>
+                      );
+                    })()}
                     {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
                       style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
                     {depositUrgency(g)==="overdue"&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>逾期</div>}
@@ -6518,7 +6604,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v171</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v172</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -7265,7 +7351,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v171</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v172</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
