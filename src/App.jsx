@@ -1458,7 +1458,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v180</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v181</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4680,7 +4680,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v180</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v181</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>setShowItemsOff(true)}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -4773,6 +4773,7 @@ const rowBg=(g)=>{
             const dl=getOrderDeadline(g.date); if(!dl) return false;
             const left=dl-new Date();
             if(left<=0 || left>48*3600000) return false;        // 只看「48小時內截止」
+            if(lowConsumeOk(g)) return false;                    // 低消已達標 → 不用催了
             const need=adultsOfG(g);          // 只算大人(5歲以下不用點餐)
             const done=(g.orders||[]).length;
             // 點餐狀態已選「已提醒點餐/已加LINE/餐點封存」→ 夥伴已處理,不再催
@@ -5033,7 +5034,14 @@ const rowBg=(g)=>{
                   );
                 })()}
                 {(()=>{
-                  const canLock=groups.filter(g=>!g.fromMai&&!g.cancelled&&!g.archived&&!g.locked&&!g.noEarlyLock&&!isPastMeal(g)&&lowConsumeOk(g));
+                  const canLock=groups.filter(g=>{
+                    if(g.fromMai||g.cancelled||g.archived||g.locked||g.noEarlyLock) return false;
+                    if(isPastMeal(g)||g.onsiteOrder) return false;
+                    if(g.archiveType==="menu") return false;               // 已封存餐點 → 不用問了
+                    const st=(g.statusLog&&g.statusLog.status)||"";
+                    if(["餐點封存","已KEY需改單","未KEY-需優先KEY","未KEY-超過1週無法先KEY"].includes(st)) return false;
+                    return lowConsumeOk(g);
+                  });
                   if(canLock.length===0) return null;
                   return (
                     <div style={{background:"#fff",border:"2px solid #7ab88a",borderRadius:"9px",padding:"7px 9px"}}>
@@ -5335,7 +5343,7 @@ const rowBg=(g)=>{
                         onClick={()=>{ if(window.confirm("取消「客人不先鎖單」的標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:false,noEarlyLockBy:"",noEarlyLockAt:""})); }}
                         style={{fontSize:"9px",background:"#f0ece4",color:"#8a7a6a",border:"1px solid #d8ccb8",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>已問·不鎖單</div>
                     )}
-                    {lowConsumeOk(g)&&!g.locked&&!g.archived&&!g.noEarlyLock&&!isPastMeal(g)&&(
+                    {lowConsumeOk(g)&&!g.locked&&!g.archived&&!g.noEarlyLock&&!isPastMeal(g)&&!g.onsiteOrder&&g.archiveType!=="menu"&&!["餐點封存","已KEY需改單","未KEY-需優先KEY","未KEY-超過1週無法先KEY"].includes((g.statusLog&&g.statusLog.status)||"")&&(
                       <div title="低消已達標,可以問客人要不要提前鎖單" onClick={()=>setLineG(g)}
                         style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓低消達標·可問鎖單</div>
                     )}
@@ -6774,7 +6782,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v180</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v181</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -7520,7 +7528,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v180</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v181</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
