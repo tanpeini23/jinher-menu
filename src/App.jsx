@@ -1447,7 +1447,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v174</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v176</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -3655,7 +3655,7 @@ const CLOSE_HELP = {
   s5 :"【怎麼算】\n應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出（含退訂金）\n\n【為什麼要拍照】\n之後金額有疑問時可以回頭對照\n攤開拍清楚，再放進錢袋",
   s6 :"【為什麼要截圖】\n之後發現錢不對，可以翻回來對照當天的樣子。\n\n【提醒】\n照片都會留著，不會被覆蓋",
   s7 :"【怎麼算】\n錢櫃 $10,000 ＋ 應包金額 ＋ 訂金 ＝ 合計金額\n\n【用途】\n這個數字要輸入到 POS 關班流程",
-  s7b:"【怎麼做】\n在 POS 上一直按「下一步」，直到最後按【關班並清賬】",
+  s7b:"【怎麼做】\n輸入支出後，POS 會顯示實收和應收金額\n兩個要一樣、差異金額是 0 才正確\n\n確認沒問題後，一直按「下一步」，直到最後按【關班並清賬】\n\n【差異不是 0 怎麼辦】\n先回頭檢查支出有沒有 key 錯、漏 key",
   s8 :"【印之前先確認】\nPOS 機桌子都是空白\n\n【有訂金的話】\n單上要寫「訂金」和「應包金額」",
   s9 :"【為什麼要做】\n單據分開放很容易掉，釘一起才不會缺件",
   s9b:"【為什麼要做】\n現金放金庫才安全\n\n【放什麼】\n應包金額 ＋ 備用金，一起放進去",
@@ -3930,8 +3930,18 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           );
         })()}
       </CloseStep>
-      <CloseStep n={8} doneKey="s7b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7b"} onOpen={setCurStep}/>
+      <CloseStep n={8} doneKey="s7b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7b"} onOpen={setCurStep}>
+        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",lineHeight:"1.8"}}>
+          ⚠ 輸入支出後，<b>POS 機上會顯示實收和應收金額</b><br/>
+          <span style={{fontSize:"15px"}}>兩個要一樣、<b>差異金額 0</b> 才正確</span>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"3px"}}>差異不是 0 → 先檢查支出有沒有 key 錯或漏 key，不要直接關班</div>
+        </div>
+      </CloseStep>
       <CloseStep n={9} doneKey="s8" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8"} onOpen={setCurStep}>
+        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.75"}}>
+          ⚠ 有收訂金的話，<b>單上要手寫「訂金」和「應包金額」</b>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"2px"}}>存錢對帳要用，沒寫之後對不出來</div>
+        </div>
         {photoBlock("bill","清帳單 & 信用卡單")}
       </CloseStep>
       {pro
@@ -4211,6 +4221,10 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
               style={{fontSize:"11px",color:"#5a7a9a",background:"#f0f4f8",border:"1px solid #c8d8e8",borderRadius:"6px",padding:"6px 10px",cursor:"pointer",fontWeight:"700",minHeight:"30px"}}>怎麼印?</button>
             <button onClick={()=>save({fmtPrint:!day.fmtPrint})}
               style={{fontSize:"11px",color:"#8a5210",background:"#fdf6ea",border:"1px solid #d8b870",borderRadius:"6px",padding:"6px 10px",cursor:"pointer",fontWeight:"700",minHeight:"30px"}}>📐 列印格式</button>
+          </div>
+          <div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",background:"#fbe4e4",border:"1.5px solid #e0a0a0",borderRadius:"8px",padding:"8px 10px",marginTop:"7px",lineHeight:"1.7"}}>
+            ⚠ 印出來看到有時段 <b>20 位以上</b> → 一定要去確認<b>訂位關了沒</b>
+            <div style={{fontSize:"11px",fontWeight:"600",color:"#a05040",marginTop:"2px"}}>這個最常忘記，忘了訂位就會爆掉</div>
           </div>
           {day.howPrint&&(
             <div style={{fontSize:"12px",color:"#3a4a5a",background:"#f6f9fc",border:"1px solid #dce6f0",borderRadius:"8px",padding:"10px 12px",marginTop:"7px",lineHeight:"2"}}>
@@ -4622,7 +4636,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v174</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v176</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>setShowItemsOff(true)}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -5945,7 +5959,7 @@ function StaffPicker({ onSelect, onClose, staffList }) {
 }
 
 function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent }) {
-  const RED_AT=25, ORG_AT=20, YEL_AT=15; // 紅25+必關 橘20-24需判斷 黃15-19留意
+  const RED_AT=22, ORG_AT=17, YEL_AT=17; // 紅22+必關 黃17-21留意(兩色制)
   const TIMES2 = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30"];
   const DAYS2 = ["一","二","三","四","五","六","日"];
   const [weekOffset, setWeekOffset] = useState(0);
@@ -6665,7 +6679,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v174</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v176</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -6806,7 +6820,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
               judgeList.forEach(x=>x.slots.forEach(t=>slots.push({d:x.d,t,key:`${x.d}-${t}`})));
               return (
                 <div style={{padding:"6px 12px",background:"#fdeedd",borderBottom:"1px solid #e0b080"}}>
-                  <div style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",marginBottom:"5px"}}>🟠 {ORG_AT}–{RED_AT-1} 人,要不要關訂位?（不用一定關,決定後就不再提醒）</div>
+                  <div style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",marginBottom:"5px"}}>🟡 {ORG_AT}–{RED_AT-1} 人,要不要關訂位?（不用一定關,決定後就不再提醒）</div>
                   <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
                     {slots.map(s=>(
                       <span key={s.key} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"11px",background:"#fff",border:"1px solid #e0b080",borderRadius:"6px",padding:"3px 5px 3px 8px",color:"#a05a10",fontWeight:"700"}}>
@@ -6844,8 +6858,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       })()}
       {/* 顏色說明 */}
       <div className="np" style={{padding:"3px 12px",background:"#f5f0e8",display:"flex",gap:"14px",alignItems:"center",flexShrink:0,fontSize:"10px",color:"#6a4a2e"}}>
-        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#fff3cc",border:"1px solid #d8c060",borderRadius:"3px",verticalAlign:"-2px"}}/> {YEL_AT}–{ORG_AT-1}人 留意</span>
-        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe0c0",border:"1px solid #e0a060",borderRadius:"3px",verticalAlign:"-2px"}}/> {ORG_AT}–{RED_AT-1}人 需判斷(可選不關)</span>
+        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#fff3cc",border:"1px solid #d8c060",borderRadius:"3px",verticalAlign:"-2px"}}/> {YEL_AT}–{RED_AT-1}人 留意</span>
         <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe8e8",border:"1px solid #d88080",borderRadius:"3px",verticalAlign:"-2px"}}/> {RED_AT}人以上 必關</span>
       </div>
 
@@ -7412,7 +7425,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v174</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v176</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
