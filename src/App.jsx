@@ -723,6 +723,21 @@ function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, d
           {line.setMeal.drink&&` · ${line.setMeal.drink.name}`}
         </div>
       )}
+      {/* 這道菜的特殊需求(不要什麼/加量…) */}
+      {!disabled ? (
+        <div style={{marginTop:"9px"}}>
+          <input value={line.note||""} onChange={e=>onUpdate({note:e.target.value})}
+            placeholder="這道有特殊需求嗎？（例如：不要蔥、加飯）"
+            style={{width:"100%",boxSizing:"border-box",padding:"9px 11px",borderRadius:"9px",
+              border:`1.5px solid ${line.note?"#c9752a":"#e0cdb0"}`,background:line.note?"#fff6ec":"#fffdf8",
+              color:"#3a2a18",fontSize:"13px",fontWeight:line.note?"700":"400",fontFamily:"inherit",outline:"none"}}/>
+          {line.note&&<div style={{fontSize:"11px",color:"#a04010",fontWeight:"800",marginTop:"3px",lineHeight:"1.6"}}>⚠ 客製化餐點要先問過師傅可不可以做</div>}
+        </div>
+      ) : (line.note&&(
+        <div style={{marginTop:"8px",fontSize:"13px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"8px",padding:"6px 9px",lineHeight:"1.6"}}>
+          ⚠ 特殊需求：{line.note}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1458,7 +1473,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
           <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
-          <div style={{fontSize:"9px",color:"#c8b49a"}}>v181</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>v182</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
@@ -4680,7 +4695,7 @@ const rowBg=(g)=>{
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
-          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v181</div>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 v182</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>setShowItemsOff(true)}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -5068,9 +5083,8 @@ const rowBg=(g)=>{
                             {copiedId===`lock_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>問可否鎖單</>}
                           </button>
                           <button onClick={()=>{
-                              const nm=window.prompt("客人說不用先鎖單?\n填確認的夥伴名字:"); if(nm===null) return;
                               const d=new Date();
-                              setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:true,noEarlyLockBy:nm.trim(),noEarlyLockAt:`${d.getMonth()+1}/${d.getDate()}`}));
+                              setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:true,noEarlyLockAt:`${d.getMonth()+1}/${d.getDate()}`}));
                             }}
                             style={{fontSize:"11px",background:"#fff",color:"#8a6a4a",border:"1.5px solid #d0c0a8",borderRadius:"6px",
                               padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>✕ 不用</button>
@@ -5339,8 +5353,8 @@ const rowBg=(g)=>{
                     {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
                     {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
                     {g.noEarlyLock&&!g.locked&&!g.archived&&!isPastMeal(g)&&(
-                      <div title={`${g.noEarlyLockBy||""} ${g.noEarlyLockAt||""} 問過,客人不先鎖單`}
-                        onClick={()=>{ if(window.confirm("取消「客人不先鎖單」的標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:false,noEarlyLockBy:"",noEarlyLockAt:""})); }}
+                      <div title={`${g.noEarlyLockAt||""} 問過,客人不先鎖單`}
+                        onClick={()=>{ if(window.confirm("取消「客人不先鎖單」的標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:false,noEarlyLockAt:""})); }}
                         style={{fontSize:"9px",background:"#f0ece4",color:"#8a7a6a",border:"1px solid #d8ccb8",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>已問·不鎖單</div>
                     )}
                     {lowConsumeOk(g)&&!g.locked&&!g.archived&&!g.noEarlyLock&&!isPastMeal(g)&&!g.onsiteOrder&&g.archiveType!=="menu"&&!["餐點封存","已KEY需改單","未KEY-需優先KEY","未KEY-超過1週無法先KEY"].includes((g.statusLog&&g.statusLog.status)||"")&&(
@@ -6782,7 +6796,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent 
       <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v181</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 v182</div>
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
@@ -7528,7 +7542,7 @@ function StatsPage({ onBack, staffList }) {
 
       <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v181</div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 v182</div>
         <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
           <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
           <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
@@ -8087,6 +8101,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
   const [addNum, setAddNum] = useState("");
   const [addName, setAddName] = useState("");
   const [addLines, setAddLines] = useState([{name:"",price:"",qty:1}]);
+  const [addCat, setAddCat] = useState("brunch");
   const [staffMode, setStaffMode] = useState(false); // 夥伴模式(可改素湯)
   const [smPin, setSmPin] = useState(null);
   // 餐點封存(員工開啟時) —— 跟大訂追蹤表同一份資料,自動連動
@@ -8437,8 +8452,34 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
             </div>
             {addMode==="merge"
               ? <input value={addNum} onChange={e=>setAddNum(e.target.value.replace(/\D/g,""))} placeholder="輸入客人號碼（例：3）" inputMode="numeric" style={{width:"100%",padding:"10px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",marginBottom:"10px",boxSizing:"border-box"}}/>
-              : <input value={addName} onChange={e=>setAddName(e.target.value)} placeholder="客人姓名（可不填）" style={{width:"100%",padding:"10px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",marginBottom:"10px",boxSizing:"border-box"}}/>}
+              : <input value={addName} onChange={e=>setAddName(e.target.value)} placeholder="客人姓名（不填就顯示：JINHER 夥伴幫點）" style={{width:"100%",padding:"10px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",marginBottom:"10px",boxSizing:"border-box"}}/>}
             <div style={{fontSize:"12px",color:"#aa8060",fontWeight:"700",marginBottom:"6px"}}>餐點（菜單沒有的自己打，例：素湯）</div>
+            {/* 從菜單選(有金額自動帶入);系統沒有的才用下面自己打 */}
+            <div style={{background:"#faf6ee",borderRadius:"9px",padding:"9px",marginBottom:"9px"}}>
+              <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>從菜單選（點一下加入，金額自動帶）</div>
+              <select value={addCat} onChange={e=>setAddCat(e.target.value)}
+                style={{width:"100%",boxSizing:"border-box",padding:"8px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700",marginBottom:"7px"}}>
+                {[...FOOD_CATS,...DRINK_CATS].map(c=><option key={c} value={c}>{MENU[c]?.label||c}</option>)}
+              </select>
+              <div style={{display:"flex",gap:"5px",flexWrap:"wrap",maxHeight:"188px",overflowY:"auto"}}>
+                {(MENU[addCat]?.items||[]).map(it=>{
+                  const pr=getItemPrice(it, group.memberType==="existing"||group.memberType==="new");
+                  return (
+                    <button key={it.id} onClick={()=>setAddLines(p=>{
+                        const idx=p.findIndex(x=>x.name===it.name);
+                        if(idx>=0) return p.map((x,j)=>j!==idx?x:{...x,qty:(x.qty||1)+1});
+                        const blank=p.findIndex(x=>!x.name.trim());
+                        const row={name:it.name,price:String(pr),qty:1};
+                        return blank>=0 ? p.map((x,j)=>j===blank?row:x) : [...p,row];
+                      })}
+                      style={{padding:"7px 10px",borderRadius:"8px",border:"1.5px solid #d8c8b0",background:"#fff",color:"#5a4030",fontSize:"12px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
+                      {it.name}<span style={{color:"#9c5a1c",marginLeft:"5px",fontWeight:"800"}}>${pr}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{fontSize:"11px",color:"#a08a70",marginBottom:"5px"}}>菜單沒有的，在下面自己打名稱和金額：</div>
             {addLines.map((ln,i)=>(
               <div key={i} style={{display:"flex",gap:"6px",marginBottom:"6px",alignItems:"center"}}>
                 <input value={ln.name} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,name:e.target.value}))} placeholder="餐點名稱" style={{flex:2,padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",minWidth:0,boxSizing:"border-box"}}/>
@@ -8454,7 +8495,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                 const lines=addLines.filter(l=>l.name.trim()).map(l=>({custom:true,name:l.name.trim(),price:parseInt(l.price)||0,qty:l.qty||1}));
                 if(lines.length===0) return;
                 if(addMode==="merge"&&!addNum.trim()) return;
-                onAddStaffOrder&&onAddStaffOrder({mode:addMode,num:addNum,guestName:addName,lines});
+                onAddStaffOrder&&onAddStaffOrder({mode:addMode,num:addNum,guestName:addName.trim()||"JINHER 夥伴幫點",lines});
                 setAddOpen(false);setAddLines([{name:"",price:"",qty:1}]);setAddNum("");setAddName("");
               }} style={{flex:2,padding:"11px",borderRadius:"10px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>儲存</button>
             </div>
