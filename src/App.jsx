@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v189";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v190";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5883,10 +5883,7 @@ const rowBg=(g)=>{
                         ? <div onClick={()=>showToast("請先在右邊「會員」欄確認身分，才會顯示代碼")} style={{cursor:"pointer",fontSize:"10px",fontWeight:"700",color:"#c06030",background:"#fbeede",border:"1px solid #e8c8a0",borderRadius:"6px",padding:"4px 5px",lineHeight:"1.3"}}>⚠ 先確認<br/>會員身分</div>
                         : <div style={{fontSize:"14px",fontWeight:"700",color:"#8a5210"}}>{g.code}</div>}
 
-                    {g.memberType&&g.memberType!=="private"&&g.code&&(
-                      <button onClick={()=>copyCode(g.code)}
-                        style={{fontSize:"9px",padding:"2px 7px",borderRadius:"4px",background:"#ddd0bc",border:"1px solid #d0c0a8",color:"#6a4a2e",cursor:"pointer",marginTop:"2px",fontWeight:"700"}}>複製代碼</button>
-                    )}
+                    {/* 〔複製代碼〕按鈕已移除;代碼仍顯示在上方,LINE 訊息範本裡也帶著代碼 */}
                     {(()=>{
                       // LINE 按鈕:依狀況顯示現在該傳什麼
                       const needDep=needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit;
