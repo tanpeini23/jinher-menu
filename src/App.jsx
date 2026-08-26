@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v188";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v189";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3532,7 +3532,7 @@ function LineNameModal({ g, onClose }){
     if(needDep) return "dep";
     const dl2=getOrderDeadline(g.date);
     const near2=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
-    if(near2&&needN>0&&doneN2<needN&&!lowConsumeOk(g)) return "chase";
+    if(near2&&needN>0&&doneN2<needN&&!lowConsumeOk(g)&&!g.onsiteOrder) return "chase";   // 現場點餐不用線上點,不催
     if(lowConsumeOk(g)&&!g.locked) return "lock";
     if(g.fromMai) return "name";          // 剛匯入的:先改 LINE 名稱
     return "";
@@ -3567,7 +3567,7 @@ function LineNameModal({ g, onClose }){
             const need=adultsOfG(g);
             const done=(g.orders||[]).length;
             const dl=getOrderDeadline(g.date); const near=dl&&(dl-new Date())>0&&(dl-new Date())<=48*3600000;
-            if(need>0&&done<need&&near) list.push(["⏰ 催點餐", msgChase(g), "#c06030", "chase"]);
+            if(need>0&&done<need&&near&&!g.onsiteOrder) list.push(["⏰ 催點餐", msgChase(g), "#c06030", "chase"]);   // 現場點餐不催
             // 低消達標判定:包廂看金額、一般看份數(跟客人端同一套)
             if(lowConsumeOk(g)&&!g.locked) list.push(["🔒 問可否提前鎖單", msgEarlyLock(g), "#2a7a4a", "lock"]);
             return list.map(([label,txt,color,key])=>{
@@ -3656,6 +3656,32 @@ const TIP_TXT = {
   vip:"包廂：低消 $6,000（不含服務費、開瓶費）、用餐 3 小時、最多 10 位、訂金最低 $1,000。",
   lineBtn:"產生要傳給客人的 LINE 訊息（訂金、點餐代碼、催點餐），還有 LINE 名稱怎麼改。",
 };
+// 狀態小圖示:不提前鎖單 / 改人數 / 封存天數。原本在代碼欄,搬到備註欄
+function StatusIcons({ g, setGroups }){
+  const tags=[];
+  if(g.noEarlyLock&&!g.locked&&!g.archived&&!isPastMeal(g))
+    tags.push({k:"nl",ico:"🔓",t:`${g.noEarlyLockAt||""} 問過，客人不提前鎖單`,c:"#8a7a6a",bg:"#f0ece4",
+      click:()=>{ if(window.confirm("取消「客人不提前鎖單」的標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:false,noEarlyLockAt:""})); }});
+  if(g.depositFrom)
+    tags.push({k:"df",ico:"📢",t:`${g.depositFrom} 改${g.depositFromNote||"人數"}，訂金從此日算`,c:"#fff",bg:"#c06020"});
+  const age=archiveAgeDays(g);
+  if(age!==null){
+    if(isPastMeal(g)) tags.push({k:"ar",ico:"📦",t:`已封存（第 ${age} 天）`,c:"#8a7a6a",bg:"#f0ece4"});
+    else if(age>=7)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，已超過 7 天要重新封存`,c:"#fff",bg:"#c02020",blink:true});
+    else if(age>=6)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，明天過期要重封`,c:"#fff",bg:"#e08030",blink:true});
+    else if(age>=5)   tags.push({k:"ar",ico:"📦",t:`封存第 ${age} 天（保留 7 天）`,c:"#5a7a5a",bg:"#eef4ea"});
+  }
+  if(tags.length===0) return null;
+  return (
+    <div style={{display:"flex",gap:"3px",marginBottom:"3px",flexWrap:"wrap"}}>
+      {tags.map(t=>(
+        <span key={t.k} title={t.t} onClick={t.click} className={t.blink?"blinkTag":""}
+          style={{fontSize:"12px",lineHeight:1,background:t.bg,color:t.c,borderRadius:"4px",padding:"3px 6px",
+            cursor:t.click?"pointer":"help",whiteSpace:"nowrap"}}>{t.ico}</span>
+      ))}
+    </div>
+  );
+}
 // 備註欄:系統標籤 + 大麥備註 + 夥伴手寫(記名字)
 function NoteCell({ g, setGroups, staffList }){
   const [open,setOpen]=useState(false);
@@ -3682,6 +3708,7 @@ function NoteCell({ g, setGroups, staffList }){
   };
   return (
     <div style={{textAlign:"left",minWidth:0}}>
+      <StatusIcons g={g} setGroups={setGroups}/>
       {all.length>0&&(
         <div style={{display:"flex",gap:"3px",flexWrap:"wrap",marginBottom:"3px"}}>
           {all.map(k=>{
@@ -5866,7 +5893,7 @@ const rowBg=(g)=>{
                       const need2=adultsOfG(g);
                       const dl2=getOrderDeadline(g.date);
                       const near=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
-                      const notDone=need2>0&&(g.orders||[]).length<need2&&!lowConsumeOk(g);
+                      const notDone=need2>0&&(g.orders||[]).length<need2&&!lowConsumeOk(g)&&!g.onsiteOrder;   // 現場點餐不催
                       const label = needDep?"催訂金" : (near&&notDone?"催點餐" : (g.fromMai?"改名字":"LINE"));
                       const hot = needDep||(near&&notDone)||g.fromMai;
                       return (
@@ -5881,32 +5908,7 @@ const rowBg=(g)=>{
                     })()}
                     {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
                     {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
-                    {/* 狀態類:合併成一排小圖示,滑過去看細節(不佔空間) */}
-                    {(()=>{
-                      const tags=[];
-                      if(g.noEarlyLock&&!g.locked&&!g.archived&&!isPastMeal(g))
-                        tags.push({k:"nl",ico:"🔓",t:`${g.noEarlyLockAt||""} 問過，客人不提前鎖單`,c:"#8a7a6a",bg:"#f0ece4",
-                          click:()=>{ if(window.confirm("取消「客人不提前鎖單」的標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:false,noEarlyLockAt:""})); }});
-                      if(g.depositFrom)
-                        tags.push({k:"df",ico:"📢",t:`${g.depositFrom} 改${g.depositFromNote||"人數"}，訂金從此日算`,c:"#fff",bg:"#c06020"});
-                      const age=archiveAgeDays(g);
-                      if(age!==null){
-                        if(isPastMeal(g)) tags.push({k:"ar",ico:"📦",t:`已封存（第 ${age} 天）`,c:"#8a7a6a",bg:"#f0ece4"});
-                        else if(age>=7)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，已超過 7 天要重新封存`,c:"#fff",bg:"#c02020",blink:true});
-                        else if(age>=6)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，明天過期要重封`,c:"#fff",bg:"#e08030",blink:true});
-                        else if(age>=5)   tags.push({k:"ar",ico:"📦",t:`封存第 ${age} 天（保留 7 天）`,c:"#5a7a5a",bg:"#eef4ea"});
-                      }
-                      if(tags.length===0) return null;
-                      return (
-                        <div style={{display:"flex",gap:"3px",justifyContent:"center",marginTop:"3px",flexWrap:"wrap"}}>
-                          {tags.map(t=>(
-                            <span key={t.k} title={t.t} onClick={t.click} className={t.blink?"blinkTag":""}
-                              style={{fontSize:"11px",lineHeight:1,background:t.bg,color:t.c,borderRadius:"4px",padding:"3px 5px",
-                                cursor:t.click?"pointer":"help",whiteSpace:"nowrap"}}>{t.ico}</span>
-                          ))}
-                        </div>
-                      );
-                    })()}
+                    {/* 狀態圖示(🔓不提前鎖單 / 📢改人數 / 📦封存天數)已搬到備註欄 */}
                     {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
                       style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
                     {depositUrgency(g)==="overdue"&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>逾期</div>}
@@ -8802,7 +8804,10 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                       <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
                         <div style={{fontSize:"12px",color:"#c89a5a",fontWeight:"700"}}>[客製]</div>
                         <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
-                          <span style={{color:"#5a4530"}}>{line.name}{line.qty>1?` ×${line.qty}`:""}</span>
+                          <span style={{color:"#5a4530"}}>
+                            <span style={{fontSize:"13px",fontWeight:"900",color:"#fff",background:"#8a5210",borderRadius:"5px",padding:"1px 7px",marginRight:"6px"}}>{order.num}</span>
+                            {line.name}{line.qty>1?` ×${line.qty}`:""}
+                          </span>
                           <span style={{color:"#9a7c5a"}}>${(Number(line.price)||0)*(line.qty||1)}</span>
                         </div>
                       </div>
@@ -8816,7 +8821,10 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                     <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
                       <div style={{fontSize:"12px",color:"#2a7a4a",fontWeight:"700"}}>{"["+cat+"]"}</div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
-                        <span style={{color:"#5a4530"}}>{item.name}</span>
+                        <span style={{color:"#5a4530"}}>
+                          <span style={{fontSize:"13px",fontWeight:"900",color:"#fff",background:"#8a5210",borderRadius:"5px",padding:"1px 7px",marginRight:"6px"}}>{order.num}</span>
+                          {item.name}
+                        </span>
                         <span style={{color:"#9a7c5a"}}>${getItemPrice(item,isMember)}</span>
                       </div>
                       {(()=>{
@@ -8827,7 +8835,8 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                         if(line.sugar) parts.push(`甜度:${line.sugar}`);
                         if(line.mascot) parts.push(`造型:${line.mascot}`);
                         if(line.toggles&&line.toggles.length) parts.push(line.toggles.join("、"));
-                        return parts.length>0?<div style={{fontSize:"12px",color:"#7a9a7a",marginTop:"2px"}}>{parts.join(" · ")}</div>:null;
+                        return parts.length>0?<div style={{fontSize:"14px",fontWeight:"800",color:"#1a6a4a",marginTop:"4px",lineHeight:"1.5",
+                          background:"#eef7f0",border:"1.5px solid #8ac4a0",borderRadius:"7px",padding:"5px 9px"}}>{parts.join(" · ")}</div>:null;
                       })()}
                       {/* 特殊需求:只有夥伴能寫(客人在 LINE 說,我們幫他記) */}
                       {fromStaff ? (
@@ -8854,8 +8863,9 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                         const hasSoup = ["A","C"].includes(line.setMeal.id);
                         const veg = line.setMeal.veggieSoup;
                         return (
-                          <div style={{fontSize:"12px",color:"#5a9a5a",marginTop:"2px"}}>
-                            {sm?.label}
+                          <div style={{fontSize:"15px",fontWeight:"800",color:"#1a6a3a",marginTop:"5px",lineHeight:"1.6",
+                            background:"#e6f6ea",border:"2px solid #3a9a5a",borderRadius:"8px",padding:"6px 9px"}}>
+                            🍱 {sm?.label}
                             {hasSoup&&veg&&<span style={{color:"#dfeadf",fontWeight:"800",background:"#5fe08a",borderRadius:"4px",padding:"1px 7px",marginLeft:"5px"}}>🌿 素湯</span>}
                             {dk && ` · ${dk.name}`}
                             {dkParts.length>0 && ` · ${dkParts.join(" · ")}`}
