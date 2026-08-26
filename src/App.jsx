@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v191";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v192";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5113,7 +5113,19 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const filtered=showMaiOnly
     ? groups.filter(g=>g.fromMai&&!(g.archived&&g.archiveType!=="menu"))
     : filter.trim()
-    ? groups.filter(g=>!g.fromMai&&((g.date||"").includes(filter.trim())||(g.phone||"").includes(filter.trim())||(g.name||"").includes(filter.trim())))
+    ? groups.filter(g=>{
+        const kw=filter.trim().toLowerCase();
+        if(g.fromMai) return false;
+        // 標籤:把 key 轉成看得到的中文字(畫盤、過敏…),不然搜中文搜不到
+        const tagTxt=[...(g.noteTags||[]),...autoTagsFrom(g.maiNote)]
+          .map(k=>(NOTE_TAGS.find(t=>t.k===k)||{}).label||k).join(" ");
+        const noteTxt=(g.noteLogs||[]).map(n=>`${n.txt||""} ${n.by||""}`).join(" ");
+        return [
+          g.date, g.phone, g.name, g.time, g.code,          // 原本就有的 + 代碼/時間
+          g.headcount, g.collector,                          // 人數、收訂人
+          tagTxt, noteTxt, g.maiNote, g.customPlate,         // 第10項:標籤、備註、大麥備註
+        ].some(v=>String(v||"").toLowerCase().includes(kw));
+      })
     : groups.filter(g=>!g.fromMai&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&(showPast?isPastMeal(g):!isPastMeal(g)));
   const parseDT=(g)=>{const[m,d]=(g.date||"0/0").split("/").map(Number);const[h,mi]=(g.time||"0:0").split(":").map(Number);return (m||0)*1000000+(d||0)*10000+(h||0)*100+(mi||0);};
   filtered.sort((a,b)=>parseDT(a)-parseDT(b));
@@ -5328,7 +5340,7 @@ const rowBg=(g)=>{
           <button title={TIP_TXT.dingwe} onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button title={TIP_TXT.mai} onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
-          <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="篩選日期（如 5/3）"
+          <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="🔍 搜 日期/姓名/電話/代碼/標籤/備註/大麥備註"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
           {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
         </div>
@@ -9131,8 +9143,8 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
       {allOrders.length > 0 && (
         <div style={{padding:"14px 16px 24px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#7a5c3e",marginBottom:"4px"}}>
-            <span>全組小計（{allOrders.length}人）</span>
-            <span style={{color:"#aa8060"}}>${grandTotal}</span>
+            <span>全組小計（{allOrders.length}人）{memberFeeInfo.fee>0?<span style={{fontSize:"11px",fontWeight:"700",color:"#2a7a4a"}}>　含入會 $100</span>:null}</span>
+            <span style={{color:"#aa8060"}}>${grandSubtotal}</span>
           </div>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"20px",color:"#8a5210",fontWeight:"700",marginTop:"4px"}}>
             <span>全組含10%服務費{memberFeeInfo.fee>0?<span style={{fontSize:"11px",fontWeight:"600",color:"#2a7a4a"}}><br/>（含入會$100，入會費不收服務費）</span>:null}</span>
