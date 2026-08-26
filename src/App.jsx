@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v190";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v191";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4762,9 +4762,12 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
                 onChange={(nc)=>save({midCounts:{...(day.midCounts||{}),[b.id]:nc}})}/>;
             })()}
             {(()=>{
-              const drawer=+((bases.filter(x=>x.label.includes("錢櫃"))[0]||{}).amt||10000);
+              const b0=(bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0]||{});
+              const drawer=+(b0.amt||10000);
               const sales=+(day.midSales||0), exp=+(day.midExp||0);
               const pack=drawer+sales-exp;
+              const cnt=((day.midCounts||{})[b0.id])||{};
+              const counted=CASH_DENOM.reduce((s,d)=>s+d*(+cnt[d]||0),0);   // 上面清點表數出來的錢
               const box={padding:"7px 9px",borderRadius:"8px",background:"#fff",border:"1px solid #d8c8b0",textAlign:"center",minWidth:"92px"};
               return (
                 <div style={{background:"#f8f4ec",borderRadius:"9px",padding:"10px",marginTop:"8px"}}>
@@ -4784,6 +4787,39 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
                     <div style={{...box,background:"#5a7a9a",border:"none"}}><div style={{fontSize:"10px",color:"#dce8f4",fontWeight:"700"}}>錢櫃應有</div><div style={{fontSize:"17px",fontWeight:"900",color:"#fff"}}>${pack.toLocaleString()}</div></div>
                   </div>
                   {sales>0&&exp>sales&&<div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",marginTop:"7px",textAlign:"center"}}>⚠ 支出比現金營業額多，錢不夠補支出</div>}
+
+                  {/* 清點合計 vs 錢櫃應有:自動比對 */}
+                  {(()=>{
+                    if(counted<=0) return (
+                      <div style={{fontSize:"11px",color:"#8a9ab0",fontWeight:"700",marginTop:"8px",textAlign:"center",background:"#f4f7fa",borderRadius:"8px",padding:"7px"}}>
+                        上面清點表填完張數，這裡會自動比對
+                      </div>
+                    );
+                    const diff=counted-pack;
+                    const ok=diff===0;
+                    return (
+                      <div style={{marginTop:"8px",borderRadius:"9px",padding:"9px 10px",textAlign:"center",
+                        background:ok?"#e6f6ea":"#fdeceb",border:`2px solid ${ok?"#2a8a4a":"#c02020"}`}}>
+                        <div style={{fontSize:"12px",color:ok?"#1a6a3a":"#a03020",fontWeight:"800",marginBottom:"3px"}}>
+                          清點合計 ${counted.toLocaleString()}　／　錢櫃應有 ${pack.toLocaleString()}
+                        </div>
+                        <div style={{fontSize:ok?"16px":"15px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>
+                          {ok ? "✅ 一致，可以收" : `⚠ 差 $${Math.abs(diff).toLocaleString()}（實際${diff>0?"多":"少"}了）`}
+                        </div>
+                        {!ok&&<div style={{fontSize:"11px",color:"#a03020",fontWeight:"700",marginTop:"4px",lineHeight:"1.6"}}>
+                          先重數一次。還是不對就去〔算錢〕按〔✗ 有不符〕留紀錄，不要自己貼錢。
+                        </div>}
+                      </div>
+                    );
+                  })()}
+
+                  {/* 白話解釋:新人最常搞混這三個 */}
+                  <div style={{fontSize:"11px",color:"#7a6a50",marginTop:"8px",lineHeight:"1.9",background:"#fffdf6",border:"1px dashed #d8c8a8",borderRadius:"8px",padding:"8px 10px",textAlign:"left"}}>
+                    <b style={{color:"#8a5210"}}>白話講：</b><br/>
+                    <b>現金營業額</b>＝今天收進來、<b>現在手上的錢</b><br/>
+                    <b>支出</b>＝拿錢出去<b>買的東西</b>（收據要留著）<br/>
+                    <b>備用金</b>＝<b>現金 ＋ 帳單</b>，兩個加起來要剛好 <b>$20,000</b>
+                  </div>
                 </div>
               );
             })()}
@@ -8644,6 +8680,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
   const isMember = group.memberType !== "none";
   const allOrders = group.orders || [];
   const [confirmCancel, setConfirmCancel] = useState(null); // {num, guestName}
+  const [noteOpen, setNoteOpen] = useState({});             // 第1項:哪幾號的備註欄展開了(預設全收起)
   const grandTotal = allOrders.reduce((s, order) => s + orderTotal(order.lines || [], isMember), 0);
   const allLines = allOrders.flatMap(o => o.lines || []);
   const memberFeeInfo = calcMemberFee(allLines, group.memberType);
@@ -8787,6 +8824,20 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                     <span style={{fontSize:"14px",color:"#8a5210",fontWeight:"700"}}>${orderAmtWithService}</span>
+                    {fromStaff&&!group.locked&&(()=>{
+                      const on=!!noteOpen[order.num];
+                      const n=(order.lines||[]).filter(l=>!l.custom&&String(l.note||"").trim()).length;
+                      return (
+                        <button onClick={()=>setNoteOpen(p=>({...p,[order.num]:!on}))}
+                          title="展開這一組每道菜的備註輸入框"
+                          style={{padding:"4px 10px",borderRadius:"8px",fontSize:"11px",cursor:"pointer",fontWeight:"800",
+                            border:`1px solid ${n>0?"#c9752a":"#8a6a4a"}`,
+                            background:n>0?"#fff6ec":"none",
+                            color:n>0?"#a04010":"#c8a880"}}>
+                          {on?"收起備註":`備註${n>0?` (${n})`:""}`}
+                        </button>
+                      );
+                    })()}
                     {onCancelOrder&&!group.locked&&(
                       <button onClick={()=>setConfirmCancel({num:order.num,guestName:order.guestName})}
                         style={{padding:"4px 10px",borderRadius:"8px",border:"1px solid #7a3030",background:"none",color:"#e87a5a",fontSize:"11px",cursor:"pointer"}}>
@@ -8837,6 +8888,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                       })()}
                       {/* 特殊需求:只有夥伴能寫(客人在 LINE 說,我們幫他記) */}
                       {fromStaff ? (
+                        noteOpen[order.num] ? (
                         <div style={{marginTop:"5px"}}>
                           <input value={line.note||""} placeholder="特殊需求（例如：不要蔥、加飯）"
                             onChange={e=>onEditLineNote&&onEditLineNote(order.num,li,e.target.value)}
@@ -8845,6 +8897,9 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                               color:"#3a2a18",fontSize:"13px",fontWeight:line.note?"700":"400",fontFamily:"inherit",outline:"none"}}/>
                           {line.note&&<div style={{fontSize:"11px",color:"#a04010",fontWeight:"800",marginTop:"2px",lineHeight:"1.5"}}>⚠ 客製化要先問過師傅可不可以做</div>}
                         </div>
+                        ) : (line.note&&(
+                          <div style={{fontSize:"13px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"7px",padding:"5px 8px",marginTop:"4px"}}>⚠ 特殊需求：{line.note}</div>
+                        ))
                       ) : (line.note&&(
                         <div style={{fontSize:"13px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"7px",padding:"5px 8px",marginTop:"4px"}}>⚠ 特殊需求：{line.note}</div>
                       ))}
