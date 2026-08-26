@@ -437,10 +437,15 @@ const VIP_HINT_WORDS = ["包廂","包間","包廂訂金","低消","點餐"];
 function lowConsumeCount(lines){
   let n=0;
   (lines||[]).forEach(l=>{
+    const q=Math.max(1, parseInt(l.qty)||1);   // 客人點的沒有 qty→1;夥伴加點才有數量
     const it=findItem(l.itemId);
-    if(!it) return;
-    if(isMainDish(it)) n++;        // 主餐(含升級套餐)算 1
-    else if(isDrink(it)) n++;      // 單點飲料算 1
+    if(it){
+      if(isMainDish(it)) n+=q;     // 主餐(含升級套餐)算 1
+      else if(isDrink(it)) n+=q;   // 單點飲料算 1(啤酒/紅白酒/無酒精都在 DRINK_CATS 內)
+      return;
+    }
+    // 夥伴幫客人加的品項:菜單沒有、自己打名稱的,預設算低消,勾「不算低消」才排除
+    if(l.custom && String(l.name||"").trim() && !l.lcSkip) n+=q;
   });
   return n;
 }
@@ -4191,6 +4196,378 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
   );
 }
 
+// ─── 印訂位表:上傳大麥 Excel → 自動整理 → 每格可改 → A4 列印 ────────────────
+const PD_A4_W   = 794;    // A4 寬 210mm @96dpi
+const PD_A4_H   = 1122;   // A4 高 297mm @96dpi
+const PD_WKEY   = "pdColW_v2";
+const PD_SKEY   = "pdSize_v2";
+// 字 12 時「剛好看得完整、留一點餘裕」的寬度;其餘全部留給備註
+// 性別實際值是 先生/小姐/不透露(3字),人數可能是 17大1小,所以這兩欄不能太窄
+const PD_DEF_W  = { date:70, time:52, name:80, sex:46, tel:80, pax:56 };   // 合計 384 → 備註拿到 410
+const PD_DEF_SZ = { font:12, row:38 };
+const PD_COLS   = [
+  { k:"date", label:"日期" }, { k:"time", label:"時間" }, { k:"name", label:"姓名" },
+  { k:"sex",  label:"性別" }, { k:"tel",  label:"電話" }, { k:"pax",  label:"人數" },
+  { k:"note", label:"備註" },
+];
+
+// ── Excel 值 → 想要的格式(獨立出來才能單獨測試)────────────────────────────
+// Excel 序號 → 日期各部位。純算式,不依賴 XLSX.SSF(不同版本不一定有)
+function pdSfx(v) {
+  if (typeof v !== "number" || !isFinite(v) || v <= 0) return null;
+  const d = new Date(Math.round((v - 25569) * 86400000));   // 25569 = 1970-01-01 的序號
+  if (isNaN(d.getTime())) return null;
+  return { m:d.getUTCMonth() + 1, d:d.getUTCDate(), H:d.getUTCHours(), M:d.getUTCMinutes() };
+}
+function pdFmtDate(v) {
+  if (v instanceof Date) return `${v.getMonth() + 1}/${v.getDate()}`;
+  const o = (typeof v === "number" && v >= 1) ? pdSfx(v) : null;   // <1 是純時間值,不是日期
+  if (o && o.m) return `${o.m}/${o.d}`;
+  const s = String(v ?? "").trim();
+  const a = s.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);   // 2026-03-14
+  if (a) return `${+a[2]}/${+a[3]}`;
+  const b = s.match(/(\d{1,2})[\/\-.](\d{1,2})(?!\d)/);           // 3/14
+  if (b) return `${+b[1]}/${+b[2]}`;
+  return s;
+}
+function pdFmtTime(v) {
+  if (v instanceof Date) return `${String(v.getHours()).padStart(2,"0")}:${String(v.getMinutes()).padStart(2,"0")}`;
+  const o = pdSfx(v); if (o && o.H !== undefined) return `${String(o.H).padStart(2,"0")}:${String(o.M).padStart(2,"0")}`;
+  const s = String(v ?? "").trim();
+  const m = s.match(/(\d{1,2}):(\d{2})/);
+  return m ? `${m[1].padStart(2,"0")}:${m[2]}` : s;
+}
+function pdFmtTel(v) {
+  let s = String(v ?? "").trim();
+  if (/^\d+(\.0+)?$/.test(s)) s = s.replace(/\.0+$/, "");
+  if (/^9\d{8}$/.test(s)) s = "0" + s;              // Excel 把開頭的 0 吃掉了
+  return s;
+}
+function pdFmtPax(v) {
+  const s = String(v ?? "").trim();
+  const m = s.match(/大人\s*(\d+)[^\d]*小孩\s*(\d+)/);      // 大麥格式:「大人 4 / 小孩 3」
+  if (m) { const a = +m[1], k = +m[2]; return k > 0 ? `${a}大${k}小` : String(a); }
+  const n = s.match(/\d+/);
+  return n ? n[0] : s;
+}
+
+// 把大麥匯出的原始二維陣列整理成要印的列。回傳 {err} 或 {rows,count,skipped}
+function pdParse(raw, opts) {
+  const withShop = !!(opts && opts.withShop);
+  const gapN = (opts && Number.isFinite(opts.gap)) ? Math.max(0, opts.gap) : 3;
+  let hi = -1, H = [];
+  for (let r = 0; r < Math.min(raw.length, 8); r++) {
+    const row = (raw[r] || []).map(x => String(x ?? ""));
+    if (row.some(x => x.includes("訂位日期") || x.includes("日期"))) { hi = r; H = row; break; }
+  }
+  if (hi < 0) return { err:"❌ 找不到標題列(要有「訂位日期」這一欄)。確認匯出的是訂位記錄,不是別張表。" };
+
+  const F = (...ks) => H.findIndex(x => ks.some(k => x.includes(k)));
+  const di  = F("訂位日期", "日期");
+  const ti  = H.findIndex(x => x.includes("時間") && !x.includes("下訂") && !x.includes("更新"));
+  const nmi = H.findIndex(x => x.includes("訂位人名稱") || (x.includes("訂位人") && !x.includes("人數")) || x === "姓名");
+  const gi  = F("性別");
+  const pi  = H.findIndex(x => x.includes("人數") && !x.includes("開桌"));
+  const phi = F("聯絡電話", "電話", "手機");
+  const sti = F("預訂桌位", "桌位");
+  const sui = F("狀態");
+  const x1  = F("用餐目的"), x2 = F("特殊需求"), x3 = F("顧客備註"), x4 = F("店家備註");
+
+  const miss = [];
+  if (di < 0) miss.push("日期"); if (nmi < 0) miss.push("姓名"); if (phi < 0) miss.push("電話");
+  if (miss.length) return { err:`❌ 這幾欄找不到:${miss.join("、")}。可能匯出時漏勾欄位。` };
+
+  let skipped = 0;
+  const out = [];
+  const clean = (x) => String(x ?? "").replace(/\s+/g, " ").trim();   // 顧客備註裡有換行,會撐爆列高
+  for (let r = hi + 1; r < raw.length; r++) {
+    const row = raw[r] || [];
+    const at = (i) => (i >= 0 ? row[i] : "");
+    const date = pdFmtDate(at(di));
+    const name = String(at(nmi) ?? "").trim();
+    if (!date && !name) continue;                                   // 整列空白
+    const st = String(at(sui) ?? "");
+    if (st.includes("取消") || st.includes("未到") || st.includes("no show")) { skipped++; continue; }
+
+    const src = withShop ? [x1, x2, x3, x4] : [x1, x2, x3];
+    out.push({
+      id: `r${r}_${Math.random().toString(36).slice(2, 7)}`,
+      date,
+      time: pdFmtTime(ti >= 0 ? at(ti) : at(di)),
+      name,
+      sex:  String(at(gi) ?? "").trim(),
+      tel:  pdFmtTel(at(phi)),
+      pax:  pdFmtPax(at(pi)),
+      note: src.map(i => clean(at(i))).filter(Boolean).join(" "),
+      room: String(at(sti) ?? "").includes("包廂"),
+    });
+  }
+  if (!out.length) return { err:"❌ 讀到 0 筆。檢查匯出時的「訂位時間」和「狀態」篩選條件。" };
+
+  // 依日期→時間排序,換時段自動空 3 行
+  const key = (x) => {
+    const d = (x.date.match(/(\d+)\/(\d+)/) || [0, 0, 0]);
+    const t = (x.time.match(/(\d+):(\d+)/) || [0, 0, 0]);
+    return (+d[1]) * 100000 + (+d[2]) * 1000 + (+t[1]) * 60 + (+t[2]);
+  };
+  out.sort((a, b) => key(a) - key(b));
+
+  const rows = [];
+  let prev = null;
+  out.forEach(x => {
+    const slot = `${x.date} ${x.time}`;
+    if (prev !== null && slot !== prev) {
+      for (let i = 0; i < gapN; i++) rows.push({ id:`g${rows.length}_${i}`, date:"", time:"", name:"", sex:"", tel:"", pax:"", note:"", room:false });
+    }
+    rows.push(x);
+    prev = slot;
+  });
+  return { rows, count:out.length, skipped };
+}
+
+// 可直接編輯的格子:用 contentEditable,只在外部值真的變動時才回寫,游標不會亂跳
+function PdCell({ value, onCommit, style }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && ref.current.innerText !== (value || "")) ref.current.innerText = value || "";
+  }, [value]);
+  return (
+    <div ref={ref} contentEditable suppressContentEditableWarning
+      onBlur={e => onCommit(e.currentTarget.innerText.replace(/\n+$/, ""))}
+      style={{ outline:"none", whiteSpace:"pre-wrap", wordBreak:"break-word", ...style }} />
+  );
+}
+
+function PrintDingwePage({ onClose }) {
+  const [rows, setRows]   = useState([]);
+  const [busy, setBusy]   = useState(false);
+  const [msg, setMsg]     = useState("");
+  const [howOpen, setHow] = useState(false);
+  const [withShop, setWithShop] = useState(false);   // 備註要不要含「店家備註」
+  const [gapN, setGapN]         = useState(3);       // 換時段空幾行
+  const rawRef = useRef(null);                       // 留著原始表格,切換選項時重整用
+  const [colW, setColW]   = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem(PD_WKEY) || "null"); return s && s.date ? s : { ...PD_DEF_W }; }
+    catch { return { ...PD_DEF_W }; }
+  });
+  const [sz, setSz] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem(PD_SKEY) || "null"); return s && s.font ? s : { ...PD_DEF_SZ }; }
+    catch { return { ...PD_DEF_SZ }; }
+  });
+
+  useEffect(() => { try { localStorage.setItem(PD_WKEY, JSON.stringify(colW)); } catch {} }, [colW]);
+  useEffect(() => { try { localStorage.setItem(PD_SKEY, JSON.stringify(sz)); } catch {} }, [sz]);
+
+  // ── 讀檔 ────────────────────────────────────────────────────────────────
+  const handleFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true); setMsg("");
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type:"array", cellDates:true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, { header:1 });
+
+      const res = pdParse(raw, { withShop, gap:gapN });
+      if (res.err) { setMsg(res.err); setBusy(false); return; }
+
+      rawRef.current = raw;
+      setRows(res.rows);
+      setMsg(`✅ 讀進 ${res.count} 筆${res.skipped ? `,略過 ${res.skipped} 筆已取消/未到` : ""}。每一格都可以直接點下去改字。`);
+    } catch (err) {
+      setMsg("❌ 讀檔失敗:" + (err && err.message ? err.message : String(err)));
+    }
+    setBusy(false);
+  };
+
+  // ── 切換選項:從原始表格重新整理一次 ──────────────────────────────────────
+  const reparse = (nextShop, nextGap) => {
+    if (!rawRef.current) { setWithShop(nextShop); setGapN(nextGap); return; }
+    if (!window.confirm("重新整理會把手動改過的字還原成原始資料，確定嗎？")) return;
+    const res = pdParse(rawRef.current, { withShop:nextShop, gap:nextGap });
+    if (res.err) { setMsg(res.err); return; }
+    setWithShop(nextShop); setGapN(nextGap);
+    setRows(res.rows);
+    setMsg(`✅ 已重新整理 ${res.count} 筆。`);
+  };
+
+  // ── 列的增刪改 ──────────────────────────────────────────────────────────
+  const setCell = (id, k, v) => setRows(p => p.map(x => (x.id === id ? { ...x, [k]:v } : x)));
+  const delRow  = (id)       => setRows(p => p.filter(x => x.id !== id));
+  const addAfter = (idx) => setRows(p => {
+    const n = [...p];
+    n.splice(idx + 1, 0, { id:`n${Date.now()}_${Math.random().toString(36).slice(2,6)}`, date:"", time:"", name:"", sex:"", tel:"", pax:"", note:"", room:false });
+    return n;
+  });
+
+  // ── 拖曳調整欄寬 ────────────────────────────────────────────────────────
+  const startDrag = (e, k) => {
+    e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, sw = colW[k];
+    const mv = (ev) => setColW(p => ({ ...p, [k]:Math.max(34, Math.round(sw + (ev.clientX - sx))) }));
+    const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+  };
+
+  const fixedW  = PD_COLS.slice(0, 6).reduce((s, c) => s + (colW[c.k] || 0), 0);
+  const noteW   = PD_A4_W - fixedW;
+  const tooWide = noteW < 90;
+  const perPage = Math.max(1, Math.floor((PD_A4_H - (sz.row + 6)) / sz.row));
+  const pages   = Math.max(1, Math.ceil(rows.length / perPage));
+
+  const BD   = "1px solid #000";
+  const btn  = { padding:"9px 13px", borderRadius:"8px", border:"1.5px solid #c8b89c", background:"#fdf9f0", color:"#6a4a2e", fontSize:"13px", fontWeight:"800", cursor:"pointer", whiteSpace:"nowrap" };
+  const cell = { fontSize:`${sz.font}px`, minHeight:`${sz.row - 8}px`, lineHeight:1.35, padding:"0 4px", display:"flex", alignItems:"center" };
+
+  return createPortal(
+    <div className="pdWrap" style={{ position:"fixed", inset:0, zIndex:900, background:"#e8e0d0", overflow:"auto", padding:"14px 0 60px" }}>
+      <style>{`
+        @media print{
+          @page{ size:A4 portrait; margin:0; }
+          html,body{ margin:0!important; padding:0!important; background:#fff!important; }
+          body *{ visibility:hidden!important; }
+          .pdSheet, .pdSheet *{ visibility:visible!important; }
+          .pdSheet{ position:absolute!important; left:0!important; top:0!important; margin:0!important; box-shadow:none!important; }
+          .pdNP{ display:none!important; }
+          .pdGut{ width:0!important; padding:0!important; border:none!important; }
+          .pdGut *{ display:none!important; }
+          .pdRow{ break-inside:avoid; page-break-inside:avoid; }
+          thead{ display:table-header-group; }
+        }
+      `}</style>
+
+      {/* 工具列 */}
+      <div className="pdNP" style={{ maxWidth:`${PD_A4_W + 60}px`, margin:"0 auto 12px", background:"#fdf9f0", border:"1.5px solid #c8b89c", borderRadius:"12px", padding:"12px 14px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap" }}>
+          <b style={{ fontSize:"15px", color:"#6a4a2e" }}>🖨 印訂位表</b>
+          <label style={{ ...btn, background:"#8a5210", color:"#fff", border:"1.5px solid #8a5210" }}>
+            {busy ? "讀取中…" : "📂 上傳大麥 Excel"}
+            <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ display:"none" }} />
+          </label>
+          <button style={btn} onClick={() => setHow(v => !v)}>❓ 大麥怎麼匯出</button>
+          <span style={{ flex:1 }} />
+          {rows.length > 0 && <span style={{ fontSize:"13px", color:"#6a4a2e", fontWeight:"800" }}>共 {rows.length} 行 · 預估 {pages} 頁</span>}
+          <button style={{ ...btn, background:"#2a7a4a", color:"#fff", border:"1.5px solid #2a7a4a", opacity:rows.length ? 1 : 0.4 }}
+            disabled={!rows.length} onClick={() => window.print()}>🖨 列印 A4</button>
+        </div>
+
+        {rows.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>字級</span>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, font:Math.max(9, p.font - 1) }))}>−</button>
+            <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"22px", textAlign:"center" }}>{sz.font}</b>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, font:Math.min(28, p.font + 1) }))}>＋</button>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700", marginLeft:"6px" }}>列高</span>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, row:Math.max(20, p.row - 2) }))}>−</button>
+            <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"28px", textAlign:"center" }}>{sz.row}</b>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, row:Math.min(80, p.row + 2) }))}>＋</button>
+            <button style={{ ...btn, marginLeft:"6px" }} onClick={() => { setColW({ ...PD_DEF_W }); setSz({ ...PD_DEF_SZ }); }}>↺ 欄寬字級復原</button>
+            <button style={btn} onClick={() => addAfter(rows.length - 1)}>＋ 最後加一行</button>
+            <span style={{ flex:1 }} />
+            <button style={{ ...btn, borderColor:"#e0a0a0", color:"#a03020" }}
+              onClick={() => { if (window.confirm("清空目前整份表格?")) { setRows([]); rawRef.current = null; setMsg(""); } }}>清空</button>
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
+            <button onClick={() => reparse(!withShop, gapN)}
+              title="大麥的「店家備註」欄。預設不印,因為多半是內部代號"
+              style={{ ...btn, background:withShop ? "#dff0e6" : "#fdf9f0", borderColor:withShop ? "#3a7a5a" : "#c8b89c", color:withShop ? "#1a6a3a" : "#8a7a60" }}>
+              {withShop ? "✓ 備註含店家備註" : "✕ 備註不含店家備註"}
+            </button>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700", marginLeft:"6px" }}>換時段空</span>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => reparse(withShop, Math.max(0, gapN - 1))}>−</button>
+            <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"18px", textAlign:"center" }}>{gapN}</b>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => reparse(withShop, Math.min(8, gapN + 1))}>＋</button>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>行</span>
+          </div>
+        )}
+
+        {msg && <div style={{ fontSize:"13px", fontWeight:"700", marginTop:"9px", color:msg.startsWith("✅") ? "#1a6a3a" : "#a03020" }}>{msg}</div>}
+        {tooWide && <div style={{ fontSize:"13px", fontWeight:"800", marginTop:"8px", color:"#fff", background:"#c02020", borderRadius:"7px", padding:"7px 10px" }}>⚠ 欄寬總和超過 A4,備註會被擠掉。把某一欄拉窄一點。</div>}
+        {rows.length > 0 && <div style={{ fontSize:"11px", color:"#8a7a60", marginTop:"7px" }}>拖曳標題列中間的直線就能調欄寬 · 每一格點下去直接改字 · 日期欄的〔＋包廂〕可以點著切換</div>}
+
+        {howOpen && (
+          <div style={{ fontSize:"13px", color:"#3a4a5a", background:"#f6f9fc", border:"1px solid #dce6f0", borderRadius:"9px", padding:"11px 13px", marginTop:"9px", lineHeight:"2" }}>
+            <b style={{ color:"#1a4a7a" }}>大麥匯出路徑</b><br />
+            餐廳控位 → 訂位記錄 → 訂位時間選「<b>隔天</b>」→ 狀態勾「<b>已預約</b>」「<b>已保留</b>」→ 篩選 → 匯出<br />
+            <span style={{ color:"#6a7a8a", fontSize:"12px" }}>匯出的檔案直接丟上來就好,欄位刪除、備註合併、日期格式、框線、包廂標記,系統全部自己做。</span>
+          </div>
+        )}
+      </div>
+
+      {/* A4 紙面 */}
+      <div className="pdSheet" style={{ width:`${PD_A4_W}px`, margin:"0 auto", background:"#fff", boxShadow:"0 6px 24px rgba(0,0,0,0.22)" }}>
+        {rows.length === 0 ? (
+          <div className="pdNP" style={{ padding:"70px 24px", textAlign:"center", color:"#9a8a70", fontSize:"14px", lineHeight:2 }}>
+            還沒有資料<br /><b style={{ color:"#8a5210" }}>按上面的〔📂 上傳大麥 Excel〕</b><br />
+            <span style={{ fontSize:"12px" }}>系統會自動刪掉用不到的欄位、合併備註、轉日期格式、標包廂、換時段空行</span>
+          </div>
+        ) : (
+          <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed" }}>
+            <colgroup>
+              <col className="pdGut" style={{ width:"56px" }} />
+              {PD_COLS.map(c => <col key={c.k} style={c.k === "note" ? undefined : { width:`${colW[c.k]}px` }} />)}
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="pdGut pdNP" style={{ border:BD, background:"#f0e8d8" }} />
+                {PD_COLS.map(c => (
+                  <th key={c.k} style={{ border:BD, background:"#f0e8d8", fontSize:`${Math.max(11, sz.font - 2)}px`, fontWeight:"800", color:"#3a2a1a", padding:"5px 4px", position:"relative" }}>
+                    {c.label}
+                    {c.k !== "note" && (
+                      <span className="pdNP" onPointerDown={e => startDrag(e, c.k)} title="拖曳調整欄寬"
+                        style={{ position:"absolute", top:0, right:"-3px", width:"7px", height:"100%", cursor:"col-resize", background:"transparent", zIndex:2 }} />
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => (
+                <tr key={r.id} className="pdRow" style={{ height:`${sz.row}px` }}>
+                  <td className="pdGut pdNP" style={{ border:BD, background:"#faf6ee", textAlign:"center", verticalAlign:"middle" }}>
+                    <button onClick={() => addAfter(idx)} title="下面插一行"
+                      style={{ background:"none", border:"none", color:"#2a7a4a", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 3px" }}>＋</button>
+                    <button onClick={() => delRow(r.id)} title="刪掉這一行"
+                      style={{ background:"none", border:"none", color:"#c04030", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 3px" }}>✕</button>
+                  </td>
+
+                  <td style={{ border:BD, verticalAlign:"middle", padding:"2px 0" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:"3px" }}>
+                      <PdCell value={r.date} onCommit={v => setCell(r.id, "date", v)} style={{ ...cell, flex:1, minWidth:0 }} />
+                      {r.room ? (
+                        <span onClick={() => setCell(r.id, "room", false)} title="點一下取消包廂"
+                          style={{ fontSize:`${Math.max(10, sz.font - 4)}px`, fontWeight:"900", color:"#000", border:"1px solid #000", borderRadius:"3px", padding:"0 3px", cursor:"pointer", whiteSpace:"nowrap" }}>包廂</span>
+                      ) : (
+                        <span className="pdNP" onClick={() => setCell(r.id, "room", true)} title="點一下標成包廂"
+                          style={{ fontSize:"10px", color:"#c0b0a0", border:"1px dashed #d0c0a8", borderRadius:"3px", padding:"0 3px", cursor:"pointer", whiteSpace:"nowrap" }}>＋包廂</span>
+                      )}
+                    </div>
+                  </td>
+
+                  {PD_COLS.slice(1).map(c => (
+                    <td key={c.k} style={{ border:BD, verticalAlign:"middle", padding:"2px 0", textAlign:(c.k === "sex" || c.k === "pax") ? "center" : "left" }}>
+                      <PdCell value={r[c.k]} onCommit={v => setCell(r.id, c.k, v)}
+                        style={{ ...cell, justifyContent:(c.k === "sex" || c.k === "pax") ? "center" : "flex-start" }} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="pdNP" style={{ maxWidth:`${PD_A4_W + 60}px`, margin:"14px auto 0", textAlign:"center" }}>
+        <button style={{ ...btn, padding:"11px 28px" }} onClick={onClose}>← 關閉,回櫃檯交接</button>
+      </div>
+    </div>,
+    document.body
+  );
+}
 function HandoverBox({ todayStr, open, setOpen, groups }) {
   const [data,setData]=useState({});                 // {"7/16":{cash:{},printed:false,notes:[],openChk:{},closeChk:{}}}
   const [cashEdit,setCashEdit]=useState(null);       // 正在填不符的位置
@@ -4199,6 +4576,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
   const [noteTxt,setNoteTxt]=useState("");
   const [phase,setPhase]=useState("mid");            // open / mid / close
   const [baseEdit,setBaseEdit]=useState(false);
+  const [pdOpen,setPdOpen]=useState(false);          // 印訂位表:上傳 Excel 直接印
   const day = data[todayStr]||{cash:{},printed:false,notes:[],openChk:{},closeChk:{}};
   const bases = data._bases || [{id:"b1",label:"錢櫃",amt:"10000"},{id:"b2",label:"金庫・備用金",amt:"20000"}];
   const saveBases=(bs)=>{ const nd={...data,_bases:bs}; setData(nd); FS.saveDoc("handover",nd); };
@@ -4397,6 +4775,12 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             <button onClick={()=>save({fmtPrint:!day.fmtPrint})}
               style={{fontSize:"11px",color:"#8a5210",background:"#fdf6ea",border:"1px solid #d8b870",borderRadius:"6px",padding:"6px 10px",cursor:"pointer",fontWeight:"700",minHeight:"30px"}}>📐 列印格式</button>
           </div>
+          <button onClick={()=>setPdOpen(true)}
+            title="上傳大麥匯出的 Excel,系統自動整理好格式,畫面可以直接改字,再按列印"
+            style={{width:"100%",marginTop:"8px",fontSize:"13px",color:"#fff",background:"#2a7a4a",border:"none",borderRadius:"8px",padding:"11px 10px",cursor:"pointer",fontWeight:"900",minHeight:"42px"}}>
+            🖨 上傳 Excel 直接印<span style={{fontSize:"11px",fontWeight:"700",opacity:0.85}}>　(不用自己整理格式)</span>
+          </button>
+          {pdOpen&&<PrintDingwePage onClose={()=>setPdOpen(false)}/>}
           <div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",background:"#fbe4e4",border:"1.5px solid #e0a0a0",borderRadius:"8px",padding:"8px 10px",marginTop:"7px",lineHeight:"1.7"}}>
             ⚠ 印出來看到有時段 <b>20 位以上</b> → 一定要去確認<b>訂位關了沒</b>
             <div style={{fontSize:"11px",fontWeight:"600",color:"#a05040",marginTop:"2px"}}>這個最常忘記，忘了訂位就會爆掉</div>
@@ -8624,7 +9008,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                         const idx=p.findIndex(x=>x.name===it.name);
                         if(idx>=0) return p.map((x,j)=>j!==idx?x:{...x,qty:(x.qty||1)+1});
                         const blank=p.findIndex(x=>!x.name.trim());
-                        const row={name:it.name,price:String(pr),qty:1};
+                        const row={itemId:it.id,name:it.name,price:String(pr),qty:1};   // 帶 itemId → 低消/入會費折抵才判得出主餐、飲料、酒
                         return blank>=0 ? p.map((x,j)=>j===blank?row:x) : [...p,row];
                       })}
                       style={{padding:"7px 10px",borderRadius:"8px",border:"1.5px solid #d8c8b0",background:"#fff",color:"#5a4030",fontSize:"12px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
@@ -8636,18 +9020,39 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
             </div>
             <div style={{fontSize:"11px",color:"#a08a70",marginBottom:"5px"}}>菜單沒有的，在下面自己打名稱和金額：</div>
             {addLines.map((ln,i)=>(
-              <div key={i} style={{display:"flex",gap:"6px",marginBottom:"6px",alignItems:"center"}}>
-                <input value={ln.name} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,name:e.target.value}))} placeholder="餐點名稱" style={{flex:2,padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",minWidth:0,boxSizing:"border-box"}}/>
+              <div key={i} style={{marginBottom:"6px"}}>
+              <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+                <input value={ln.name} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,name:e.target.value,itemId:undefined}))} placeholder="餐點名稱" style={{flex:2,padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",minWidth:0,boxSizing:"border-box"}}/>
                 <input value={ln.price} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,price:e.target.value.replace(/\D/g,"")}))} placeholder="$" inputMode="numeric" style={{width:"56px",padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",boxSizing:"border-box"}}/>
                 <input value={ln.qty} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,qty:Math.max(1,parseInt(e.target.value)||1)}))} inputMode="numeric" style={{width:"40px",padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",boxSizing:"border-box"}}/>
                 {addLines.length>1&&<button onClick={()=>setAddLines(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#e87a5a",cursor:"pointer",fontSize:"16px"}}>✕</button>}
+              </div>
+              {ln.name.trim()&&(
+                ln.itemId
+                  ? <div style={{fontSize:"11px",color:"#2a7a4a",fontWeight:"700",marginTop:"4px",paddingLeft:"2px"}}>✓ 菜單品項，低消自動計算</div>
+                  : <div style={{display:"flex",alignItems:"center",gap:"7px",marginTop:"4px",paddingLeft:"2px"}}>
+                      <button onClick={()=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,lcSkip:!x.lcSkip}))}
+                        style={{padding:"4px 9px",borderRadius:"7px",fontSize:"11px",fontWeight:"800",cursor:"pointer",
+                          border:`1.5px solid ${ln.lcSkip?"#c8b89c":"#3a7a5a"}`,
+                          background:ln.lcSkip?"#f2ece0":"#dff0e6",
+                          color:ln.lcSkip?"#a08a70":"#1a6a3a"}}>
+                        {ln.lcSkip?"✕ 不算低消":"✓ 算低消"}
+                      </button>
+                      <span style={{fontSize:"10px",color:"#a08a70"}}>{ln.lcSkip?"加購、配料類":"主餐或飲料"}</span>
+                    </div>
+              )}
               </div>
             ))}
             <button onClick={()=>setAddLines(p=>[...p,{name:"",price:"",qty:1}])} style={{fontSize:"12px",background:"none",border:"1px dashed #6a4a2a",borderRadius:"8px",color:"#c89a5a",padding:"6px",width:"100%",cursor:"pointer",marginBottom:"12px"}}>+ 再加一道</button>
             <div style={{display:"flex",gap:"8px"}}>
               <button onClick={()=>{setAddOpen(false);setAddLines([{name:"",price:"",qty:1}]);setAddNum("");setAddName("");}} style={{flex:1,padding:"11px",borderRadius:"10px",background:"#ffffff",border:"1px solid #c8b89c",color:"#aa8060",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
               <button onClick={()=>{
-                const lines=addLines.filter(l=>l.name.trim()).map(l=>({custom:true,name:l.name.trim(),price:parseInt(l.price)||0,qty:l.qty||1}));
+                const lines=addLines.filter(l=>l.name.trim()).map(l=>{
+                  const row={custom:true,name:l.name.trim(),price:parseInt(l.price)||0,qty:l.qty||1};
+                  if(l.itemId) row.itemId=l.itemId;     // 從菜單選的:靠 itemId 自動算低消
+                  else if(l.lcSkip) row.lcSkip=true;    // 自己打的:預設算低消,除非夥伴標「不算低消」
+                  return row;
+                });
                 if(lines.length===0) return;
                 if(addMode==="merge"&&!addNum.trim()) return;
                 onAddStaffOrder&&onAddStaffOrder({mode:addMode,num:addNum,guestName:addName.trim()||"JINHER 夥伴幫點",lines});
