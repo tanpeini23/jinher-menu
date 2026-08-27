@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v192";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v196";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -397,26 +397,17 @@ function isDrink(item) {
 const BANK_INFO = { bank:"台新銀行（812）成功分行", name:"今鶴餐飲有限公司", acct:"2085-01-0000754-1" };
 const VIP_MIN_SPEND = 6000;         // 包廂低消(餐點小計,不含服務費、開瓶費)
 const VIP_MIN_DEPOSIT = 1000;
-// 備註欄標籤:可複選,顏色分群(服務=紫、提醒=橘紅、狀態=灰綠)
+// 備註欄標籤:只留畫盤兩個。慶生/過敏/素食/寵物/推車已移除,那些寫在備註文字裡
+// (舊資料若還帶著舊標籤,NoteCell 是直接拿 key 當文字顯示,不會消失,只是變預設灰色)
 const NOTE_TAGS = [
   {k:"畫盤",     c:"#8a5ab4", bg:"#f4e8f8", grp:"服務"},
   {k:"客製畫盤", c:"#8a5ab4", bg:"#f4e8f8", grp:"服務", needTxt:true},
-  {k:"慶生",     c:"#c04080", bg:"#fbe8f0", grp:"服務"},
-  {k:"過敏",     c:"#c02020", bg:"#fbe4e4", grp:"提醒"},
-  {k:"素食",     c:"#2a8a5a", bg:"#e4f4ea", grp:"提醒"},
-  {k:"寵物",     c:"#a06020", bg:"#f8ecd8", grp:"提醒"},
-  {k:"推車/輪椅",c:"#5a7a9a", bg:"#e8f0f8", grp:"提醒"},
 ];
-// 從大麥備註自動偵測標籤
+// 從大麥備註自動偵測標籤:只偵測畫盤
 function autoTagsFrom(txt){
   const t=String(txt||"");
   const out=[];
   if(/畫盤/.test(t)) out.push("畫盤");
-  if(/慶生|生日/.test(t)) out.push("慶生");
-  if(/過敏/.test(t)) out.push("過敏");
-  if(/素食|蛋奶素|全素/.test(t)) out.push("素食");
-  if(/寵物|狗|貓/.test(t)) out.push("寵物");
-  if(/推車|輪椅|嬰兒車/.test(t)) out.push("推車/輪椅");
   return out;
 }
 // 低消是否達標(包廂看金額、一般看份數)
@@ -623,7 +614,7 @@ function DrinkModal({ onSelect, onClose, discount = 0, itemVisible }) {
 }
 
 // ─── LINE ITEM CARD ───────────────────────────────────────────────────────────
-function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, disabled }) {
+function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, disabled, drinkOnsite }) {
   const item = findItem(line.itemId);
   if (!item) return null;
   const isMain = isMainDish(item);
@@ -710,6 +701,8 @@ function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, d
                       {line.setMeal.drink.ice&&` · ${line.setMeal.drink.ice}`}
                       {line.setMeal.drink.mascot&&` · ${line.setMeal.drink.mascot}`}
                     </div>
+                  ) : drinkOnsite ? (
+                    <div style={{fontSize:"13px",color:"#3f8f63",marginTop:"2px",fontWeight:"700"}}>飲品：現場點（櫃檯 POS，不用先選）</div>
                   ) : (
                     <div style={{fontSize:"13px",color:"#d05a36",marginTop:"2px"}}>請選擇飲品（必選）</div>
                   )}
@@ -725,6 +718,22 @@ function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, d
                   </button>
                 </div>
               </div>
+              {!line.setMeal.drink && drinkOnsite && (()=>{
+                const sm = SET_MEALS.find(s=>s.id===line.setMeal.id);
+                const setPrice = sm?.price||0;
+                return(
+                  <div style={{marginTop:"8px",fontSize:"12px",color:"#5a8a6a",lineHeight:"1.9",borderTop:"1px solid #d4e4d6",paddingTop:"6px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>主餐</span><span>${getItemPrice(item,isMember)}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>套餐費（{sm?.label}）</span><span>+${setPrice}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between",color:"#9c5a1c",fontWeight:"700",borderTop:"1px solid #cadccb",marginTop:"2px",paddingTop:"2px"}}>
+                      <span>小計</span><span>${getItemPrice(item,isMember)+setPrice}</span>
+                    </div>
+                    <div style={{color:"#b06010",fontWeight:"700",marginTop:"4px",lineHeight:"1.5"}}>
+                      ⚠ 以上<b>不含補差價飲料金額</b>。飲品現場點，超過折抵 $80 的部分於櫃檯結。
+                    </div>
+                  </div>
+                );
+              })()}
               {line.setMeal.drink && (()=>{
                 const sm = SET_MEALS.find(s=>s.id===line.setMeal.id);
                 const drinkPrice = line.setMeal.drink.price;
@@ -1128,7 +1137,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
   };
 
   const allComplete = lines.length > 0 && lines.every(lineComplete) &&
-    lines.filter(l => isMainDish(findItem(l.itemId))).every(l => !l.setMeal || l.setMeal.drink);
+    lines.filter(l => isMainDish(findItem(l.itemId))).every(l => !l.setMeal || l.setMeal.drink || group.setDrinkOnsite);
 
   const total = orderTotal(lines, isMember);
   const myNum = existingOrder?.num || nextNum || (group.orders?.length ?? 0) + 1;
@@ -1299,7 +1308,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
   if (step === "add") {
     const addLines = lines.filter(l => !existingOrder?.lines?.find(el => el.id === l.id));
     const allAddComplete = addLines.length > 0 && addLines.every(lineComplete) &&
-      addLines.filter(l => isMainDish(findItem(l.itemId))).every(l => !l.setMeal || l.setMeal.drink);
+      addLines.filter(l => isMainDish(findItem(l.itemId))).every(l => !l.setMeal || l.setMeal.drink || group.setDrinkOnsite);
 
     return (
       <div style={LS.page}>
@@ -1352,7 +1361,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
                   onRemove={()=>removeLine(line.id)}
                   onUpdate={u=>updateLine(line.id,u)}
                   onAddSet={()=>updateLine(line.id,{setMeal:{id:"A",drink:null}})}
-                  onChangeSet={()=>{setSetMealPicking(line.id);setDrinkModal(line.id);}}
+                  onChangeSet={()=>{setSetMealPicking(line.id);setDrinkModal(line.id);}} drinkOnsite={group.setDrinkOnsite}
                 />
               ))}
             </div>
@@ -1524,7 +1533,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
                 onRemove={()=>removeLine(line.id)}
                 onUpdate={u=>updateLine(line.id,u)}
                 onAddSet={()=>updateLine(line.id,{setMeal:{id:"A",drink:null}})}
-                onChangeSet={()=>{setSetMealPicking(line.id);setDrinkModal(line.id);}}
+                onChangeSet={()=>{setSetMealPicking(line.id);setDrinkModal(line.id);}} drinkOnsite={group.setDrinkOnsite}
               />
             ))}
           </div>
@@ -4317,7 +4326,8 @@ function pdParse(raw, opts) {
     const st = String(at(sui) ?? "");
     if (st.includes("取消") || st.includes("未到") || st.includes("no show")) { skipped++; continue; }
 
-    const src = withShop ? [x1, x2, x3, x4] : [x1, x2, x3];
+    // 用餐目的(x1)整欄不要:朋友聚會/家庭用餐這類對現場沒用
+    const src = withShop ? [x2, x3, x4] : [x2, x3];
     out.push({
       id: `r${r}_${Math.random().toString(36).slice(2, 7)}`,
       date,
@@ -4366,7 +4376,8 @@ function PdCell({ value, onCommit, style }) {
   );
 }
 
-function PrintDingwePage({ onClose }) {
+function PrintDingwePage({ onClose, groups }) {
+  const [preview, setPreview] = useState(false);     // 預覽:把控制欄和工具列藏起來,看到就是印出來的樣子
   const [rows, setRows]   = useState([]);
   const [busy, setBusy]   = useState(false);
   const [msg, setMsg]     = useState("");
@@ -4444,6 +4455,26 @@ function PrintDingwePage({ onClose }) {
   const perPage = Math.max(1, Math.floor((PD_A4_H - (sz.row + 6)) / sz.row));
   const pages   = Math.max(1, Math.ceil(rows.length / perPage));
 
+  // 這份檔案是不是只有一天?只有一天就把日期收到表頭,每列留白
+  const dateSet = [...new Set(rows.filter(r => r.name && r.date).map(r => r.date))];
+  const oneDay  = dateSet.length === 1;
+  const dayHdr  = oneDay ? dateSet[0] : "日期";
+
+  // 大訂追蹤表裡有這筆(同電話同日期)且不是現場點餐 → 整列標起來
+  const bigSet = (() => {
+    const s = new Set();
+    (groups || []).forEach(g => {
+      if (g.cancelled || g.onsiteOrder) return;          // 現點不標
+      const d = String(g.phone || "").replace(/\D/g, "");
+      if (d) s.add(`${d}|${String(g.date || "").trim()}`);
+    });
+    return s;
+  })();
+  const isBig = (r) => {
+    const d = String(r.tel || "").replace(/\D/g, "");
+    return !!d && bigSet.has(`${d}|${String(r.date || "").trim()}`);
+  };
+
   const BD   = "1px solid #000";
   const btn  = { padding:"9px 13px", borderRadius:"8px", border:"1.5px solid #c8b89c", background:"#fdf9f0", color:"#6a4a2e", fontSize:"13px", fontWeight:"800", cursor:"pointer", whiteSpace:"nowrap" };
   const cell = { fontSize:`${sz.font}px`, minHeight:`${sz.row - 8}px`, lineHeight:1.35, padding:"0 4px", display:"flex", alignItems:"center" };
@@ -4464,6 +4495,11 @@ function PrintDingwePage({ onClose }) {
           thead{ display:table-header-group; }
         }
       `}</style>
+      {preview&&<style>{`
+        .pdWrap .pdPrevHide{ display:none!important; }
+        .pdWrap .pdGut{ width:0!important; padding:0!important; border:none!important; overflow:hidden; }
+        .pdWrap .pdGut *{ display:none!important; }
+      `}</style>}
 
       {/* 工具列 */}
       <div className="pdNP" style={{ maxWidth:`${PD_A4_W + 60}px`, margin:"0 auto 12px", background:"#fdf9f0", border:"1.5px solid #c8b89c", borderRadius:"12px", padding:"12px 14px" }}>
@@ -4476,11 +4512,13 @@ function PrintDingwePage({ onClose }) {
           <button style={btn} onClick={() => setHow(v => !v)}>❓ 大麥怎麼匯出</button>
           <span style={{ flex:1 }} />
           {rows.length > 0 && <span style={{ fontSize:"13px", color:"#6a4a2e", fontWeight:"800" }}>共 {rows.length} 行 · 預估 {pages} 頁</span>}
+          <button style={{ ...btn, background:preview ? "#5a6a8a" : "#fdf9f0", color:preview ? "#fff" : "#6a4a2e", border:`1.5px solid ${preview ? "#5a6a8a" : "#c8b89c"}`, opacity:rows.length ? 1 : 0.4 }}
+            disabled={!rows.length} onClick={() => setPreview(v => !v)}>{preview ? "✎ 回編輯" : "👁 預覽"}</button>
           <button style={{ ...btn, background:"#2a7a4a", color:"#fff", border:"1.5px solid #2a7a4a", opacity:rows.length ? 1 : 0.4 }}
             disabled={!rows.length} onClick={() => window.print()}>🖨 列印 A4</button>
         </div>
 
-        {rows.length > 0 && (
+        {rows.length > 0 && !preview && (
           <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
             <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>字級</span>
             <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, font:Math.max(9, p.font - 1) }))}>−</button>
@@ -4498,7 +4536,7 @@ function PrintDingwePage({ onClose }) {
           </div>
         )}
 
-        {rows.length > 0 && (
+        {rows.length > 0 && !preview && (
           <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
             <button onClick={() => reparse(!withShop, gapN)}
               title="大麥的「店家備註」欄。預設不印,因為多半是內部代號"
@@ -4515,7 +4553,7 @@ function PrintDingwePage({ onClose }) {
 
         {msg && <div style={{ fontSize:"13px", fontWeight:"700", marginTop:"9px", color:msg.startsWith("✅") ? "#1a6a3a" : "#a03020" }}>{msg}</div>}
         {tooWide && <div style={{ fontSize:"13px", fontWeight:"800", marginTop:"8px", color:"#fff", background:"#c02020", borderRadius:"7px", padding:"7px 10px" }}>⚠ 欄寬總和超過 A4,備註會被擠掉。把某一欄拉窄一點。</div>}
-        {rows.length > 0 && <div style={{ fontSize:"11px", color:"#8a7a60", marginTop:"7px" }}>拖曳標題列中間的直線就能調欄寬 · 每一格點下去直接改字 · 日期欄的〔＋包廂〕可以點著切換</div>}
+        {rows.length > 0 && <div style={{ fontSize:"11px", color:"#8a7a60", marginTop:"7px" }}>拖曳標題列中間的直線調欄寬 · 每一格點下去直接改字 · 左邊〔廂〕鈕切換包廂(變黑色就是包廂)</div>}
 
         {howOpen && (
           <div style={{ fontSize:"13px", color:"#3a4a5a", background:"#f6f9fc", border:"1px solid #dce6f0", borderRadius:"9px", padding:"11px 13px", marginTop:"9px", lineHeight:"2" }}>
@@ -4536,7 +4574,7 @@ function PrintDingwePage({ onClose }) {
         ) : (
           <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed" }}>
             <colgroup>
-              <col className="pdGut" style={{ width:"56px" }} />
+              <col className="pdGut" style={{ width:"78px" }} />
               {PD_COLS.map(c => <col key={c.k} style={c.k === "note" ? undefined : { width:`${colW[c.k]}px` }} />)}
             </colgroup>
             <thead>
@@ -4544,7 +4582,7 @@ function PrintDingwePage({ onClose }) {
                 <th className="pdGut pdNP" style={{ border:BD, background:"#f0e8d8" }} />
                 {PD_COLS.map(c => (
                   <th key={c.k} style={{ border:BD, background:"#f0e8d8", fontSize:`${Math.max(11, sz.font - 2)}px`, fontWeight:"800", color:"#3a2a1a", padding:"5px 4px", position:"relative" }}>
-                    {c.label}
+                    {c.k === "date" ? dayHdr : c.label}
                     {c.k !== "note" && (
                       <span className="pdNP" onPointerDown={e => startDrag(e, c.k)} title="拖曳調整欄寬"
                         style={{ position:"absolute", top:0, right:"-3px", width:"7px", height:"100%", cursor:"col-resize", background:"transparent", zIndex:2 }} />
@@ -4555,31 +4593,29 @@ function PrintDingwePage({ onClose }) {
             </thead>
             <tbody>
               {rows.map((r, idx) => (
-                <tr key={r.id} className="pdRow" style={{ height:`${sz.row}px` }}>
-                  <td className="pdGut pdNP" style={{ border:BD, background:"#faf6ee", textAlign:"center", verticalAlign:"middle" }}>
+                <tr key={r.id} className="pdRow" style={{ height:`${sz.row}px`, background:(r.name && isBig(r)) ? "#fdf3d8" : "transparent" }}>
+                  <td className="pdGut pdNP" style={{ border:BD, background:"#faf6ee", textAlign:"center", verticalAlign:"middle", whiteSpace:"nowrap" }}>
                     <button onClick={() => addAfter(idx)} title="下面插一行"
-                      style={{ background:"none", border:"none", color:"#2a7a4a", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 3px" }}>＋</button>
+                      style={{ background:"none", border:"none", color:"#2a7a4a", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 2px" }}>＋</button>
                     <button onClick={() => delRow(r.id)} title="刪掉這一行"
-                      style={{ background:"none", border:"none", color:"#c04030", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 3px" }}>✕</button>
+                      style={{ background:"none", border:"none", color:"#c04030", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 2px" }}>✕</button>
+                    <button onClick={() => setCell(r.id, "room", !r.room)} title="切換包廂"
+                      style={{ border:`1px solid ${r.room ? "#000" : "#d0c0a8"}`, borderRadius:"4px", padding:"1px 4px", marginLeft:"2px", cursor:"pointer",
+                        background:r.room ? "#000" : "transparent", color:r.room ? "#fff" : "#c0b0a0", fontSize:"10px", fontWeight:"800" }}>廂</button>
                   </td>
 
-                  <td style={{ border:BD, verticalAlign:"middle", padding:"2px 0" }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:"3px" }}>
-                      <PdCell value={r.date} onCommit={v => setCell(r.id, "date", v)} style={{ ...cell, flex:1, minWidth:0 }} />
-                      {r.room ? (
-                        <span onClick={() => setCell(r.id, "room", false)} title="點一下取消包廂"
-                          style={{ fontSize:`${Math.max(10, sz.font - 4)}px`, fontWeight:"900", color:"#000", border:"1px solid #000", borderRadius:"3px", padding:"0 3px", cursor:"pointer", whiteSpace:"nowrap" }}>包廂</span>
-                      ) : (
-                        <span className="pdNP" onClick={() => setCell(r.id, "room", true)} title="點一下標成包廂"
-                          style={{ fontSize:"10px", color:"#c0b0a0", border:"1px dashed #d0c0a8", borderRadius:"3px", padding:"0 3px", cursor:"pointer", whiteSpace:"nowrap" }}>＋包廂</span>
-                      )}
-                    </div>
+                  <td style={{ border:BD, verticalAlign:"middle", padding:"2px 0", textAlign:"center" }}>
+                    {r.room
+                      ? <span style={{ fontSize:`${sz.font}px`, fontWeight:"900", color:"#000" }}>包廂</span>
+                      : (oneDay ? null : <PdCell value={r.date} onCommit={v => setCell(r.id, "date", v)} style={{ ...cell, justifyContent:"center" }} />)}
                   </td>
 
                   {PD_COLS.slice(1).map(c => (
                     <td key={c.k} style={{ border:BD, verticalAlign:"middle", padding:"2px 0", textAlign:(c.k === "sex" || c.k === "pax") ? "center" : "left" }}>
                       <PdCell value={r[c.k]} onCommit={v => setCell(r.id, c.k, v)}
-                        style={{ ...cell, justifyContent:(c.k === "sex" || c.k === "pax") ? "center" : "flex-start" }} />
+                        style={{ ...cell,
+                          fontWeight:(r.name && isBig(r) && (c.k === "name" || c.k === "pax")) ? "900" : "400",
+                          justifyContent:(c.k === "sex" || c.k === "pax") ? "center" : "flex-start" }} />
                     </td>
                   ))}
                 </tr>
@@ -4844,7 +4880,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             style={{width:"100%",marginTop:"8px",fontSize:"13px",color:"#fff",background:"#2a7a4a",border:"none",borderRadius:"8px",padding:"11px 10px",cursor:"pointer",fontWeight:"900",minHeight:"42px"}}>
             🖨 上傳 Excel 直接印<span style={{fontSize:"11px",fontWeight:"700",opacity:0.85}}>　(不用自己整理格式)</span>
           </button>
-          {pdOpen&&<PrintDingwePage onClose={()=>setPdOpen(false)}/>}
+          {pdOpen&&<PrintDingwePage groups={groups} onClose={()=>setPdOpen(false)}/>}
           <div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",background:"#fbe4e4",border:"1.5px solid #e0a0a0",borderRadius:"8px",padding:"8px 10px",marginTop:"7px",lineHeight:"1.7"}}>
             ⚠ 印出來看到有時段 <b>20 位以上</b> → 一定要去確認<b>訂位關了沒</b>
             <div style={{fontSize:"11px",fontWeight:"600",color:"#a05040",marginTop:"2px"}}>這個最常忘記，忘了訂位就會爆掉</div>
@@ -5982,6 +6018,15 @@ const rowBg=(g)=>{
                         style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",
                           background:(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"#fbdcdc":"#dfeadf",color:(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"#b03030":"#2a7a4a",fontWeight:"700"}}>
                         {(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"🔒":"🔓"}
+                      </button>
+                      <button onClick={()=>{
+                          if(!g.setDrinkOnsite&&!window.confirm("打開後，這組客人點套餐可以不選飲料就送出。\n飲料改成現場在櫃檯 POS 點。\n\n確定打開?")) return;
+                          setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,setDrinkOnsite:!x.setDrinkOnsite}));
+                        }}
+                        title={g.setDrinkOnsite?"套餐飲料現場點（已打開）— 點一下關閉":"套餐飲料現場點（關閉中）— 打開後客人可以不選飲料"}
+                        style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",marginLeft:"3px",
+                          background:g.setDrinkOnsite?"#dfeadf":"#efe8dc",color:g.setDrinkOnsite?"#2a7a4a":"#b0a08c",fontWeight:"700"}}>
+                        🥤
                       </button>
                     </div>
                   </td>
@@ -8932,6 +8977,11 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                             🍱 {sm?.label}
                             {hasSoup&&veg&&<span style={{color:"#dfeadf",fontWeight:"800",background:"#5fe08a",borderRadius:"4px",padding:"1px 7px",marginLeft:"5px"}}>🌿 素湯</span>}
                             {dk && ` · ${dk.name}`}
+                            {!dk && group.setDrinkOnsite && <>
+                              {` (+$${sm?.price||0})`}
+                              <span style={{color:"#8a5210",background:"#ffe9c8",borderRadius:"4px",padding:"1px 7px",marginLeft:"5px",fontWeight:"900"}}>🥤 飲料現場點</span>
+                              <div style={{fontSize:"12px",fontWeight:"700",color:"#b06010",marginTop:"2px"}}>不含補差價飲料金額（依現場點的飲料為主）</div>
+                            </>}
                             {dkParts.length>0 && ` · ${dkParts.join(" · ")}`}
                             {dk && ` (+$${sm?.price||0} +$${extra})`}
                           </div>
