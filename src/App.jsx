@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v199";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v200";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4527,7 +4527,8 @@ function PrintDingwePage({ onClose, groups }) {
             <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"28px", textAlign:"center" }}>{sz.row}</b>
             <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, row:Math.min(80, p.row + 2) }))}>＋</button>
             <button style={{ ...btn, marginLeft:"6px" }} onClick={() => { setColW({ ...PD_DEF_W }); setSz({ ...PD_DEF_SZ }); }}>↺ 欄寬字級復原</button>
-            <button style={btn} onClick={() => addAfter(rows.length - 1)}>＋ 最後加一行</button>
+            <button style={btn} onClick={() => setRows(p => [{ id:`n${Date.now()}_top`, date:"", time:"", name:"", sex:"", tel:"", pax:"", note:"", room:false }, ...p])}>⬆ 最前面加一行</button>
+            <button style={btn} onClick={() => addAfter(rows.length - 1)}>⬇ 最後加一行</button>
             <span style={{ flex:1 }} />
             <button style={{ ...btn, borderColor:"#e0a0a0", color:"#a03020" }}
               onClick={() => { if (window.confirm("清空目前整份表格?")) { setRows([]); rawRef.current = null; setMsg(""); } }}>清空</button>
@@ -8923,10 +8924,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                       <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
                         <div style={{fontSize:"12px",color:"#c89a5a",fontWeight:"700"}}>[客製]</div>
                         <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
-                          <span style={{color:"#5a4530"}}>
-                            <span style={{fontSize:"13px",fontWeight:"900",color:"#fff",background:"#8a5210",borderRadius:"5px",padding:"1px 7px",marginRight:"6px"}}>{order.num}</span>
-                            {line.name}{line.qty>1?` ×${line.qty}`:""}
-                          </span>
+                          <span style={{color:"#5a4530"}}>{line.name}{line.qty>1?` ×${line.qty}`:""}</span>
                           <span style={{color:"#9a7c5a"}}>${(Number(line.price)||0)*(line.qty||1)}</span>
                         </div>
                       </div>
@@ -8940,10 +8938,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                     <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
                       <div style={{fontSize:"12px",color:"#2a7a4a",fontWeight:"700"}}>{"["+cat+"]"}</div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
-                        <span style={{color:"#5a4530"}}>
-                          <span style={{fontSize:"13px",fontWeight:"900",color:"#fff",background:"#8a5210",borderRadius:"5px",padding:"1px 7px",marginRight:"6px"}}>{order.num}</span>
-                          {item.name}
-                        </span>
+                        <span style={{color:"#5a4530"}}>{item.name}</span>
                         <span style={{color:"#9a7c5a"}}>${getItemPrice(item,isMember)}</span>
                       </div>
                       {(()=>{
