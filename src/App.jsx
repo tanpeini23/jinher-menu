@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v198";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v199";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4238,9 +4238,8 @@ const PD_A4_W   = 794;    // A4 寬 210mm @96dpi
 const PD_A4_H   = 1122;   // A4 高 297mm @96dpi
 const PD_WKEY   = "pdColW_v2";
 const PD_SKEY   = "pdSize_v2";
-// 字 12 時「剛好看得完整、留一點餘裕」的寬度;其餘全部留給備註
-// 性別實際值是 先生/小姐/不透露(3字),人數可能是 17大1小,所以這兩欄不能太窄
-const PD_DEF_W  = { date:70, time:52, name:80, sex:46, tel:80, pax:56 };   // 合計 384 → 備註拿到 410
+// 日期欄只放「包廂」所以很窄;人數欄要塞「大人 3 / 小孩 0」所以最寬
+const PD_DEF_W  = { date:48, time:52, name:80, sex:46, tel:80, pax:92 };   // 合計 398 → 備註拿到 396
 const PD_DEF_SZ = { font:12, row:38 };
 const PD_COLS   = [
   { k:"date", label:"日期" }, { k:"time", label:"時間" }, { k:"name", label:"姓名" },
@@ -4281,11 +4280,8 @@ function pdFmtTel(v) {
   return s;
 }
 function pdFmtPax(v) {
-  const s = String(v ?? "").trim();
-  const m = s.match(/大人\s*(\d+)[^\d]*小孩\s*(\d+)/);      // 大麥格式:「大人 4 / 小孩 3」
-  if (m) { const a = +m[1], k = +m[2]; return k > 0 ? `${a}大${k}小` : String(a); }
-  const n = s.match(/\d+/);
-  return n ? n[0] : s;
+  // 保留大麥原格式「大人 3 / 小孩 0」,只把多餘空白壓掉
+  return String(v ?? "").replace(/\s+/g, " ").trim();
 }
 
 // 把大麥匯出的原始二維陣列整理成要印的列。回傳 {err} 或 {rows,count,skipped}
@@ -4326,8 +4322,8 @@ function pdParse(raw, opts) {
     const st = String(at(sui) ?? "");
     if (st.includes("取消") || st.includes("未到") || st.includes("no show")) { skipped++; continue; }
 
-    // 用餐目的(x1)整欄不要:朋友聚會/家庭用餐這類對現場沒用
-    const src = withShop ? [x2, x3, x4] : [x2, x3];
+    // 備註 = 特殊需求 + 顧客備註 + 店家備註（用餐目的整欄丟掉）
+    const src = [x2, x3, x4];
     out.push({
       id: `r${r}_${Math.random().toString(36).slice(2, 7)}`,
       date,
@@ -4484,10 +4480,10 @@ function PrintDingwePage({ onClose, groups }) {
       <style>{`
         @media print{
           @page{ size:A4 portrait; margin:0; }
-          html,body{ margin:0!important; padding:0!important; background:#fff!important; }
-          body *{ visibility:hidden!important; }
-          .pdSheet, .pdSheet *{ visibility:visible!important; }
-          .pdSheet{ position:absolute!important; left:0!important; top:0!important; margin:0!important; box-shadow:none!important; }
+          html,body{ margin:0!important; padding:0!important; background:#fff!important; width:210mm!important; overflow:visible!important; }
+          body > *:not(.pdWrap){ display:none!important; }   /* 用 display 不用 visibility,否則舊版面還佔寬度會把整頁縮小 */
+          .pdWrap{ position:static!important; inset:auto!important; overflow:visible!important; background:#fff!important; padding:0!important; }
+          .pdSheet{ position:static!important; margin:0!important; box-shadow:none!important; width:210mm!important; }
           .pdNP{ display:none!important; }
           .pdGut{ width:0!important; padding:0!important; border:none!important; }
           .pdGut *{ display:none!important; }
@@ -4540,12 +4536,7 @@ function PrintDingwePage({ onClose, groups }) {
 
         {rows.length > 0 && !preview && (
           <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
-            <button onClick={() => reparse(!withShop, gapN)}
-              title="大麥的「店家備註」欄。預設不印,因為多半是內部代號"
-              style={{ ...btn, background:withShop ? "#dff0e6" : "#fdf9f0", borderColor:withShop ? "#3a7a5a" : "#c8b89c", color:withShop ? "#1a6a3a" : "#8a7a60" }}>
-              {withShop ? "✓ 備註含店家備註" : "✕ 備註不含店家備註"}
-            </button>
-            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700", marginLeft:"6px" }}>換時段空</span>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>換時段空</span>
             <button style={{ ...btn, padding:"5px 10px" }} onClick={() => reparse(withShop, Math.max(0, gapN - 1))}>−</button>
             <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"18px", textAlign:"center" }}>{gapN}</b>
             <button style={{ ...btn, padding:"5px 10px" }} onClick={() => reparse(withShop, Math.min(8, gapN + 1))}>＋</button>
