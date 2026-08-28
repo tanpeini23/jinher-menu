@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v200";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v202";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -331,6 +331,8 @@ const ICE_NO_REMOVE = ["冰","熱"];
 const ICE_TWG = ["去冰","熱"];
 const SUGAR_OPT = ["無糖","三分糖","五分糖","七分糖","全糖"];
 const MASCOT_OPT = ["柴柴棉花糖","泡澡熊"];
+const MASCOT_ICO = { "柴柴棉花糖":"🐕", "泡澡熊":"🐻" };   // 全組訂單用圖示標出來,一眼看到要做造型
+const mascotIco = (m) => MASCOT_ICO[m] || (m ? "🎨" : "");
 const DRESSING_OPT = ["胡麻醬","油醋醬"];
 
 function getItemPrice(item, isMember) {
@@ -2288,7 +2290,6 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
           </div>
         ) : g.fromMai ? (
             <div style={{marginTop:"2px",display:"flex",flexDirection:"column",gap:"3px",alignItems:"center"}}>
-              <div style={{fontSize:"9px",background:"#1a5a3a",color:"#1a6a3a",borderRadius:"4px",padding:"1px 4px",fontWeight:"700"}}>📥麥訂</div>
               {g.maiMissed>0&&<div style={{fontSize:"9px",fontWeight:"800",color:"#fff",background:g.maiMissed>=3?"#c02020":"#c06030",borderRadius:"4px",padding:"1px 5px"}}>📵 未接 ×{g.maiMissed}{g.maiMissed>=3?" 聯絡不上":""}</div>}
               <div style={{display:"flex",gap:"3px"}}>
                 <button onClick={(e)=>{e.stopPropagation();const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,maiMissed:(x.maiMissed||0)+1,maiMissedAt:at}));}}
@@ -4471,6 +4472,23 @@ function PrintDingwePage({ onClose, groups }) {
     return !!d && bigSet.has(`${d}|${String(r.date || "").trim()}`);
   };
 
+  // ── 匯出 Excel:格式比照你手工整理的那份，欄寬列高先設好 ──────────────────
+  const exportXlsx = () => {
+    if (!rows.length) return;
+    const head = [oneDay ? dayHdr : "日期", "訂位時間", "訂位人名稱", "性別", "聯絡電話", "訂位人數", "店家備註"];
+    const body = rows.map(r => [
+      r.room ? "包廂" : (oneDay ? "" : r.date),
+      r.name ? r.time : "", r.name || "", r.name ? r.sex : "",
+      r.name ? r.tel : "", r.name ? r.pax : "", r.note || "",
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
+    ws["!cols"] = [{ wch:7 }, { wch:10 }, { wch:16 }, { wch:8 }, { wch:14 }, { wch:17 }, { wch:42 }];
+    ws["!rows"] = [head, ...body].map(() => ({ hpt:28 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "訂位表");
+    XLSX.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
+  };
+
   const BD   = "1px solid #000";
   const btn  = { padding:"9px 13px", borderRadius:"8px", border:"1.5px solid #c8b89c", background:"#fdf9f0", color:"#6a4a2e", fontSize:"13px", fontWeight:"800", cursor:"pointer", whiteSpace:"nowrap" };
   const cell = { fontSize:`${sz.font}px`, minHeight:`${sz.row - 8}px`, lineHeight:1.35, padding:"0 4px", display:"flex", alignItems:"center" };
@@ -4480,7 +4498,7 @@ function PrintDingwePage({ onClose, groups }) {
       <style>{`
         @media print{
           @page{ size:A4 portrait; margin:0; }
-          html,body{ margin:0!important; padding:0!important; background:#fff!important; width:210mm!important; overflow:visible!important; }
+          html,body{ margin:0!important; padding:0!important; background:#fff!important; width:210mm!important; max-width:210mm!important; overflow:hidden!important; }
           body > *:not(.pdWrap){ display:none!important; }   /* 用 display 不用 visibility,否則舊版面還佔寬度會把整頁縮小 */
           .pdWrap{ position:static!important; inset:auto!important; overflow:visible!important; background:#fff!important; padding:0!important; }
           .pdSheet{ position:static!important; margin:0!important; box-shadow:none!important; width:210mm!important; }
@@ -4512,6 +4530,9 @@ function PrintDingwePage({ onClose, groups }) {
           {rows.length > 0 && <span style={{ fontSize:"13px", color:"#6a4a2e", fontWeight:"800" }}>共 {rows.length} 行 · 預估 {pages} 頁</span>}
           <button style={{ ...btn, background:preview ? "#5a6a8a" : "#fdf9f0", color:preview ? "#fff" : "#6a4a2e", border:`1.5px solid ${preview ? "#5a6a8a" : "#c8b89c"}`, opacity:rows.length ? 1 : 0.4 }}
             disabled={!rows.length} onClick={() => setPreview(v => !v)}>{preview ? "✎ 回編輯" : "👁 預覽"}</button>
+          <button style={{ ...btn, background:"#1a6a3a", color:"#fff", border:"1.5px solid #1a6a3a", opacity:rows.length ? 1 : 0.4 }}
+            disabled={!rows.length} onClick={exportXlsx}
+            title="匯出成 Excel，欄寬列高已設好，可自己再調整後從 Excel 列印">📊 匯出 Excel</button>
           <button style={{ ...btn, background:"#2a7a4a", color:"#fff", border:"1.5px solid #2a7a4a", opacity:rows.length ? 1 : 0.4 }}
             disabled={!rows.length} onClick={() => window.print()}>🖨 列印 A4</button>
         </div>
@@ -5275,6 +5296,16 @@ const rowBg=(g)=>{
     );
   };
 
+  // 防呆:代碼已經出現(會員身分確認過)但還沒按「轉一般」→ 離開前攔一下
+  const pendingMai = groups.filter(g=>g.fromMai&&g.memberType&&g.memberType!=="private"&&!g.cancelled);
+  const leaveGuard = (go) => {
+    if(pendingMai.length===0){ go(); return; }
+    const list=pendingMai.slice(0,6).map(g=>`　・${g.date} ${g.time} ${g.name}（代碼 ${g.code}）`).join("\n");
+    const more=pendingMai.length>6?`\n　…還有 ${pendingMai.length-6} 筆`:"";
+    if(window.confirm(`⚠ 有 ${pendingMai.length} 筆已經確認會員、代碼也出來了，但還沒按「轉一般」：\n\n${list}${more}\n\n沒轉一般就不會開始追訂金、催點餐、算低消。\n\n要先回去處理嗎？\n\n【確定】＝留下來處理　【取消】＝仍要離開`)) return;
+    go();
+  };
+
   if(showDingwe) return <DingwePage groups={groups} onBack={()=>setShowDingwe(false)} staffList={staffList} setGroups={setGroups} setTodoChecksParent={setTodoChecks} onOpenCpl={()=>{setShowDingwe(false);setShowCplCenter(true);}}/>;
   if(showStats) return <StatsPage onBack={()=>setShowStats(false)} staffList={staffList}/>;
   if(showItemsOff) return <ItemsOffPage onBack={()=>setShowItemsOff(false)}/>;
@@ -5308,7 +5339,7 @@ const rowBg=(g)=>{
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
           <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 {APP_VER}</div>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
-            <button title={TIP_TXT.items} onClick={()=>setShowItemsOff(true)}
+            <button title={TIP_TXT.items} onClick={()=>leaveGuard(()=>setShowItemsOff(true))}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
             <div style={{position:"relative"}}>
               <button onClick={()=>setGearOpen(v=>!v)}
@@ -5323,7 +5354,7 @@ const rowBg=(g)=>{
                 </div>
               )}
             </div>
-            <button title={TIP_TXT.cpl} onClick={()=>setShowCplCenter(true)}
+            <button title={TIP_TXT.cpl} onClick={()=>leaveGuard(()=>setShowCplCenter(true))}
               style={{background:"#c02020",border:"1.5px solid #8a1010",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:"5px"}}><IcoWarn size={15} color="#fff"/> 客訴中心</button>
             <button title={TIP_TXT.addBig} onClick={()=>setShowAdd(true)}
               style={{background:"#b07840",border:"1.5px solid #8a5a20",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>＋ 新增大訂</button>
@@ -5372,8 +5403,8 @@ const rowBg=(g)=>{
           </div>
         )}
         <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
-          <button title={TIP_TXT.dingwe} onClick={()=>setShowDingwe(true)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
-          <button title={TIP_TXT.mai} onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
+          <button title={TIP_TXT.dingwe} onClick={()=>leaveGuard(()=>setShowDingwe(true))} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
+          <button title={TIP_TXT.mai} onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂【大訂未加LINE】{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
           <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="🔍 搜 日期/姓名/電話/代碼/標籤/備註/大麥備註"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
@@ -8947,7 +8978,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                         if(line.dressing) parts.push(`醬料:${line.dressing}`);
                         if(line.ice) parts.push(`冰量:${line.ice}`);
                         if(line.sugar) parts.push(`甜度:${line.sugar}`);
-                        if(line.mascot) parts.push(`造型:${line.mascot}`);
+                        if(line.mascot) parts.push(`造型:${mascotIco(line.mascot)} ${line.mascot}`);
                         if(line.toggles&&line.toggles.length) parts.push(line.toggles.join("、"));
                         return parts.length>0?<div style={{fontSize:"14px",fontWeight:"800",color:"#1a6a4a",marginTop:"4px",lineHeight:"1.5",
                           background:"#eef7f0",border:"1.5px solid #8ac4a0",borderRadius:"7px",padding:"5px 9px"}}>{parts.join(" · ")}</div>:null;
@@ -8977,7 +9008,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                         const dkParts = [];
                         if(dk?.ice) dkParts.push(dk.ice);
                         if(dk?.sugar) dkParts.push(dk.sugar);
-                        if(dk?.mascot) dkParts.push(dk.mascot);
+                        if(dk?.mascot) dkParts.push(`${mascotIco(dk.mascot)} ${dk.mascot}`);
                         const hasSoup = ["A","C"].includes(line.setMeal.id);
                         const veg = line.setMeal.veggieSoup;
                         return (
