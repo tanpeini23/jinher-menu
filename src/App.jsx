@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v202";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v203";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3385,6 +3385,9 @@ const OPEN_TASKS = ["開燈/開冷氣","開POS/刷卡機","煮咖啡/備飲料",
 const CLOSE_TASKS = ["關燈/關冷氣","結帳關機","清潔桌面/地板","垃圾清運","確認訂金已收","檢查明日訂位","鎖門/設保全"];
 // 錢幣面額(清點表A用)
 const CASH_DENOM = [1000,500,100,50,10,5,1];
+// 金庫零錢:每袋金額固定（照金庫蓋上貼的），夥伴只填袋數
+const COIN_BAGS = [{d:50,per:1000},{d:10,per:500},{d:5,per:250},{d:1,per:50}];
+const SAFE_TOTAL = 20000;   // 金庫應有總額（紙鈔＋零錢）
 // 清點表(獨立元件,避免每次輸入被重建而失焦)
 // ─── LINE 訊息範本:依那筆狀況自動判斷該給哪一種 ──────────────────────────
 const SITE_URL = "aged-meadow-66bd.tanpeini23.workers.dev";
@@ -3773,6 +3776,51 @@ function NoteCell({ g, setGroups, staffList }){
             ))}
           </div>
           <div style={{fontSize:"10px",color:"#a09070",marginTop:"4px"}}>點夥伴名字送出（會顯示「名字：內容」）</div>
+        </div>
+      )}
+    </div>
+  );
+}
+// 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
+function SafeCount({ notes, bags, onChange }){
+  const noteSum=CASH_DENOM.reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
+  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((bags||{})[b.d])||0),0);
+  const total=noteSum+bagSum, diff=total-SAFE_TOTAL, ok=diff===0;
+  const inp={width:"50px",padding:"5px",borderRadius:"6px",border:"1px solid #c8d8e8",textAlign:"center",fontSize:"14px",fontWeight:"700",color:"#1a3a5a",background:"#fff"};
+  const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
+  return (
+    <div style={{background:"#fbfdff",border:"1.5px solid #c8d8e8",borderRadius:"10px",padding:"10px 11px",marginTop:"9px"}}>
+      <div style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a",marginBottom:"7px"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</div>
+      <div style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700",marginBottom:"4px"}}>紙鈔（填張數）</div>
+      <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"9px"}}>
+        {CASH_DENOM.map(d=>(
+          <div key={d} style={{textAlign:"center"}}>
+            <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>{d}</div>
+            <input inputMode="numeric" value={(notes||{})[d]??""} placeholder="0"
+              onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags})} style={inp}/>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700",marginBottom:"4px"}}>零錢（填袋數，每袋金額固定）</div>
+      <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+        {COIN_BAGS.map(b=>(
+          <div key={b.d} style={{textAlign:"center"}}>
+            <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",lineHeight:1.3}}>{b.d}元<br/><span style={{color:"#a08a70"}}>1袋 ${b.per}</span></div>
+            <input inputMode="numeric" value={(bags||{})[b.d]??""} placeholder="0"
+              onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)}})} style={inp}/>
+            <div style={{fontSize:"10px",color:"#5a7a9a",fontWeight:"700",marginTop:"2px"}}>${(b.per*(+((bags||{})[b.d])||0)).toLocaleString()}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:"6px",marginTop:"9px",fontSize:"12px",fontWeight:"700",color:"#3a5a7a",flexWrap:"wrap",alignItems:"center"}}>
+        <span>紙鈔 ${noteSum.toLocaleString()}</span><span>＋</span><span>零錢 ${bagSum.toLocaleString()}</span><span>＝</span>
+        <span style={{fontWeight:"900",fontSize:"14px"}}>${total.toLocaleString()}</span>
+      </div>
+      {total>0&&(
+        <div style={{marginTop:"7px",borderRadius:"8px",padding:"8px 10px",textAlign:"center",
+          background:ok?"#e6f6ea":"#fdeceb",border:`2px solid ${ok?"#2a8a4a":"#c02020"}`,
+          fontSize:ok?"15px":"14px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>
+          {ok?"✅ 金庫一致":`⚠ 差 $${Math.abs(diff).toLocaleString()}（實際${diff>0?"多":"少"}了）`}
         </div>
       )}
     </div>
@@ -4472,6 +4520,29 @@ function PrintDingwePage({ onClose, groups }) {
     return !!d && bigSet.has(`${d}|${String(r.date || "").trim()}`);
   };
 
+  // 客訴中心:同電話的客人有客訴 → 原因＋招待自動貼到備註前面
+  const cplMap = (() => {
+    const m = {};
+    (groups || []).forEach(g => {
+      const d = String(g.phone || "").replace(/\D/g, "");
+      const cs = (g.complaints || []).filter(c => c && (c.reason || c.treat || c.type));
+      if (!d || !cs.length) return;
+      const c = cs[cs.length - 1];                       // 只看最近一筆
+      const bits = [];
+      if (c.type) bits.push(String(c.type).replace(/\s+/g, " ").trim());
+      if (c.reason) bits.push(String(c.reason).replace(/\s+/g, " ").trim());
+      const t = (c.treat && !c.treatDone) ? String(c.treat).replace(/\s+/g, " ").trim() : "";
+      const txt = `⚠客訴${bits.length ? "・" + bits.join("・") : ""}${t ? `｜這次招待：${t}` : ""}`;
+      if (!m[d] || txt.length > m[d].length) m[d] = txt;
+      });
+    return m;
+  })();
+  const noteOf = (r) => {
+    const d = String(r.tel || "").replace(/\D/g, "");
+    const c = d ? cplMap[d] : "";
+    return c ? `${c}${r.note ? "　" + r.note : ""}` : (r.note || "");
+  };
+
   // ── 匯出 Excel:格式比照你手工整理的那份，欄寬列高先設好 ──────────────────
   const exportXlsx = () => {
     if (!rows.length) return;
@@ -4479,11 +4550,12 @@ function PrintDingwePage({ onClose, groups }) {
     const body = rows.map(r => [
       r.room ? "包廂" : (oneDay ? "" : r.date),
       r.name ? r.time : "", r.name || "", r.name ? r.sex : "",
-      r.name ? r.tel : "", r.name ? r.pax : "", r.note || "",
+      r.name ? r.tel : "", r.name ? r.pax : "", noteOf(r),
     ]);
     const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
-    ws["!cols"] = [{ wch:7 }, { wch:10 }, { wch:16 }, { wch:8 }, { wch:14 }, { wch:17 }, { wch:42 }];
-    ws["!rows"] = [head, ...body].map(() => ({ hpt:28 }));
+    // 尺寸照你手工整理那份的實際數值（用像素，Excel 打開就是一樣的寬度）
+    ws["!cols"] = [{ wpx:69 }, { wpx:96 }, { wpx:153 }, { wpx:96 }, { wpx:148 }, { wpx:175 }, { wpx:420 }];
+    ws["!rows"] = [head, ...body].map(() => ({ hpt:20 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "訂位表");
     XLSX.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
@@ -4632,10 +4704,17 @@ function PrintDingwePage({ onClose, groups }) {
 
                   {PD_COLS.slice(1).map(c => (
                     <td key={c.k} style={{ border:BD, verticalAlign:"middle", padding:"2px 0", textAlign:(c.k === "sex" || c.k === "pax") ? "center" : "left" }}>
-                      <PdCell value={r[c.k]} onCommit={v => setCell(r.id, c.k, v)}
-                        style={{ ...cell,
-                          fontWeight:(r.name && isBig(r) && (c.k === "name" || c.k === "pax")) ? "900" : "400",
-                          justifyContent:(c.k === "sex" || c.k === "pax") ? "center" : "flex-start" }} />
+                      {c.k === "note" && r.name && noteOf(r) !== r.note ? (
+                        <div style={{ ...cell, display:"block", padding:"2px 4px" }}>
+                          <div style={{ color:"#c02020", fontWeight:"900", fontSize:`${Math.max(10, sz.font - 1)}px`, lineHeight:1.3 }}>{noteOf(r).split("　")[0]}</div>
+                          {r.note && <PdCell value={r.note} onCommit={v => setCell(r.id, "note", v)} style={{ ...cell, padding:0, minHeight:"auto" }} />}
+                        </div>
+                      ) : (
+                        <PdCell value={r[c.k]} onCommit={v => setCell(r.id, c.k, v)}
+                          style={{ ...cell,
+                            fontWeight:(r.name && isBig(r) && (c.k === "name" || c.k === "pax")) ? "900" : "400",
+                            justifyContent:(c.k === "sex" || c.k === "pax") ? "center" : "flex-start" }} />
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -4818,6 +4897,11 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
                 onChange={(nc)=>save({midCounts:{...(day.midCounts||{}),[b.id]:nc}})}/>;
             })()}
             {(()=>{
+              const sf=day.midSafe||{};
+              return <SafeCount notes={sf.notes} bags={sf.bags}
+                onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>;
+            })()}
+            {(()=>{
               const b0=(bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0]||{});
               const drawer=+(b0.amt||10000);
               const sales=+(day.midSales||0), exp=+(day.midExp||0);
@@ -4874,7 +4958,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
                     <b style={{color:"#8a5210"}}>白話講：</b><br/>
                     <b>現金營業額</b>＝今天收進來、<b>現在手上的錢</b><br/>
                     <b>支出</b>＝拿錢出去<b>買的東西</b>（收據要留著）<br/>
-                    <b>備用金</b>＝<b>現金 ＋ 帳單</b>，兩個加起來要剛好 <b>$20,000</b>
+                    <b>備用金</b>＝現在手上的<b>現金</b> ＋ 買東西<b>花掉的錢</b>（收據金額），兩個加起來要剛好 <b>$20,000</b>
                   </div>
                 </div>
               );
