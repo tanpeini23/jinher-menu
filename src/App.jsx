@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v204";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v205";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3693,7 +3693,11 @@ function StatusIcons({ g, setGroups }){
   if(g.depositFrom)
     tags.push({k:"df",ico:"📢",t:`${g.depositFrom} 改${g.depositFromNote||"人數"}，訂金從此日算`,c:"#fff",bg:"#c06020"});
   const age=archiveAgeDays(g);
-  if(age!==null){
+  const isToday=(()=>{                       // 今天就要來的,封存到期提醒沒意義
+    const t=new Date();
+    return String(g.date||"")===`${t.getMonth()+1}/${t.getDate()}`;
+  })();
+  if(age!==null&&!isToday){
     if(isPastMeal(g)) tags.push({k:"ar",ico:"📦",t:`已封存（第 ${age} 天）`,c:"#8a7a6a",bg:"#f0ece4"});
     else if(age>=7)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，已超過 7 天要重新封存`,c:"#fff",bg:"#c02020",blink:true});
     else if(age>=6)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，明天過期要重封`,c:"#fff",bg:"#e08030",blink:true});
@@ -3801,43 +3805,52 @@ function SafeCount({ notes, bags, onChange }){
   const noteSum=CASH_DENOM.reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
   const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((bags||{})[b.d])||0),0);
   const total=noteSum+bagSum, diff=total-SAFE_TOTAL, ok=diff===0;
-  const inp={width:"50px",padding:"5px",borderRadius:"6px",border:"1px solid #c8d8e8",textAlign:"center",fontSize:"14px",fontWeight:"700",color:"#1a3a5a",background:"#fff"};
   const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
+  const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
   return (
-    <div style={{background:"#fbfdff",border:"1.5px solid #c8d8e8",borderRadius:"10px",padding:"10px 11px",marginTop:"9px"}}>
-      <div style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a",marginBottom:"7px"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</div>
-      <div style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700",marginBottom:"4px"}}>紙鈔（填張數）</div>
-      <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"9px"}}>
-        {CASH_DENOM.map(d=>(
-          <div key={d} style={{textAlign:"center"}}>
-            <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>{d}</div>
-            <input inputMode="numeric" value={(notes||{})[d]??""} placeholder="0"
-              onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags})} style={inp}/>
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</div>
+
+      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",marginBottom:"4px"}}>紙鈔（填張數）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+            {col.map(d=>(
+              <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                <input value={(notes||{})[d]||""} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags})} inputMode="numeric" placeholder="0" style={ipt}/>
+                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((notes||{})[d])||0)>0?`$${(d*(+((notes||{})[d])||0)).toLocaleString()}`:""}</span>
+              </div>
+            ))}
           </div>
         ))}
       </div>
-      <div style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700",marginBottom:"4px"}}>零錢（填袋數，每袋金額固定）</div>
-      <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-        {COIN_BAGS.map(b=>(
-          <div key={b.d} style={{textAlign:"center"}}>
-            <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",lineHeight:1.3}}>{b.d}元<br/><span style={{color:"#a08a70"}}>1袋 ${b.per}</span></div>
-            <input inputMode="numeric" value={(bags||{})[b.d]??""} placeholder="0"
-              onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)}})} style={inp}/>
-            <div style={{fontSize:"10px",color:"#5a7a9a",fontWeight:"700",marginTop:"2px"}}>${(b.per*(+((bags||{})[b.d])||0)).toLocaleString()}</div>
+
+      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",margin:"9px 0 4px",borderTop:"1px solid #e0e8f0",paddingTop:"8px"}}>零錢（填袋數，每袋金額固定）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto"}}>
+        {[COIN_BAGS.slice(0,2),COIN_BAGS.slice(2)].map((col,ci)=>(
+          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+            {col.map(b=>(
+              <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                <input value={(bags||{})[b.d]||""} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)}})} inputMode="numeric" placeholder="0" style={ipt}/>
+                <span style={{fontSize:"10px",color:"#a08a70",width:"30px"}}>袋</span>
+                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((bags||{})[b.d])||0)>0?`$${(b.per*(+((bags||{})[b.d])||0)).toLocaleString()}`:`1袋$${b.per}`}</span>
+              </div>
+            ))}
           </div>
         ))}
       </div>
-      <div style={{display:"flex",gap:"6px",marginTop:"9px",fontSize:"12px",fontWeight:"700",color:"#3a5a7a",flexWrap:"wrap",alignItems:"center"}}>
-        <span>紙鈔 ${noteSum.toLocaleString()}</span><span>＋</span><span>零錢 ${bagSum.toLocaleString()}</span><span>＝</span>
-        <span style={{fontWeight:"900",fontSize:"14px"}}>${total.toLocaleString()}</span>
+
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700"}}>紙鈔 ${noteSum.toLocaleString()} ＋ 零錢 ${bagSum.toLocaleString()}</span>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>＝ 合計 ${total.toLocaleString()}</span>
+        {total>0&&(ok
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
       </div>
-      {total>0&&(
-        <div style={{marginTop:"7px",borderRadius:"8px",padding:"8px 10px",textAlign:"center",
-          background:ok?"#e6f6ea":"#fdeceb",border:`2px solid ${ok?"#2a8a4a":"#c02020"}`,
-          fontSize:ok?"15px":"14px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>
-          {ok?"✅ 金庫一致":`⚠ 差 $${Math.abs(diff).toLocaleString()}（實際${diff>0?"多":"少"}了）`}
-        </div>
-      )}
     </div>
   );
 }
@@ -4117,7 +4130,11 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           if(safeOk&&safeId&&(cl.spotOk||{})[safeId]!=="ok"){
             setTimeout(()=>saveCl({spotOk:{...(cl.spotOk||{}),[safeId]:"ok"}}),0);
           }
-          return <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>;
+          return (<>
+            <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對自動打勾）</div>
+            <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
+            <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
+          </>);
         })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
           const st=(cl.spotOk||{})[b.id];
@@ -4922,11 +4939,6 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
               const b=bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0];
               return <CountTable counts={(day.midCounts&&day.midCounts[b.id])||{}} baseAmt={b.amt} label={b.label}
                 onChange={(nc)=>save({midCounts:{...(day.midCounts||{}),[b.id]:nc}})}/>;
-            })()}
-            {(()=>{
-              const sf=day.midSafe||{};
-              return <SafeCount notes={sf.notes} bags={sf.bags}
-                onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>;
             })()}
             {(()=>{
               const b0=(bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0]||{});
