@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v203";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v204";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1781,6 +1781,19 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
 
 
 // ─── STATUS CELL ─────────────────────────────────────────────────────────────
+const STATUS_AUTOLOCK = ["未KEY-需優先KEY","未KEY-超過1週無法先KEY","餐點封存"];   // 選了這些狀態自動鎖單
+// 限時解鎖:鎖不解開，只開一個時間窗，到點自動鎖回去
+function isLockedNow(g){
+  if(!g||!g.locked) return false;
+  const u=g.unlockUntil ? new Date(g.unlockUntil) : null;
+  if(u&&!isNaN(u)&&u>new Date()) return false;   // 還在解鎖時間窗內
+  return true;
+}
+function unlockLeft(g){
+  if(!g||!g.unlockUntil) return "";
+  const u=new Date(g.unlockUntil); if(isNaN(u)||u<=new Date()) return "";
+  return `${String(u.getHours()).padStart(2,"0")}:${String(u.getMinutes()).padStart(2,"0")}`;
+}
 const STATUS_OPTIONS = ["已加LINE","已提醒點餐","未接","未KEY-需優先KEY","未KEY-超過1週無法先KEY","已KEY需改單","現場點餐","餐點封存"];
 
 const DEFAULT_STAFF = ["佩霓","TINA","07","佑庭","大銘"];
@@ -2210,6 +2223,8 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
       archiveType: (isArchive&&pendingArchiveType!=="onsite") ? pendingArchiveType : x.archiveType,
       keyed: pendingStatus==="已KEY需改單" ? true : x.keyed,
       menuReminded: pendingStatus==="已提醒點餐" ? true : x.menuReminded,
+      locked: STATUS_AUTOLOCK.includes(pendingStatus) ? true : x.locked,        // 未KEY/已封存 → 自動鎖單
+      unlockUntil: STATUS_AUTOLOCK.includes(pendingStatus) ? "" : x.unlockUntil, // 自動鎖時把舊的解鎖時間窗清掉
     }));
     setPickStaff(false);
     setPendingStatus("");
@@ -2285,17 +2300,17 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
             )}
             {g.fromMai&&(
               <button onClick={(e)=>{e.stopPropagation();setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false}));}}
-                title="轉一般後才會開始追訂金、催點餐、算低消。留在麥訂這些都不會動" style={{marginTop:"3px",fontSize:"11px",background:"#b07840",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 10px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",minHeight:"30px"}}>📥 轉一般→</button>
+                title="轉入追蹤表後才會開始追訂金、催點餐、算低消。留在麥訂這些都不會動" style={{marginTop:"3px",fontSize:"11px",background:"#b07840",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 10px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",minHeight:"30px"}}>📥 轉入追蹤表→</button>
             )}
           </div>
         ) : g.fromMai ? (
             <div style={{marginTop:"2px",display:"flex",flexDirection:"column",gap:"3px",alignItems:"center"}}>
               {g.maiMissed>0&&<div style={{fontSize:"9px",fontWeight:"800",color:"#fff",background:g.maiMissed>=3?"#c02020":"#c06030",borderRadius:"4px",padding:"1px 5px"}}>📵 未接 ×{g.maiMissed}{g.maiMissed>=3?" 聯絡不上":""}</div>}
-              <div style={{display:"flex",gap:"3px"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:"4px",marginTop:"2px"}}>
                 <button onClick={(e)=>{e.stopPropagation();const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,maiMissed:(x.maiMissed||0)+1,maiMissedAt:at}));}}
-                  style={{fontSize:"9px",background:"#c06030",color:"#fff",border:"none",borderRadius:"4px",padding:"2px 6px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>📵 未接</button>
+                  style={{fontSize:"12px",background:"#c06030",color:"#fff",border:"none",borderRadius:"7px",padding:"8px 10px",minHeight:"34px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",width:"100%"}}>📵 未接</button>
                 <button onClick={(e)=>{e.stopPropagation();const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false,maiMissed:0,statusLog:{status:"已加LINE",operator:"",date:d}}));}}
-                  style={{fontSize:"9px",background:"#b07840",color:"#fff",border:"none",borderRadius:"4px",padding:"2px 6px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>轉一般→</button>
+                  style={{fontSize:"12px",background:"#b07840",color:"#fff",border:"none",borderRadius:"7px",padding:"8px 10px",minHeight:"34px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",width:"100%"}}>轉入追蹤表 →</button>
               </div>
               {g.maiMissedAt&&<div style={{fontSize:"8px",color:"#a05030"}}>{g.maiMissedAt}</div>}
             </div>
@@ -3656,7 +3671,7 @@ function Tip({ text, children, w=210 }){
 }
 // 行話的白話解釋
 const TIP_TXT = {
-  mai:"從大麥匯入、還沒確認的訂位。確認過後按「轉一般」移到大訂表正式追蹤。",
+  mai:"從大麥匯入、還沒確認的訂位。確認過後按「轉入追蹤表」移到大訂表正式追蹤。",
   toNormal:"這筆確認過了 → 移到大訂表。\n轉了才會開始追訂金、催點餐、算低消；留在麥訂這些都不會動。",
   past:"用餐日已經過了、但還沒處理完的訂單。過 2 天以上才會閃紅燈催你。",
   cpl:"記錄客人反應的問題。記完可以看統計，也會在客人下次訂位時提醒要招待什麼。",
@@ -4092,6 +4107,18 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         </div>
       </CloseStep>
       <CloseStep n={3} doneKey="s3" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s3"} onOpen={setCurStep}>
+        {(()=>{
+          const sf=cl.safe||{};
+          const noteSum=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0);
+          const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((sf.bags||{})[b.d])||0),0);
+          const safeOk=(noteSum+bagSum)===SAFE_TOTAL;
+          const safeId=(bases.filter(b=>b.label.includes("金庫"))[0]||{}).id;
+          // 數對了就自動劃掉，不用夥伴再按一次「✓ 正確」
+          if(safeOk&&safeId&&(cl.spotOk||{})[safeId]!=="ok"){
+            setTimeout(()=>saveCl({spotOk:{...(cl.spotOk||{}),[safeId]:"ok"}}),0);
+          }
+          return <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>;
+        })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
           const st=(cl.spotOk||{})[b.id];
           return (
@@ -5380,13 +5407,13 @@ const rowBg=(g)=>{
     );
   };
 
-  // 防呆:代碼已經出現(會員身分確認過)但還沒按「轉一般」→ 離開前攔一下
+  // 防呆:代碼已經出現(會員身分確認過)但還沒按「轉入追蹤表」→ 離開前攔一下
   const pendingMai = groups.filter(g=>g.fromMai&&g.memberType&&g.memberType!=="private"&&!g.cancelled);
   const leaveGuard = (go) => {
     if(pendingMai.length===0){ go(); return; }
     const list=pendingMai.slice(0,6).map(g=>`　・${g.date} ${g.time} ${g.name}（代碼 ${g.code}）`).join("\n");
     const more=pendingMai.length>6?`\n　…還有 ${pendingMai.length-6} 筆`:"";
-    if(window.confirm(`⚠ 有 ${pendingMai.length} 筆已經確認會員、代碼也出來了，但還沒按「轉一般」：\n\n${list}${more}\n\n沒轉一般就不會開始追訂金、催點餐、算低消。\n\n要先回去處理嗎？\n\n【確定】＝留下來處理　【取消】＝仍要離開`)) return;
+    if(window.confirm(`⚠ 有 ${pendingMai.length} 筆已經確認會員、代碼也出來了，但還沒按「轉入追蹤表」：\n\n${list}${more}\n\n沒轉入追蹤表就不會開始追訂金、催點餐、算低消。\n\n要先回去處理嗎？\n\n【確定】＝留下來處理　【取消】＝仍要離開`)) return;
     go();
   };
 
@@ -5448,7 +5475,7 @@ const rowBg=(g)=>{
           <div style={{background:"#fffaf0",border:"1.5px solid #d8c090",borderRadius:"12px",padding:"12px 14px",marginBottom:"10px"}}>
             <div style={{fontSize:"13px",fontWeight:"800",color:"#8a5210",marginBottom:"8px",borderBottom:"2px solid #d8c090",paddingBottom:"6px"}}>📖 各按鍵用途</div>
             {[
-              ["📥 麥訂","從大麥匯入、還沒轉成正式訂位的。點一下只看這些,處理完按「轉一般」。有紅色 ! 表示有待處理。"],
+              ["📥 麥訂","從大麥匯入、還沒轉成正式訂位的。點一下只看這些,處理完按「轉入追蹤表」。有紅色 ! 表示有待處理。"],
               ["過期訂單","用餐日已過、還沒收掉的訂位。點開處理:直接封存,或有狀況就填「客訴與建議」。有紅色 ! 表示有待處理。"],
               ["人數統計表","訂位人數統計表。每週一三五要導入訂位、關滿20的紅色時段。裡面有步驟 1-2-3 指引。有紅色 ! 表示今天還沒做完。"],
               ["員工","管理夥伴名單(新增/刪除),就是各種「選夥伴」會出現的名字。"],
@@ -5573,7 +5600,7 @@ const rowBg=(g)=>{
           if(slotConflicts.length>0) _nowJobs.push({t:`${slotConflicts.length} 個時段超收`,lv:1});
           if(groups.some(g=>g.timeIssue&&!g.cancelled&&!g.archived)) _nowJobs.push({t:"客人回報時間有誤",lv:1});
           if(!importedToday) _nowJobs.push({t:"今天還沒匯入訂位",lv:2});
-          if(maiN>0) _nowJobs.push({t:`${maiN} 筆麥訂待轉一般（轉了才會追訂金/催點餐）`,lv:2});
+          if(maiN>0) _nowJobs.push({t:`${maiN} 筆麥訂待轉入追蹤表（轉了才會追訂金/催點餐）`,lv:2});
           if(needClose&&!closeDone) _nowJobs.push({t:"今天要關訂位",lv:2});
           if(pastN>0) _nowJobs.push({t:`${pastN} 筆過期訂單（要詢問餐評）`,lv:2});
           return (
@@ -5944,7 +5971,7 @@ const rowBg=(g)=>{
                 {maiN>0&&(
                   <div onClick={()=>{setShowMaiOnly(true);setShowPast(false);}} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
                     <span style={{fontSize:"13px"}}>🔴</span>
-                    <span style={{fontSize:"13px",color:"#1a6a3a",fontWeight:"700"}}>📥 {maiN} 筆麥訂待轉一般 →<span style={{fontSize:"11px",color:"#8a6a4a",fontWeight:"600"}}>（先確認有沒有加 LINE；轉了才會追訂金/催點餐）</span></span>
+                    <span style={{fontSize:"13px",color:"#1a6a3a",fontWeight:"700"}}>📥 {maiN} 筆麥訂待轉入追蹤表 →<span style={{fontSize:"11px",color:"#8a6a4a",fontWeight:"600"}}>（先確認有沒有加 LINE；轉了才會追訂金/催點餐）</span></span>
                   </div>
                 )}
                 {pastN>0&&(
@@ -6024,7 +6051,7 @@ const rowBg=(g)=>{
             {rows.length===0&&<tr><td colSpan={shownCols.length+4} style={{textAlign:"center",padding:"40px",color:"#a09070"}}>尚無紀錄</td></tr>}
             {showMaiOnly&&(
               <tr><td colSpan={shownCols.length+4} style={{background:"#eaf4ea",padding:"8px 11px",fontSize:"12px",color:"#1a6a3a",fontWeight:"700",borderBottom:"1.5px solid #a8c8a8",lineHeight:"1.7"}}>
-                💡 <b>確認過的要按「轉一般」</b> —— 轉了才會開始追訂金、催點餐、算低消。留在這裡的都不會動。
+                💡 <b>確認過的要按「轉入追蹤表」</b> —— 轉了才會開始追訂金、催點餐、算低消。留在這裡的都不會動。
               </td></tr>
             )}
             {showMaiOnly&&(()=>{
@@ -6102,7 +6129,7 @@ const rowBg=(g)=>{
                       );
                     })()}
                     {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
-                    {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
+                    {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&isLockedNow({...g,locked:true})&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
                     {/* 狀態圖示(🔓不提前鎖單 / 📢改人數 / 📦封存天數)已搬到備註欄 */}
                     {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
                       style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
@@ -6123,16 +6150,32 @@ const rowBg=(g)=>{
                       {(g.orders||[]).some(o=>(o.lines||[]).some(l=>l.setMeal&&l.setMeal.veggieSoup))&&(
                         <span style={{fontSize:"9px",fontWeight:"800",color:"#dfeadf",background:"#5fe08a",borderRadius:"4px",padding:"1px 5px"}}>🌿 素湯</span>
                       )}
-                      <button onClick={()=>setGroups(p=>p.map(x=>{
-                          if(x.id!==g.id) return x;
-                          const eff = !x.unlockOverride && (x.locked || isPastDeadline(x.date));
-                          return eff ? {...x, locked:false, unlockOverride:true}   // 目前鎖著 → 解鎖
-                                     : {...x, locked:true,  unlockOverride:false}; // 目前開著 → 上鎖
-                        }))}
-                        style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",
-                          background:(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"#fbdcdc":"#dfeadf",color:(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"#b03030":"#2a7a4a",fontWeight:"700"}}>
-                        {(!g.unlockOverride&&(g.locked||isPastDeadline(g.date)))?"🔒":"🔓"}
-                      </button>
+                      {(()=>{
+                        const eff = !g.unlockOverride && (g.locked || isPastDeadline(g.date)) && isLockedNow({...g,locked:true});
+                        const left = unlockLeft(g);
+                        return (
+                          <button onClick={()=>{
+                              if(!eff){   // 目前開著 → 直接鎖上
+                                setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,locked:true,unlockOverride:false,unlockUntil:""}));
+                                return;
+                              }
+                              const pick=window.prompt("解鎖多久?（時間到會自動鎖回去）\n\n1 = 30分鐘\n2 = 1小時\n3 = 2小時\n4 = 今天打烊(23:59)","2");
+                              if(pick===null) return;
+                              const now=new Date(); const u=new Date(now);
+                              if(pick==="1") u.setMinutes(u.getMinutes()+30);
+                              else if(pick==="2") u.setHours(u.getHours()+1);
+                              else if(pick==="3") u.setHours(u.getHours()+2);
+                              else if(pick==="4") u.setHours(23,59,0,0);
+                              else return;
+                              setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,locked:true,unlockOverride:false,unlockUntil:u.toISOString()}));
+                            }}
+                            title={eff?"點一下限時解鎖":(left?`解鎖到 ${left}，時間到自動鎖回去。點一下立刻鎖上`:"目前開著，點一下鎖上")}
+                            style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",whiteSpace:"nowrap",
+                              background:eff?"#fbdcdc":"#dfeadf",color:eff?"#b03030":"#2a7a4a",fontWeight:"700"}}>
+                            {eff?"🔒":(left?`🔓${left}`:"🔓")}
+                          </button>
+                        );
+                      })()}
                       <button onClick={()=>{
                           if(!g.setDrinkOnsite&&!window.confirm("打開後，這組客人點套餐可以不選飲料就送出。\n飲料改成現場在櫃檯 POS 點。\n\n確定打開?")) return;
                           setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,setDrinkOnsite:!x.setDrinkOnsite}));
@@ -7588,7 +7631,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
               ⚠ 這批訂位有 {cplWarn.filter(c=>!c.ack).length} 位客人有客訴紀錄
             </span>
             <button onClick={()=>setCplWarnOpen(o=>!o)} style={{fontSize:"11px",background:cplWarnOpen?"#8a2020":"#c02020",border:"none",borderRadius:"6px",padding:"5px 10px",color:"#fff",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{cplWarnOpen?"▲ 收合":"▼ 展開"}</button>
-            <button onClick={()=>{const m=cplWarn.map(c=>({...c,ack:true}));setCplWarn(m);FS.saveDoc("cplWarn",m);}} style={{fontSize:"10px",background:"#e8c0c0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a2020",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已知道</button>
+            <button onClick={()=>{const m=cplWarn.map(c=>({...c,ack:true}));setCplWarn(m);FS.saveDoc("cplWarn",m);}} style={{fontSize:"10px",background:"#e8c0c0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a2020",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已備註POS機</button>
           </div>
           {cplWarnOpen&&cplWarn.map((c,ci)=>c.ack?null:(
             <div key={c.rid} style={{background:"#fff",border:"1px solid #e0a0a0",borderRadius:"8px",padding:"7px 9px",marginBottom:"4px"}}>
@@ -7605,7 +7648,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
                     style={{fontSize:"10px",background:"#a04020",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",marginRight:"5px"}}>📋 客訴中心</button>
                 )}
                 <button onClick={()=>{const m=cplWarn.map((x,j)=>j===ci?{...x,ack:true}:x);setCplWarn(m);FS.saveDoc("cplWarn",m);}}
-                  style={{fontSize:"10px",background:"#3a8a5a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已知道</button>
+                  style={{fontSize:"10px",background:"#3a8a5a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已備註POS機</button>
               </div>
               <div style={{fontSize:"11px",color:"#a04020",marginTop:"3px",lineHeight:"1.6"}}>
                 {c.type&&<b>{c.type}</b>}{c.kinds?`・${c.kinds}`:""}{c.dishes?`　🍽 ${c.dishes}`:""}{c.src?`　(${c.src})`:""}
@@ -8834,7 +8877,7 @@ function HuadanPage({ group, onMark, onClose }) {
 }
 
 // ─── GROUP SUMMARY PAGE ───────────────────────────────────────────────────────
-function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onToggleVeggie, fromStaff, onArchiveMenu, onEditLineNote }) {
+function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onToggleVeggie, fromStaff, onArchiveMenu, onEditLineNote, onDeleteLine, onSetLineQty }) {
   const [huadan, setHuadan] = useState(false);
   const [hdPin, setHdPin] = useState(null); // null=關閉 ""=輸入中
   const [addOpen, setAddOpen] = useState(false);   // 員工新增訂單彈窗
@@ -8872,7 +8915,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
 
   return (
     <div style={S.page}>
-      {!group.unlockOverride&&(group.locked||isPastDeadline(group.date))&&(
+      {!group.unlockOverride&&(group.locked||isPastDeadline(group.date))&&isLockedNow({...group,locked:true})&&(
         <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
           <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（已過點餐時間）</span>
         </div>
@@ -9071,6 +9114,26 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                       {fromStaff ? (
                         noteOpen[order.num] ? (
                         <div style={{marginTop:"5px"}}>
+                          <div style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"5px",flexWrap:"wrap"}}>
+                            {line.custom&&(
+                              <>
+                                <span style={{fontSize:"11px",color:"#8a7a60",fontWeight:"700"}}>數量</span>
+                                <button onClick={()=>onSetLineQty&&onSetLineQty(order.num,li,(line.qty||1)-1)}
+                                  style={{width:"28px",height:"28px",borderRadius:"7px",border:"1.5px solid #c8b89c",background:"#fff",color:"#6a4a2e",fontWeight:"900",cursor:"pointer"}}>−</button>
+                                <b style={{fontSize:"14px",color:"#6a4a2e",minWidth:"20px",textAlign:"center"}}>{line.qty||1}</b>
+                                <button onClick={()=>onSetLineQty&&onSetLineQty(order.num,li,(line.qty||1)+1)}
+                                  style={{width:"28px",height:"28px",borderRadius:"7px",border:"1.5px solid #c8b89c",background:"#fff",color:"#6a4a2e",fontWeight:"900",cursor:"pointer"}}>＋</button>
+                              </>
+                            )}
+                            <span style={{flex:1}}/>
+                            <button onClick={()=>{
+                                const nm=line.custom?line.name:((findItem(line.itemId)||{}).name||"這道");
+                                const who=window.prompt(`要刪掉「${nm}」?\n\n請輸入你的名字（會記進改單紀錄）`);
+                                if(who===null||!who.trim()) return;
+                                onDeleteLine&&onDeleteLine(order.num,li,who.trim());
+                              }}
+                              style={{fontSize:"11px",padding:"5px 11px",borderRadius:"7px",border:"1.5px solid #e0a0a0",background:"#fff",color:"#a03020",fontWeight:"800",cursor:"pointer"}}>🗑 刪除這道</button>
+                          </div>
                           <input value={line.note||""} placeholder="特殊需求（例如：不要蔥、加飯）"
                             onChange={e=>onEditLineNote&&onEditLineNote(order.num,li,e.target.value)}
                             style={{width:"100%",boxSizing:"border-box",padding:"7px 9px",borderRadius:"8px",
@@ -9502,7 +9565,7 @@ export default function App() {
     try {
       unsubRef.current = FS.subscribeGroups((data,pending)=>{
         if(data&&Array.isArray(data)) {
-          // 別讓即時同步把「剛在本機按下、還沒存完」的修改蓋掉(例如轉一般)
+          // 別讓即時同步把「剛在本機按下、還沒存完」的修改蓋掉(例如轉入追蹤表)
           if(pending) return;                                   // 自己樂觀寫入的回音,本機已有資料
           if(Date.now()-lastLocalEdit.current < 2500) return;   // 剛改過,先別被伺服器舊資料覆蓋
           setGroupsState(data);
@@ -9535,7 +9598,7 @@ export default function App() {
     const g=groups.find(x=>x.code===code);
     if(!g){setErr("找不到此代碼，請確認後重試");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
-    if(!isSummary && !g.unlockOverride && (g.locked || isPastDeadline(g.date))){
+    if(!isSummary && !g.unlockOverride && (g.locked || isPastDeadline(g.date)) && isLockedNow({...g,locked:true})){
       setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");
       return;
     }
@@ -9551,7 +9614,7 @@ export default function App() {
     const g=groups.find(x=>x.code===code);
     if(!g){setErr("找不到此代碼");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
-    if(!g.unlockOverride && (g.locked || isPastDeadline(g.date))){setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");return;}
+    if(!g.unlockOverride && (g.locked || isPastDeadline(g.date)) && isLockedNow({...g,locked:true})){setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");return;}
     const order=g.orders.find(o=>o.num===num);
     if(!order){setErr(`找不到 ${num} 號訂單，請確認號碼`);return;}
     setActiveGroup(g);
@@ -9593,6 +9656,24 @@ export default function App() {
   if(page==="summary"&&activeGroup) {
     const liveGroup = groups.find(g=>g.id===activeGroup.id) || activeGroup;
     return <GroupSummaryPage group={liveGroup} fromStaff={summaryFromStaff} onBack={()=>setPage(summaryFromStaff?"staff":"home")}
+      onDeleteLine={(orderNum,lineIdx,who)=>{
+        const now=new Date();
+        const stamp=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+        setGroups(prev=>prev.map(g=>g.id!==liveGroup.id?g:{...g,
+          orders:(g.orders||[]).map(o=>{
+            if(o.num!==orderNum) return o;
+            const ln=(o.lines||[])[lineIdx];
+            const nm=ln?(ln.custom?ln.name:((findItem(ln.itemId)||{}).name||ln.itemId)):"";
+            return {...o,
+              lines:(o.lines||[]).filter((_,i)=>i!==lineIdx),
+              editLog:[...(o.editLog||[]),`${stamp} ${who||"夥伴"} 刪除「${nm}」`]};
+          })}));
+      }}
+      onSetLineQty={(orderNum,lineIdx,qty)=>{
+        setGroups(prev=>prev.map(g=>g.id!==liveGroup.id?g:{...g,
+          orders:(g.orders||[]).map(o=>o.num!==orderNum?o:{...o,
+            lines:(o.lines||[]).map((l,i)=>i!==lineIdx?l:{...l,qty:Math.max(1,parseInt(qty)||1)})})}));
+      }}
       onEditLineNote={(orderNum,lineIdx,note)=>{
         setGroups(prev=>prev.map(g=>g.id!==liveGroup.id?g:{...g,
           orders:(g.orders||[]).map(o=>o.num!==orderNum?o:{...o,
