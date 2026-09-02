@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v205";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v206";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1781,6 +1781,16 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
 
 
 // ─── STATUS CELL ─────────────────────────────────────────────────────────────
+// 今天就要來的，封存到期提醒沒意義（當天不會再重新封存）
+function isMealToday(g){
+  const t=new Date();
+  return String((g&&g.date)||"")===`${t.getMonth()+1}/${t.getDate()}`;
+}
+function archiveExpiring(g){
+  if(!g||g.cancelled||isPastMeal(g)||isMealToday(g)) return false;
+  const a=archiveAgeDays(g);
+  return a!==null&&a>=6;
+}
 const STATUS_AUTOLOCK = ["未KEY-需優先KEY","未KEY-超過1週無法先KEY","餐點封存"];   // 選了這些狀態自動鎖單
 // 限時解鎖:鎖不解開，只開一個時間窗，到點自動鎖回去
 function isLockedNow(g){
@@ -4126,18 +4136,18 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((sf.bags||{})[b.d])||0),0);
           const safeOk=(noteSum+bagSum)===SAFE_TOTAL;
           const safeId=(bases.filter(b=>b.label.includes("金庫"))[0]||{}).id;
-          // 數對了就自動劃掉，不用夥伴再按一次「✓ 正確」
-          if(safeOk&&safeId&&(cl.spotOk||{})[safeId]!=="ok"){
-            setTimeout(()=>saveCl({spotOk:{...(cl.spotOk||{}),[safeId]:"ok"}}),0);
-          }
           return (<>
-            <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對自動打勾）</div>
+            <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對就自動劃掉）</div>
             <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
           </>);
         })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
-          const st=(cl.spotOk||{})[b.id];
+          const sf2=cl.safe||{};
+          const autoOk = b.label.includes("金庫") &&
+            (CASH_DENOM.reduce((s,d)=>s+d*(+((sf2.notes||{})[d])||0),0)
+             +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf2.bags||{})[c.d])||0),0))===SAFE_TOTAL;
+          const st=autoOk ? "ok" : (cl.spotOk||{})[b.id];
           return (
             <div key={b.id} style={{background:st==="ok"?"#eef8f0":"#f8fafc",borderRadius:"8px",padding:"9px 10px",marginTop:"5px",opacity:st==="ok"?0.75:1}}>
               <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
@@ -5604,7 +5614,7 @@ const rowBg=(g)=>{
           const _phase = _h<11 ? {k:"open",t:"早班",icon:"☀️"} : (_h<20 ? {k:"mid",t:"中班",icon:"💰"} : {k:"close",t:"晚班",icon:"🌙"});
           const _nowJobs=[];
           if(chaseGs.length>0) _nowJobs.push({t:`${chaseGs.length} 組要催點餐`,lv:1});
-          const _exp=groups.filter(g=>{if(g.cancelled||isPastMeal(g))return false;const a=archiveAgeDays(g);return a!==null&&a>=6;});
+          const _exp=groups.filter(archiveExpiring);
           if(_exp.length>0) _nowJobs.push({t:`${_exp.length} 筆封存快過期`,lv:1});
           const _tv=groups.filter(g=>!g.cancelled&&g.depositLast5&&g.depositStatus==="待核對");
           if(_tv.length>0) _nowJobs.push({t:`${_tv.length} 筆訂金要對帳`,lv:2});
@@ -5722,10 +5732,7 @@ const rowBg=(g)=>{
                 })()}
                 {(()=>{
                   // 只提醒「還沒用餐」的:已經吃完的不用再重新封存
-                  const expiring=groups.filter(g=>{
-                    if(g.cancelled||isPastMeal(g)) return false;
-                    const a=archiveAgeDays(g); return a!==null&&a>=6;
-                  });
+                  const expiring=groups.filter(archiveExpiring);
                   if(expiring.length===0) return null;
                   return (
                     <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
