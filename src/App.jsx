@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v207";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v208";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3812,7 +3812,7 @@ function NoteCell({ g, setGroups, staffList }){
 }
 // 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
 function SafeCount({ notes, bags, onChange }){
-  const noteSum=CASH_DENOM.reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
+  const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
   const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((bags||{})[b.d])||0),0);
   const total=noteSum+bagSum, diff=total-SAFE_TOTAL, ok=diff===0;
   const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
@@ -3823,7 +3823,7 @@ function SafeCount({ notes, bags, onChange }){
 
       <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",marginBottom:"4px"}}>紙鈔（填張數）</div>
       <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-        {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+        {[[1000,500,100]].map((col,ci)=>(
           <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
             {col.map(d=>(
               <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
@@ -3865,6 +3865,51 @@ function SafeCount({ notes, bags, onChange }){
   );
 }
 function CountTable({ counts, onChange, baseAmt, label }){
+  const setCount=(k,v)=>onChange({...counts,[k]:v.replace(/[^0-9]/g,"")});
+  const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+counts[d]||0),0);
+  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+counts[`bag${b.d}`]||0),0);
+  const total=noteSum+bagSum;
+  const diff=total-(+baseAmt||0);
+  const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        <div style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>紙鈔（張）</div>
+          {[1000,500,100].map(d=>(
+            <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{flex:"1 1 0",minWidth:"152px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>零錢（袋）</div>
+          {COIN_BAGS.map(b=>(
+            <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={counts[`bag${b.d}`]||""} onChange={e=>setCount(`bag${b.d}`,e.target.value)} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"10px",color:"#a08a70"}}>袋</span>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[`bag${b.d}`]||0)>0?`$${(b.per*(+counts[`bag${b.d}`]||0)).toLocaleString()}`:`1袋$${b.per}`}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700"}}>紙鈔 ${noteSum.toLocaleString()} ＋ 零錢 ${bagSum.toLocaleString()}</span>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>＝ 合計 ${total.toLocaleString()}</span>
+        {total>0&&(diff===0
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
+function _CountTableOld({ counts, onChange, baseAmt, label }){
   const setCount=(d,v)=>onChange({...counts,[d]:v.replace(/[^0-9]/g,"")});
   const total=CASH_DENOM.reduce((s,d)=>s+d*(+counts[d]||0),0);
   const diff=total-(+baseAmt||0);
@@ -4140,13 +4185,48 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對就自動劃掉）</div>
             <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
+            {(()=>{
+              const rv=cl.reserve||{};
+              const cash=+(rv.cash||0), rcpt=+(rv.rcpt||0);
+              const tot=cash+rcpt, df=tot-SAFE_TOTAL, ok2=df===0;
+              const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
+              return (
+                <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px",marginTop:"5px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
+                      <input value={rv.cash||""} inputMode="numeric" placeholder="0"
+                        onChange={e=>saveCl({reserve:{...rv,cash:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
+                    </div>
+                    <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
+                      <input value={rv.rcpt||""} inputMode="numeric" placeholder="0"
+                        onChange={e=>saveCl({reserve:{...rv,rcpt:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
+                    </div>
+                    <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
+                      <div style={{fontSize:"16px",fontWeight:"900",color:ok2?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
+                    </div>
+                  </div>
+                  {tot>0&&(
+                    <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",
+                      color:"#fff",background:ok2?"#2a8a5a":"#c02020",borderRadius:"6px",padding:"5px"}}>
+                      {ok2?"✓ 備用金正確":(df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`)}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>);
         })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
-          const sf2=cl.safe||{};
-          const autoOk = b.label.includes("金庫") &&
-            (CASH_DENOM.reduce((s,d)=>s+d*(+((sf2.notes||{})[d])||0),0)
+          const sf2=cl.safe||{}, rv2=cl.reserve||{};
+          const safeOk2 = ([1000,500,100].reduce((s,d)=>s+d*(+((sf2.notes||{})[d])||0),0)
              +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf2.bags||{})[c.d])||0),0))===SAFE_TOTAL;
+          const resOk2  = ((+(rv2.cash||0))+(+(rv2.rcpt||0)))===SAFE_TOTAL;
+          const autoOk = b.label.includes("金庫") ? (safeOk2&&resOk2) : false;
           const st=autoOk ? "ok" : (cl.spotOk||{})[b.id];
           return (
             <div key={b.id} style={{background:st==="ok"?"#eef8f0":"#f8fafc",borderRadius:"8px",padding:"9px 10px",marginTop:"5px",opacity:st==="ok"?0.75:1}}>
