@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v206";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v207";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4913,6 +4913,13 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             <span style={{width:"20px",height:"20px",borderRadius:"50%",background:CASH_SPOTS.every(k=>day.cash&&day.cash[k])?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>1</span>
             <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>算錢</span>
             {(()=>{
+              const sf=day.midSafe||{};
+              const tot=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0)
+                       +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf.bags||{})[c.d])||0),0);
+              if(tot!==SAFE_TOTAL) return null;
+              return <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px"}}>🔐 金庫正確</span>;
+            })()}
+            {(()=>{
               const bad=CASH_SPOTS.filter(k=>day.cash&&day.cash[k]&&!day.cash[k].ok);
               const anyDone=CASH_SPOTS.some(k=>day.cash&&day.cash[k]);
               if(!anyDone) return (<>
@@ -4933,6 +4940,13 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
                   style={{fontSize:"10px",border:"1px solid #c8d8e8",background:"#fff",color:"#5a7a9a",borderRadius:"5px",padding:"4px 9px",cursor:"pointer",whiteSpace:"nowrap"}}>重來</button>
               </>);
             })()}
+          </div>
+          {(()=>{
+            const sf=day.midSafe||{};
+            return <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>;
+          })()}
+          <div style={{fontSize:"10px",color:"#8aa0b8",marginTop:"5px",lineHeight:"1.6"}}>
+            備用金：現在手上的<b>現金</b> ＋ 買東西<b>花掉的錢</b>（收據金額）＝ <b>$20,000</b>
           </div>
         </div>
 
@@ -5345,9 +5359,11 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   };
   // 麥訂區:全部都要處理,不分類
   const noGroup = showMaiOnly || !!filter.trim() || showPast;
-  const weekGs=noGroup?[]:filtered.filter(inWeek);
+  // 訂金逾期/快到期的,就算用餐日還很遠也要拉進本週待處理(訂金期限跟用餐日是兩回事)
+  const depPull=(g)=>!inWeek(g)&&!g.cancelled&&!g.archived&&["overdue","urgent"].includes(depositUrgency(g));
+  const weekGs=noGroup?[]:filtered.filter(g=>inWeek(g)||depPull(g));
   const weekTodo=noGroup?[]:weekGs.filter(isTodo), weekDone=noGroup?[]:weekGs.filter(g=>!isTodo(g));
-  const restGs=noGroup?filtered:filtered.filter(g=>!inWeek(g));
+  const restGs=noGroup?filtered:filtered.filter(g=>!inWeek(g)&&!depPull(g));
   // 顯示順序:本週待處理 → 本週已處理 → 其他
   const rows=noGroup?filtered:[...weekTodo,...weekDone,...restGs];
   const gapAfter = weekTodo.length>0 ? weekTodo.length-1 : -1;        // 待處理最後一列後面留空隙
