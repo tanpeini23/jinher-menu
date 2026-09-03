@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v214";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v215";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -2221,7 +2221,9 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
       noPhotoReason=r.trim();
     }
     const snap={id:`${Date.now()}`, time:(archPending&&archPending.time)||nowStamp(), photoId:pid, by:operator, noPhotoReason};
-    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x, archived:false, archiveType:"menu", archiveTime:snap.time, archiveBy:operator, archiveSnaps:[...(x.archiveSnaps||[]), snap]}));
+    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x, archived:false, archiveType:"menu", archiveTime:snap.time, archiveBy:operator, archiveSnaps:[...(x.archiveSnaps||[]), snap],
+      locked:true, unlockUntil:"",                                    // 封存＝已進 POS,自動鎖單
+      statusLog:{status:"餐點封存", operator, date:snap.time}}));      // 狀態一起帶上,不然點餐狀態還停在舊的
     setArchStaffPick(false); setArchPending(null);
   };
 
@@ -9893,7 +9895,9 @@ export default function App() {
       }}
       onArchiveMenu={({time,photoId,operator})=>{
         const snap={id:`${Date.now()}`, time, photoId:photoId||null, by:operator};
-        setGroups(prev=>prev.map(x=>x.id!==liveGroup.id?x:{...x, archived:false, archiveType:"menu", archiveTime:time, archiveBy:operator, archiveSnaps:[...(x.archiveSnaps||[]), snap]}));
+        setGroups(prev=>prev.map(x=>x.id!==liveGroup.id?x:{...x, archived:false, archiveType:"menu", archiveTime:time, archiveBy:operator, archiveSnaps:[...(x.archiveSnaps||[]), snap],
+          locked:true, unlockUntil:"",                                  // 封存＝已進 POS,自動鎖單
+          statusLog:{status:"餐點封存", operator, date:time}}));
       }}
       onToggleVeggie={(orderNum, lineIdx)=>{
         setGroups(prev=>prev.map(g=>{
