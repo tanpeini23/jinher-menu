@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v213";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v214";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1796,6 +1796,16 @@ function SignatureModal({ group, sigType, onSave, onClose }) {
 
 // ─── STATUS CELL ─────────────────────────────────────────────────────────────
 // 今天就要來的，封存到期提醒沒意義（當天不會再重新封存）
+// 這些情況都不該催點餐(以前散在三個地方各寫各的,漏掉封存)
+function noChase(g){
+  if(!g) return true;
+  if(g.onsiteOrder) return true;                                  // 現場點餐:不用線上點
+  if(g.cancelled||g.archived||g.locked) return true;              // 取消/封存/已鎖單
+  const st=(g.statusLog&&g.statusLog.status)||"";
+  if(st==="餐點封存"||g.archiveType==="menu") return true;         // 餐點已封存:單已經進 POS
+  if(st.startsWith("未KEY")||st==="已KEY需改單") return true;      // 已經在處理 KEY 單
+  return false;
+}
 function isMealToday(g){
   const t=new Date();
   return String((g&&g.date)||"")===`${t.getMonth()+1}/${t.getDate()}`;
@@ -3584,7 +3594,7 @@ function LineNameModal({ g, onClose }){
     if(needDep) return "dep";
     const dl2=getOrderDeadline(g.date);
     const near2=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
-    if(near2&&needN>0&&doneN2<needN&&!lowConsumeOk(g)&&!g.onsiteOrder) return "chase";   // 現場點餐不用線上點,不催
+    if(near2&&needN>0&&doneN2<needN&&!lowConsumeOk(g)&&!noChase(g)) return "chase";
     if(lowConsumeOk(g)&&!g.locked) return "lock";
     if(g.fromMai) return "name";          // 剛匯入的:先改 LINE 名稱
     return "";
@@ -3619,7 +3629,7 @@ function LineNameModal({ g, onClose }){
             const need=adultsOfG(g);
             const done=(g.orders||[]).length;
             const dl=getOrderDeadline(g.date); const near=dl&&(dl-new Date())>0&&(dl-new Date())<=48*3600000;
-            if(need>0&&done<need&&near&&!g.onsiteOrder) list.push(["⏰ 催點餐", msgChase(g), "#c06030", "chase"]);   // 現場點餐不催
+            if(need>0&&done<need&&near&&!noChase(g)) list.push(["⏰ 催點餐", msgChase(g), "#c06030", "chase"]);
             // 低消達標判定:包廂看金額、一般看份數(跟客人端同一套)
             if(lowConsumeOk(g)&&!g.locked) list.push(["🔒 問可否提前鎖單", msgEarlyLock(g), "#2a7a4a", "lock"]);
             return list.map(([label,txt,color,key])=>{
@@ -5736,8 +5746,7 @@ const rowBg=(g)=>{
           const slotConflicts=Object.entries(slotMap).map(([k,gs])=>({slot:k,gs,msg:slotRuleCheck(gs)})).filter(x=>x.msg);
           // ⏰ 快截止還沒點完的訂位 → 夥伴要主動催(客人逾時只能現場點餐,等40分鐘以上)
           const chaseGs = groups.filter(g=>{
-            if(g.fromMai||g.cancelled||g.archived||g.locked) return false;
-            if(g.onsiteOrder) return false;                      // 現場點餐:不用線上點,不催
+            if(g.fromMai||noChase(g)) return false;
             if(!g.date||isPastMeal(g)) return false;
             const dl=getOrderDeadline(g.date); if(!dl) return false;
             const left=dl-new Date();
@@ -6313,7 +6322,7 @@ const rowBg=(g)=>{
                       const need2=adultsOfG(g);
                       const dl2=getOrderDeadline(g.date);
                       const near=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
-                      const notDone=need2>0&&(g.orders||[]).length<need2&&!lowConsumeOk(g)&&!g.onsiteOrder;   // 現場點餐不催
+                      const notDone=need2>0&&(g.orders||[]).length<need2&&!lowConsumeOk(g)&&!noChase(g);
                       const label = needDep?"催訂金" : (near&&notDone?"催點餐" : (g.fromMai?"改名字":"LINE"));
                       const hot = needDep||(near&&notDone)||g.fromMai;
                       return (
