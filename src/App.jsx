@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v210";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v211";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5011,7 +5011,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
         <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
           <div style={{display:"flex",alignItems:"center",gap:"7px",marginBottom:"6px"}}>
             <span style={{width:"20px",height:"20px",borderRadius:"50%",background:CASH_SPOTS.every(k=>day.cash&&day.cash[k])?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>1</span>
-            <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>算錢</span>
+            <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>金庫清點</span>
             {(()=>{
               const sf=day.midSafe||{};
               const tot=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0)
@@ -5023,16 +5023,16 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
               const bad=CASH_SPOTS.filter(k=>day.cash&&day.cash[k]&&!day.cash[k].ok);
               const anyDone=CASH_SPOTS.some(k=>day.cash&&day.cash[k]);
               if(!anyDone) return (<>
-                <span style={{fontSize:"10px",color:"#8aa0b8"}}>金庫・備用金・錢櫃</span>
+                <span style={{fontSize:"10px",color:"#8aa0b8"}}>金庫・備用金・錢櫃　（一次確認三項）</span>
                 <span style={{flex:1}}/>
                 <button onClick={()=>{const t=now();const nc={};CASH_SPOTS.forEach(k=>nc[k]={ok:true,at:t});save({cash:nc});}}
-                  style={{fontSize:"12px",fontWeight:"800",border:"none",background:"#2a7a4a",color:"#fff",borderRadius:"8px",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",minHeight:"34px"}}>✓ 三個都正確</button>
+                  style={{fontSize:"12px",fontWeight:"800",border:"none",background:"#2a7a4a",color:"#fff",borderRadius:"8px",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",minHeight:"34px"}}>✓ 正確</button>
                 <button onClick={()=>{setCashForm({spot:"錢櫃",diff:"少",amt:"",note:""});setCashEdit("pick");}}
                   style={{fontSize:"12px",fontWeight:"800",border:"1.5px solid #d09090",background:"#fff",color:"#c02020",borderRadius:"8px",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",minHeight:"34px"}}>✗ 有不符</button>
               </>);
               return (<>
                 {bad.length===0
-                  ? <span style={{fontSize:"12px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",borderRadius:"5px",padding:"2px 9px"}}>✓ 三個都正確</span>
+                  ? <span style={{fontSize:"12px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
                   : bad.map(k=>{const c=day.cash[k];return <span key={k} style={{fontSize:"12px",fontWeight:"800",color:"#c02020",background:"#fbe0e0",borderRadius:"5px",padding:"2px 9px"}}>✗ {k} {c.diff} ${c.amt}{c.note?`・${c.note}`:""}</span>;})}
                 <span style={{fontSize:"9px",color:"#8aa0b8"}}>{(day.cash[CASH_SPOTS[0]]||{}).at||""}</span>
                 <span style={{flex:1}}/>
@@ -5045,14 +5045,60 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             const sf=day.midSafe||{};
             return <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>;
           })()}
-          <div style={{fontSize:"10px",color:"#8aa0b8",marginTop:"5px",lineHeight:"1.6"}}>
-            備用金：現在手上的<b>現金</b> ＋ 買東西<b>花掉的錢</b>（收據金額）＝ <b>$20,000</b>
+        </div>
+
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"7px",marginBottom:"5px",flexWrap:"wrap"}}>
+            {(()=>{
+              const rv=day.midReserve||{};
+              const ok2=((+(rv.cash||0))+(+(rv.rcpt||0)))===SAFE_TOTAL;
+              return (<>
+                <span style={{width:"20px",height:"20px",borderRadius:"50%",background:ok2?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>2</span>
+                <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>備用金</span>
+                {ok2&&<span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px"}}>✓ 正確</span>}
+              </>);
+            })()}
           </div>
+          {(()=>{
+            const rv=day.midReserve||{};
+            const cash=+(rv.cash||0), rcpt=+(rv.rcpt||0), tot=cash+rcpt, df=tot-SAFE_TOTAL, ok2=df===0;
+            const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
+            return (
+              <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
+                    <input value={rv.cash||""} inputMode="numeric" placeholder="0"
+                      onChange={e=>save({midReserve:{...rv,cash:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
+                  </div>
+                  <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
+                    <input value={rv.rcpt||""} inputMode="numeric" placeholder="0"
+                      onChange={e=>save({midReserve:{...rv,rcpt:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
+                  </div>
+                  <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
+                    <div style={{fontSize:"16px",fontWeight:"900",color:ok2?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
+                  </div>
+                </div>
+                {tot>0&&!ok2&&(
+                  <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"6px",padding:"5px"}}>
+                    {df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`}
+                  </div>
+                )}
+                <div style={{fontSize:"10px",color:"#8aa0b8",marginTop:"6px",textAlign:"center",lineHeight:"1.6"}}>
+                  現在手上的<b>現金</b> ＋ 買東西<b>花掉的錢</b>（收據金額）＝ <b>${SAFE_TOTAL.toLocaleString()}</b>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
           <div style={{display:"flex",alignItems:"center",gap:"7px",marginBottom:"5px"}}>
-            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>2</span>
+            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>3</span>
             <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>錢櫃清點</span>
             <span style={{flex:1}}/>
             <button onClick={()=>save({midOpen:!day.midOpen})}
@@ -5132,7 +5178,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
 
         <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
           <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
-            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:day.printed?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>3</span>
+            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:day.printed?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>4</span>
             <span onClick={()=>save({printed:!day.printed,printedAt:day.printed?"":now()})} style={{fontSize:"15px",cursor:"pointer"}}>{day.printed?"✅":"⬜"}</span>
             <span onClick={()=>save({printed:!day.printed,printedAt:day.printed?"":now()})}
               style={{fontSize:"13px",fontWeight:"800",color:day.printed?"#7a9a8a":"#1a3a5a",textDecoration:day.printed?"line-through":"none",cursor:"pointer"}}>🖨 印訂位表</span>
@@ -5621,7 +5667,7 @@ const rowBg=(g)=>{
               ["假日","設定哪些日期算假日(影響備料、訂位人數標準)。"],
               ["🚫 品項","按日期關閉餐點(可選幾號到幾號);季節限定品項在這裡設上架~下架檔期,自動上下架。"],
               ["⚠ 時間疑義","客人在點餐頁按「時間不對?」回報時,這裡會跳紅字。點時間欄的「⚠時間疑義」標籤 → 選要改成客人說的時間、還是維持原本 → <b>兩種都要記得去大麥 POS 同步</b>。"],
-              ["🤝 櫃檯交接","收合式清單:①<b>算錢</b>——平常按〔✓三個都正確〕一鍵完成;有問題按〔✗有不符〕選金庫/備用金/錢櫃+多少錢+備註,會留紀錄。②<b>印訂位表</b>打勾。③<b>交接事項</b>——按＋自己寫要交代下一班的事,做完打勾會劃掉。"],
+              ["🤝 櫃檯交接","收合式清單:①<b>金庫清點</b>——數紙鈔張數+零錢袋數,湊到 $20,000 自動顯示正確;有問題按〔✗有不符〕選項目+多少錢+備註,會留紀錄。②<b>備用金</b>——填現金和收據金額,加起來要 $20,000。③<b>錢櫃清點</b>——比對「基準+營業額-支出」。④<b>印訂位表</b>打勾。⑤<b>交接事項</b>——按＋自己寫要交代下一班的事,做完打勾會劃掉。"],
               ["客訴中心","所有客訴集中管理:統計(本月件數/類型佔比/最常被客訴的餐點)、清單篩選,也可在這裡記現場餐評和 Google 評論。填了電話,下次訂位會自動跳紅色「客訴」提醒。"],
               ["+ 新增大訂","手動新增一筆大訂訂位(客人沒線上訂、或電話訂位時用)。"],
             ].map(([k,v],i2,arr)=>(
