@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v215";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v216";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1817,8 +1817,13 @@ function archiveExpiring(g){
 }
 const STATUS_AUTOLOCK = ["未KEY-需優先KEY","未KEY-超過1週無法先KEY","餐點封存"];   // 選了這些狀態自動鎖單
 // 限時解鎖:鎖不解開，只開一個時間窗，到點自動鎖回去
+// v216:整條鎖單規則收在這裡。以前散在 5 個呼叫處各寫一次(坑#1),改一個會漏四個。
+// 呼叫一律 isLockedNow(g),不要再自己組 unlockOverride/locked/isPastDeadline。
 function isLockedNow(g){
-  if(!g||!g.locked) return false;
+  if(!g) return false;
+  if(g.unlockOverride) return false;                                    // 永久豁免:不提前鎖單
+  // v216:從 archiveType 直接推導。舊的已封存訂單當年沒寫過 locked 欄位,這樣才鎖得住
+  if(!(g.locked||g.archiveType==="menu"||isPastDeadline(g.date))) return false;
   const u=g.unlockUntil ? new Date(g.unlockUntil) : null;
   if(u&&!isNaN(u)&&u>new Date()) return false;   // 還在解鎖時間窗內
   return true;
@@ -6338,7 +6343,7 @@ const rowBg=(g)=>{
                       );
                     })()}
                     {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
-                    {!g.unlockOverride&&(g.locked||isPastDeadline(g.date))&&isLockedNow({...g,locked:true})&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
+                    {isLockedNow(g)&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
                     {/* 狀態圖示(🔓不提前鎖單 / 📢改人數 / 📦封存天數)已搬到備註欄 */}
                     {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
                       style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
@@ -6360,7 +6365,7 @@ const rowBg=(g)=>{
                         <span style={{fontSize:"9px",fontWeight:"800",color:"#dfeadf",background:"#5fe08a",borderRadius:"4px",padding:"1px 5px"}}>🌿 素湯</span>
                       )}
                       {(()=>{
-                        const eff = !g.unlockOverride && (g.locked || isPastDeadline(g.date)) && isLockedNow({...g,locked:true});
+                        const eff = isLockedNow(g);
                         const left = unlockLeft(g);
                         return (
                           <button onClick={()=>{
@@ -9124,7 +9129,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
 
   return (
     <div style={S.page}>
-      {!group.unlockOverride&&(group.locked||isPastDeadline(group.date))&&isLockedNow({...group,locked:true})&&(
+      {isLockedNow(group)&&(
         <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
           <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（已過點餐時間）</span>
         </div>
@@ -9812,7 +9817,7 @@ export default function App() {
     const g=groups.find(x=>x.code===code);
     if(!g){setErr("找不到此代碼，請確認後重試");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
-    if(!isSummary && !g.unlockOverride && (g.locked || isPastDeadline(g.date)) && isLockedNow({...g,locked:true})){
+    if(!isSummary && isLockedNow(g)){
       setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");
       return;
     }
@@ -9828,7 +9833,7 @@ export default function App() {
     const g=groups.find(x=>x.code===code);
     if(!g){setErr("找不到此代碼");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
-    if(!g.unlockOverride && (g.locked || isPastDeadline(g.date)) && isLockedNow({...g,locked:true})){setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");return;}
+    if(isLockedNow(g)){setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");return;}
     const order=g.orders.find(o=>o.num===num);
     if(!order){setErr(`找不到 ${num} 號訂單，請確認號碼`);return;}
     setActiveGroup(g);
