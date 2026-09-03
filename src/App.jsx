@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v208";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v210";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3821,37 +3821,28 @@ function SafeCount({ notes, bags, onChange }){
     <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
       <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</div>
 
-      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",marginBottom:"4px"}}>紙鈔（填張數）</div>
       <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-        {[[1000,500,100]].map((col,ci)=>(
-          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
-            {col.map(d=>(
-              <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
-                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
-                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-                <input value={(notes||{})[d]||""} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags})} inputMode="numeric" placeholder="0" style={ipt}/>
-                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((notes||{})[d])||0)>0?`$${(d*(+((notes||{})[d])||0)).toLocaleString()}`:""}</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-
-      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700",margin:"9px 0 4px",borderTop:"1px solid #e0e8f0",paddingTop:"8px"}}>零錢（填袋數，每袋金額固定）</div>
-      <div style={{display:"flex",gap:"10px",overflowX:"auto"}}>
-        {[COIN_BAGS.slice(0,2),COIN_BAGS.slice(2)].map((col,ci)=>(
-          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
-            {col.map(b=>(
-              <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
-                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
-                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-                <input value={(bags||{})[b.d]||""} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)}})} inputMode="numeric" placeholder="0" style={ipt}/>
-                <span style={{fontSize:"10px",color:"#a08a70",width:"30px"}}>袋</span>
-                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((bags||{})[b.d])||0)>0?`$${(b.per*(+((bags||{})[b.d])||0)).toLocaleString()}`:`1袋$${b.per}`}</span>
-              </div>
-            ))}
-          </div>
-        ))}
+        <div style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          {[1000,500,100].map(d=>(
+            <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={(notes||{})[d]||""} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags})} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((notes||{})[d])||0)>0?`$${(d*(+((notes||{})[d])||0)).toLocaleString()}`:""}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{flex:"1 1 0",minWidth:"152px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          {COIN_BAGS.map(b=>(
+            <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={(bags||{})[b.d]||""} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)}})} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"10px",color:"#a08a70",width:"22px"}}>袋</span>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((bags||{})[b.d])||0)>0?`$${(b.per*(+((bags||{})[b.d])||0)).toLocaleString()}`:`1袋$${b.per}`}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
@@ -3865,11 +3856,37 @@ function SafeCount({ notes, bags, onChange }){
   );
 }
 function CountTable({ counts, onChange, baseAmt, label }){
-  const setCount=(k,v)=>onChange({...counts,[k]:v.replace(/[^0-9]/g,"")});
-  const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+counts[d]||0),0);
-  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+counts[`bag${b.d}`]||0),0);
-  const total=noteSum+bagSum;
+  const setCount=(d,v)=>onChange({...counts,[d]:v.replace(/[^0-9]/g,"")});
+  const total=CASH_DENOM.reduce((s,d)=>s+d*(+counts[d]||0),0);
   const diff=total-(+baseAmt||0);
+  const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（應有 ${(+baseAmt).toLocaleString()}）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+            {col.map(d=>(
+              <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0" style={ipt}/>
+                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>合計 ${total.toLocaleString()}</span>
+        {total>0&&(diff===0
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
+function _CountTableBag({ counts, onChange, baseAmt, label }){
   const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
   return (
     <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
@@ -4423,7 +4440,7 @@ const PD_WKEY   = "pdColW_v2";
 const PD_SKEY   = "pdSize_v2";
 // 日期欄只放「包廂」所以很窄;人數欄要塞「大人 3 / 小孩 0」所以最寬
 const PD_DEF_W  = { date:48, time:52, name:80, sex:46, tel:80, pax:92 };   // 合計 398 → 備註拿到 396
-const PD_DEF_SZ = { font:12, row:38 };
+const PD_DEF_SZ = { font:12, row:27 };   // 27px ≒ Excel 20pt
 const PD_COLS   = [
   { k:"date", label:"日期" }, { k:"time", label:"時間" }, { k:"name", label:"姓名" },
   { k:"sex",  label:"性別" }, { k:"tel",  label:"電話" }, { k:"pax",  label:"人數" },
@@ -4711,6 +4728,9 @@ function PrintDingwePage({ onClose, groups }) {
           .pdNP{ display:none!important; }
           .pdGut{ width:0!important; padding:0!important; border:none!important; }
           .pdGut *{ display:none!important; }
+          .pdSheet table{ border:2px solid #000!important; }
+          .pdSheet td, .pdSheet th{ border:1px solid #000!important; }
+          .pdSheet td.pdGut{ border:none!important; }
           .pdRow{ break-inside:avoid; page-break-inside:avoid; }
           .pdPageTop td{ box-shadow:none!important; }
           thead{ display:table-header-group; }
@@ -4793,7 +4813,7 @@ function PrintDingwePage({ onClose, groups }) {
             <span style={{ fontSize:"12px" }}>系統會自動刪掉用不到的欄位、合併備註、轉日期格式、標包廂、換時段空行</span>
           </div>
         ) : (
-          <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed", border:"2px solid #000" }}>
             <colgroup>
               <col className="pdGut" style={{ width:"78px" }} />
               {PD_COLS.map(c => <col key={c.k} style={c.k === "note" ? undefined : { width:`${colW[c.k]}px` }} />)}
@@ -5041,7 +5061,8 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
           {day.midOpen&&(<>
             {(bases.filter(b=>b.label.includes("錢櫃"))[0]||bases[0])&&(()=>{
               const b=bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0];
-              return <CountTable counts={(day.midCounts&&day.midCounts[b.id])||{}} baseAmt={b.amt} label={b.label}
+              const should=(+b.amt||0)+(+(day.midSales||0))-(+(day.midExp||0));   // 應有=基準+現金營業額-支出
+              return <CountTable counts={(day.midCounts&&day.midCounts[b.id])||{}} baseAmt={should} label={`${b.label}（基準 $${(+b.amt||0).toLocaleString()} ＋營業額 −支出）`}
                 onChange={(nc)=>save({midCounts:{...(day.midCounts||{}),[b.id]:nc}})}/>;
             })()}
             {(()=>{
