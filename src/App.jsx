@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v211";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v213";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -431,7 +431,7 @@ const VIP_HINT_WORDS = ["包廂","包間","包廂訂金","低消","點餐"];
 function lowConsumeCount(lines){
   let n=0;
   (lines||[]).forEach(l=>{
-    const q=Math.max(1, parseInt(l.qty)||1);   // 客人點的沒有 qty→1;夥伴加點才有數量
+    const q=Math.max(1, parseInt(l.qty)||1);   // 數量:沒填當 1 份
     const it=findItem(l.itemId);
     if(it){
       if(isMainDish(it)) n+=q;     // 主餐(含升級套餐)算 1
@@ -463,7 +463,7 @@ function linePrice(line, isMember) {
       p += Math.max(0, line.setMeal.drink.price - 80);
     }
   }
-  return p;
+  return p * Math.max(1, parseInt(line.qty) || 1);   // 數量:沒填當 1 份
 }
 
 function linePriceBreakdown(line, isMember) {
@@ -631,7 +631,21 @@ function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, d
           <div style={{fontSize:"16px",color:"#3a2a18",fontWeight:"700"}}>{item.name}</div>
           {item.sub&&!item.sub.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>{item.sub}</div>}
           {item.sub?.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#a8741e",marginTop:"4px",lineHeight:"1.6"}}>{item.sub}</div>}
-          <div style={{fontSize:"15px",color:"#9c5a1c",marginTop:"4px"}}>${getItemPrice(item,isMember)}</div>
+          <div style={{fontSize:"15px",color:"#9c5a1c",marginTop:"4px"}}>
+            ${getItemPrice(item,isMember)}
+            {(line.qty||1)>1&&<span style={{fontWeight:"800"}}> × {line.qty} ＝ ${getItemPrice(item,isMember)*(line.qty||1)}</span>}
+          </div>
+          {!disabled&&(
+            <div style={{display:"flex",alignItems:"center",gap:"7px",marginTop:"7px"}}>
+              <span style={{fontSize:"12px",color:"#7a5e42",fontWeight:"700"}}>份數</span>
+              <button onClick={()=>onUpdate({qty:Math.max(1,(line.qty||1)-1)})}
+                style={{width:"32px",height:"32px",borderRadius:"8px",border:"1.5px solid #d8c4a4",background:"#fff",color:"#8a6a48",fontSize:"17px",fontWeight:"900",cursor:"pointer",lineHeight:1}}>−</button>
+              <b style={{fontSize:"16px",color:"#3a2a18",minWidth:"24px",textAlign:"center"}}>{line.qty||1}</b>
+              <button onClick={()=>onUpdate({qty:Math.min(30,(line.qty||1)+1)})}
+                style={{width:"32px",height:"32px",borderRadius:"8px",border:"1.5px solid #d8c4a4",background:"#fff",color:"#8a6a48",fontSize:"17px",fontWeight:"900",cursor:"pointer",lineHeight:1}}>＋</button>
+              <span style={{fontSize:"11px",color:"#a89070"}}>甜度/醬料不同要另外點一道</span>
+            </div>
+          )}
         </div>
         {!disabled&&<button onClick={onRemove}
           style={{padding:"4px 10px",borderRadius:"8px",border:"1px solid #e6b0a0",background:"none",color:"#d05a36",fontSize:"13px",cursor:"pointer",marginLeft:"8px"}}>
@@ -1804,7 +1818,7 @@ function unlockLeft(g){
   const u=new Date(g.unlockUntil); if(isNaN(u)||u<=new Date()) return "";
   return `${String(u.getHours()).padStart(2,"0")}:${String(u.getMinutes()).padStart(2,"0")}`;
 }
-const STATUS_OPTIONS = ["已加LINE","已提醒點餐","未接","未KEY-需優先KEY","未KEY-超過1週無法先KEY","已KEY需改單","現場點餐","餐點封存"];
+const STATUS_OPTIONS = ["已加LINE","已提醒點餐","未接","未KEY-需優先KEY","未KEY-超過1週無法先KEY","現場點餐","餐點封存"];
 
 const DEFAULT_STAFF = ["佩霓","TINA","07","佑庭","大銘"];
 
@@ -4707,6 +4721,8 @@ function PrintDingwePage({ onClose, groups }) {
     // 尺寸照你手工整理那份的實際數值（用像素，Excel 打開就是一樣的寬度）
     ws["!cols"] = [{ wpx:69 }, { wpx:96 }, { wpx:153 }, { wpx:96 }, { wpx:148 }, { wpx:175 }, { wpx:420 }];
     ws["!rows"] = [head, ...body].map(() => ({ hpt:20 }));
+    // 邊界＋頁首頁尾全部 0（框線 SheetJS 免費版寫不進去，要在 Excel 按 Ctrl+A → 所有框線）
+    ws["!margins"] = { left:0, right:0, top:0, bottom:0, header:0, footer:0 };
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "訂位表");
     XLSX.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
@@ -8902,7 +8918,7 @@ function HuadanPage({ group, onMark, onClose }) {
         else if(["甜點","小品"].includes(cat)) section="餐後";
         else section="前菜";                        // 沙拉/前菜/其他
         const catTag=isMainDish(item)?cat:"";        // 義大利麵/燉飯/披薩/早午餐
-        mains.push({key:baseKey,num:o.num,guest:o.guestName,name:item.name,cat:catTag,setId,section});
+        mains.push({key:baseKey,num:o.num,guest:o.guestName,name:`${item.name}${(line.qty||1)>1?` ×${line.qty}`:""}`,cat:catTag,setId,section});
       }
     });
   });
@@ -9218,18 +9234,23 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                     {order.sentAt&&(()=>{
                       const eds=order.editLog||[];
                       const latest=eds.length>0?eds[eds.length-1]:order.sentAt;
+                      // 封存/已KEY 之後客人又改單 → POS 裡的單跟現在不一樣了,要閃
+                      const st=(group.statusLog&&group.statusLog.status)||"";
+                      const locked2=["餐點封存","已KEY需改單"].includes(st)||group.archiveType==="menu";
+                      const toMin=(s)=>{const m=String(s||"").match(/(\d+)\/(\d+)(?:\s+(\d+):(\d+))?/);return m?((+m[1])*100000+(+m[2])*1440+(+(m[3]||0))*60+(+(m[4]||0))):0;};
+                      const afterLock=locked2&&eds.length>0&&toMin(latest)>=toMin((group.statusLog&&group.statusLog.date)||"");
                       return (
                         <span style={{display:"inline-flex",alignItems:"center",gap:"5px",flexWrap:"wrap"}}>
-                          <span title={eds.length>0?`送單 ${order.sentAt}\n改單紀錄：\n${eds.join("\n")}`:""}
-                            style={{fontSize:"12px",fontWeight:"700",whiteSpace:"nowrap",borderRadius:"5px",padding:"3px 8px",
+                          <span className={afterLock?"blinkTag":""}
+                            title={eds.length>0?`送單 ${order.sentAt}\n改單紀錄：\n${eds.join("\n")}`:""}
+                            style={{fontSize:afterLock?"13px":"12px",fontWeight:afterLock?"900":"700",whiteSpace:"nowrap",borderRadius:"5px",padding:"3px 8px",
                               cursor:eds.length>0?"help":"default",
                               color:eds.length>0?"#fff":"#7a6a58",
                               background:eds.length>0?"#c06030":"#f2ece0"}}>
-                            {eds.length>0?`最後更新 ${latest}`:`送單 ${order.sentAt}`}
+                            {afterLock ? `⚠ 已封存後改單　${latest}`
+                              : eds.length>0 ? `最後更新 ${latest}　改過 ${eds.length} 次`
+                              : `送單 ${order.sentAt}`}
                           </span>
-                          {eds.length>0&&(
-                            <span style={{fontSize:"11px",color:"#c06030",fontWeight:"800",whiteSpace:"nowrap"}}>改過 {eds.length} 次</span>
-                          )}
                         </span>
                       );
                     })()}
@@ -9278,7 +9299,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                     <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
                       <div style={{fontSize:"12px",color:"#2a7a4a",fontWeight:"700"}}>{"["+cat+"]"}</div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
-                        <span style={{color:"#5a4530"}}>{item.name}</span>
+                        <span style={{color:"#5a4530"}}>{item.name}{(line.qty||1)>1?<b style={{color:"#a04010"}}> ×{line.qty}</b>:null}</span>
                         <span style={{color:"#9a7c5a"}}>${getItemPrice(item,isMember)}</span>
                       </div>
                       {(()=>{
