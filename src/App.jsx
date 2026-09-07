@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v216";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v218";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1827,6 +1827,30 @@ function isLockedNow(g){
   const u=g.unlockUntil ? new Date(g.unlockUntil) : null;
   if(u&&!isNaN(u)&&u>new Date()) return false;   // 還在解鎖時間窗內
   return true;
+}
+// v217:鎖單原因。提前鎖(封存進POS/夥伴確認點完)跟過截止是兩回事,
+// 不要一律講「已過點餐時間」。客人看得到的 3 個地方共用這一個(坑#1)。
+function lockReason(g){
+  return isPastDeadline(g&&g.date) ? "已過點餐時間" : "已點完餐，提早鎖單";
+}
+// v218:「單已進 POS 之後又被改」的判斷。原本只寫在總覽頁那一列裡(坑#1),
+// 現在待辦區也要用 → 抽出來共用,兩邊永遠一致。
+function stampToMin(s){
+  const m=String(s||"").match(/(\d+)\/(\d+)(?:\s+(\d+):(\d+))?/);
+  return m?((+m[1])*100000+(+m[2])*1440+(+(m[3]||0))*60+(+(m[4]||0))):0;
+}
+function isPosLocked(g){                      // 單已經進 POS(拍照封存 或 已KEY)
+  const st=(g&&g.statusLog&&g.statusLog.status)||"";
+  return ["餐點封存","已KEY需改單"].includes(st)||!!(g&&g.archiveType==="menu");
+}
+function editedAfterLock(g,order){            // 這一筆訂單在進 POS 之後有沒有被改
+  if(!isPosLocked(g)) return false;
+  const eds=(order&&order.editLog)||[];
+  if(eds.length===0) return false;
+  return stampToMin(eds[eds.length-1])>=stampToMin((g.statusLog&&g.statusLog.date)||"");
+}
+function ordersEditedAfterLock(g){            // 這一組裡所有被改過的訂單
+  return ((g&&g.orders)||[]).filter(o=>editedAfterLock(g,o));
 }
 function unlockLeft(g){
   if(!g||!g.unlockUntil) return "";
@@ -5975,6 +5999,35 @@ const rowBg=(g)=>{
                   );
                 })()}
                 {(()=>{
+                  // v218:單已進 POS 之後客人又改單 → POS 裡的內容跟系統不一樣了
+                  const changed=groups.filter(g=>{
+                    if(g.cancelled) return false;
+                    if(!g.date||isPastMeal(g)) return false;          // 跟「要 KEY 單」同一把尺
+                    return ordersEditedAfterLock(g).length>0;
+                  });
+                  if(changed.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 已封存後改單 {changed.length} 組<span title="單已經進 POS 之後客人又改了，POS 裡的內容跟系統不一樣。進去對照後記得改 POS" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {changed.map(g=>{
+                        const eo=ordersEditedAfterLock(g);
+                        return (
+                          <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0d8d8",paddingTop:"3px",marginTop:"3px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                              <span><b>{g.date} {g.time} {g.name}</b>　{g.headcount}
+                                <span style={{color:"#c02020",fontWeight:"800",marginLeft:"6px"}}>{eo.map(o=>`${o.num}號`).join("、")} 改過</span>
+                              </span>
+                              <span style={{flex:1}}/>
+                              <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                                style={{fontSize:"11px",background:"#c02020",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>看全組訂單 →</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                {(()=>{
                   // 已鎖(過點餐截止)但還沒封存餐點 → 還沒 KEY 單
                   const needKey=groups.filter(g=>{
                     if(g.fromMai||g.cancelled||g.archived) return false;
@@ -6049,6 +6102,9 @@ const rowBg=(g)=>{
                               padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
                             {copiedId===`lock_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>問可否鎖單</>}
                           </button>
+                          <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                            style={{fontSize:"11px",background:"#3a7a5a",color:"#fff",border:"none",borderRadius:"6px",
+                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>看全組訂單 →</button>
                           <button onClick={()=>{
                               const d=new Date();
                               setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:true,noEarlyLockAt:`${d.getMonth()+1}/${d.getDate()}`}));
@@ -9131,7 +9187,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
     <div style={S.page}>
       {isLockedNow(group)&&(
         <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
-          <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（已過點餐時間）</span>
+          <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（{lockReason(group)}）</span>
         </div>
       )}
       <style>{GS}</style>
@@ -9251,10 +9307,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                       const eds=order.editLog||[];
                       const latest=eds.length>0?eds[eds.length-1]:order.sentAt;
                       // 封存/已KEY 之後客人又改單 → POS 裡的單跟現在不一樣了,要閃
-                      const st=(group.statusLog&&group.statusLog.status)||"";
-                      const locked2=["餐點封存","已KEY需改單"].includes(st)||group.archiveType==="menu";
-                      const toMin=(s)=>{const m=String(s||"").match(/(\d+)\/(\d+)(?:\s+(\d+):(\d+))?/);return m?((+m[1])*100000+(+m[2])*1440+(+(m[3]||0))*60+(+(m[4]||0))):0;};
-                      const afterLock=locked2&&eds.length>0&&toMin(latest)>=toMin((group.statusLog&&group.statusLog.date)||"");
+                      const afterLock=editedAfterLock(group,order);
                       return (
                         <span style={{display:"inline-flex",alignItems:"center",gap:"5px",flexWrap:"wrap"}}>
                           <span className={afterLock?"blinkTag":""}
@@ -9818,7 +9871,7 @@ export default function App() {
     if(!g){setErr("找不到此代碼，請確認後重試");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
     if(!isSummary && isLockedNow(g)){
-      setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");
+      setErr(`⚠ 訂單已鎖定（${lockReason(g)}），如需協助請洽現場夥伴`);
       return;
     }
     setActiveGroup(g);
@@ -9833,7 +9886,7 @@ export default function App() {
     const g=groups.find(x=>x.code===code);
     if(!g){setErr("找不到此代碼");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
-    if(isLockedNow(g)){setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");return;}
+    if(isLockedNow(g)){setErr(`⚠ 訂單已鎖定（${lockReason(g)}），如需協助請洽現場夥伴`);return;}
     const order=g.orders.find(o=>o.num===num);
     if(!order){setErr(`找不到 ${num} 號訂單，請確認號碼`);return;}
     setActiveGroup(g);
