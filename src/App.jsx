@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v218";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v219";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4032,6 +4032,9 @@ const CLOSE_TITLES = {
   s13:{nov:"明天的預約大訂單",                    pro:"明天大訂單確認了",        hand:false,cam:false},
 };
 const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s7b","s8","s9","s9b","s10","s11","s12","s13"];
+// v219:老手版只完整顯示這 4 步(3 金庫備用金 / 6 錢櫃 / 7 合計 / 15 明天大訂),
+// 其餘壓成小勾勾橫排,點一下才展開(步驟2/5/9/14 裡的按鈕和拍照還要用,不能真的拿掉)。
+const CLOSE_PRO_MAIN = ["s3","s6","s7","s13"];
 const CLOSE_HELP = {
   s1 :"【為什麼要做】\n支出沒 key，帳就對不起來，會計也查不到憑證。\n\n【記得備註】\n收據 / 發票號碼 / 蝦皮\n\n【多 key 了怎麼辦】\n到【現金支出】-【收入 A05 支出誤key】更正",
   s2 :"【怎麼算】\n信用卡 ＋ AMEX ＝ 總金額\n\n【查看方式】\nF1 管理 → 4. 總帳查詢\n\n【對不起來的話】\n先看兩邊筆數對不對，再一筆筆比金額",
@@ -4089,6 +4092,26 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
   const warn=CLOSE_WARN[doneKey];
   const cam=meta.cam;
   const [helpOpen,setHelpOpen]=useState(false);
+  const [miniOpen,setMiniOpen]=useState(false);
+  // v219:老手版,不是那 4 步的 → 縮成小勾勾;點標題才展開(裡面還有按鈕/拍照要用)
+  const canMini = pro && !CLOSE_PRO_MAIN.includes(doneKey);
+  const hasKids = !!children;
+  const toggleDone=()=>saveCl({[doneKey]:done?null:hhmm()});
+  if(canMini && !miniOpen){
+    return (
+      <div style={{display:"inline-flex",alignItems:"center",gap:"5px",verticalAlign:"top",maxWidth:"100%",
+        background:done?"#eef7f1":"#f4f6f9",border:`1.5px solid ${done?"#a8d0b8":"#dde4ec"}`,
+        borderRadius:"20px",padding:"5px 10px",marginRight:"5px",marginBottom:"5px"}}>
+        <span onClick={toggleDone} style={{fontSize:"13px",cursor:"pointer"}}>{done?"✅":"⬜"}</span>
+        <span style={{width:"15px",height:"15px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"9px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</span>
+        <span onClick={()=>{ if(hasKids) setMiniOpen(true); else toggleDone(); }}
+          style={{fontSize:"11.5px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",
+            color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none"}}>{title}</span>
+        {cam&&<span title="要拍照/截圖" style={{fontSize:"10px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"0 4px"}}>📷</span>}
+        {hasKids&&<span onClick={()=>setMiniOpen(true)} style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"900",cursor:"pointer"}}>▾</span>}
+      </div>
+    );
+  }
   // 老手版:一律展開(只有勾勾);新手版:只展開目前這步
   const show = pro ? true : open;
   const Icon = meta.hand?IcoHand:IcoScreen;
@@ -4110,6 +4133,8 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
         {cam&&<span title="要拍照/截圖" style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>📷</span>}
         <span style={{fontSize:show&&!pro?"14px":"13px",fontWeight:"800",color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none",flex:1,lineHeight:"1.4"}}>{title}</span>
         {done&&<span style={{fontSize:"9px",color:"#9aaa9a"}}>{done}</span>}
+        {canMini&&<span onClick={(e)=>{e.stopPropagation();setMiniOpen(false);}}
+          style={{fontSize:"10px",color:"#5a7a9a",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>收起 ▴</span>}
       </div>
       {show&&(<>
         {children&&<div style={{marginTop:"7px"}}>{children}</div>}
@@ -4752,7 +4777,7 @@ function PrintDingwePage({ onClose, groups }) {
   // ── 匯出 Excel:格式比照你手工整理的那份，欄寬列高先設好 ──────────────────
   const exportXlsx = () => {
     if (!rows.length) return;
-    const head = [oneDay ? dayHdr : "日期", "訂位時間", "訂位人名稱", "性別", "聯絡電話", "訂位人數", "店家備註"];
+    const head = [oneDay ? dayHdr : "日期", "時間", "姓名", "性別", "聯絡電話", "訂位人數", "店家備註"];
     const body = rows.map(r => [
       r.room ? "包廂" : (oneDay ? "" : r.date),
       r.name ? r.time : "", r.name || "", r.name ? r.sex : "",
