@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v219";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v220";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4035,6 +4035,13 @@ const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s7b","s8","s9","s9b","s
 // v219:老手版只完整顯示這 4 步(3 金庫備用金 / 6 錢櫃 / 7 合計 / 15 明天大訂),
 // 其餘壓成小勾勾橫排,點一下才展開(步驟2/5/9/14 裡的按鈕和拍照還要用,不能真的拿掉)。
 const CLOSE_PRO_MAIN = ["s3","s6","s7","s13"];
+// 老手版打一個勾 = keys 裡那幾步一起打勾,所以進度照樣是 x/15,切回新手版也對得起來
+const CLOSE_PRO_GROUPS = {
+  s3 :{n:1, label:"支出、信用卡對完，金庫備用金導正", keys:["s1","s2","s3"]},
+  s6 :{n:2, label:"桌位清空、應包金額入袋，錢櫃算好截圖", keys:["s4","s5","s6"]},
+  s7 :{n:3, label:"合計金額、POS關班、印單釘好放金庫", keys:["s7","s7b","s8","s9","s9b"]},
+  s13:{n:4, label:"大麥數據、上鎖、傳LINE，明天大訂", keys:["s10","s11","s12","s13"]},
+};
 const CLOSE_HELP = {
   s1 :"【為什麼要做】\n支出沒 key，帳就對不起來，會計也查不到憑證。\n\n【記得備註】\n收據 / 發票號碼 / 蝦皮\n\n【多 key 了怎麼辦】\n到【現金支出】-【收入 A05 支出誤key】更正",
   s2 :"【怎麼算】\n信用卡 ＋ AMEX ＝ 總金額\n\n【查看方式】\nF1 管理 → 4. 總帳查詢\n\n【對不起來的話】\n先看兩邊筆數對不對，再一筆筆比金額",
@@ -4088,30 +4095,15 @@ const hhmm=()=>{const d=new Date();return `${String(d.getHours()).padStart(2,"0"
 function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
   const done=cl[doneKey];
   const meta=CLOSE_TITLES[doneKey]||{};
-  const title=pro?(meta.pro||""):(meta.nov||"");
+  const pg = pro ? CLOSE_PRO_GROUPS[doneKey] : null;
+  const title = pg ? pg.label : (pro?(meta.pro||""):(meta.nov||""));
+  const num = pg ? pg.n : n;
   const warn=CLOSE_WARN[doneKey];
   const cam=meta.cam;
   const [helpOpen,setHelpOpen]=useState(false);
-  const [miniOpen,setMiniOpen]=useState(false);
-  // v219:老手版,不是那 4 步的 → 縮成小勾勾;點標題才展開(裡面還有按鈕/拍照要用)
-  const canMini = pro && !CLOSE_PRO_MAIN.includes(doneKey);
-  const hasKids = !!children;
-  const toggleDone=()=>saveCl({[doneKey]:done?null:hhmm()});
-  if(canMini && !miniOpen){
-    return (
-      <div style={{display:"inline-flex",alignItems:"center",gap:"5px",verticalAlign:"top",maxWidth:"100%",
-        background:done?"#eef7f1":"#f4f6f9",border:`1.5px solid ${done?"#a8d0b8":"#dde4ec"}`,
-        borderRadius:"20px",padding:"5px 10px",marginRight:"5px",marginBottom:"5px"}}>
-        <span onClick={toggleDone} style={{fontSize:"13px",cursor:"pointer"}}>{done?"✅":"⬜"}</span>
-        <span style={{width:"15px",height:"15px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"9px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</span>
-        <span onClick={()=>{ if(hasKids) setMiniOpen(true); else toggleDone(); }}
-          style={{fontSize:"11.5px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",
-            color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none"}}>{title}</span>
-        {cam&&<span title="要拍照/截圖" style={{fontSize:"10px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"0 4px"}}>📷</span>}
-        {hasKids&&<span onClick={()=>setMiniOpen(true)} style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"900",cursor:"pointer"}}>▾</span>}
-      </div>
-    );
-  }
+  // v220:老手版只留 4 大步,不是主步的整個不顯示(內容已搬進主步)
+  if(pro && !CLOSE_PRO_MAIN.includes(doneKey)) return null;
+  const grp = pg ? pg.keys : [doneKey];      // 老手版打一個勾 = 底下那幾步一起打
   // 老手版:一律展開(只有勾勾);新手版:只展開目前這步
   const show = pro ? true : open;
   const Icon = meta.hand?IcoHand:IcoScreen;
@@ -4120,7 +4112,8 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
       <div onClick={()=>{
           if(!pro&&!show){ onOpen&&onOpen(doneKey); return; }
           const nowDone=!done;
-          saveCl({[doneKey]:done?null:hhmm()});
+          const t=done?null:hhmm();
+          saveCl(Object.fromEntries(grp.map(k=>[k,t])));   // 老手版:整組一起
           if(!pro&&nowDone&&onOpen){                       // 新手版:打勾後自動跳下一步
             const i=CLOSE_ORDER.indexOf(doneKey);
             if(i>=0&&i<CLOSE_ORDER.length-1) onOpen(CLOSE_ORDER[i+1]);
@@ -4128,13 +4121,11 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
         }}
         style={{display:"flex",alignItems:"center",gap:"7px",cursor:"pointer"}}>
         <span style={{fontSize:"15px"}}>{done?"✅":"⬜"}</span>
-        <span style={{width:"18px",height:"18px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"10px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</span>
+        <span style={{width:"18px",height:"18px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"10px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{num}</span>
         {!pro&&<Icon size={13} color={done?"#8aaa9a":(meta.hand?"#b07840":"#5a7a9a")}/>}
         {cam&&<span title="要拍照/截圖" style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>📷</span>}
         <span style={{fontSize:show&&!pro?"14px":"13px",fontWeight:"800",color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none",flex:1,lineHeight:"1.4"}}>{title}</span>
         {done&&<span style={{fontSize:"9px",color:"#9aaa9a"}}>{done}</span>}
-        {canMini&&<span onClick={(e)=>{e.stopPropagation();setMiniOpen(false);}}
-          style={{fontSize:"10px",color:"#5a7a9a",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>收起 ▴</span>}
       </div>
       {show&&(<>
         {children&&<div style={{marginTop:"7px"}}>{children}</div>}
@@ -4142,7 +4133,7 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
         {!pro&&(
           <div style={{marginTop:"9px",display:"flex",gap:"7px",alignItems:"center"}}>
             <button onClick={(e)=>{e.stopPropagation();
-                const t=hhmm(); saveCl({[doneKey]:t});
+                const t=hhmm(); saveCl(Object.fromEntries(grp.map(k=>[k,t])));
                 const i=CLOSE_ORDER.indexOf(doneKey);
                 if(i>=0&&i<CLOSE_ORDER.length-1&&onOpen) onOpen(CLOSE_ORDER[i+1]);
               }}
@@ -4231,6 +4222,31 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
     const d=new Date(); d.setDate(d.getDate()+1); const tmr=`${d.getMonth()+1}/${d.getDate()}`;
     return (groups||[]).filter(g=>g.date===tmr && g.archiveType==="menu" && !g.cancelled);
   })();
+  // v220:這四塊在老手版要搬進 4 大步裡,所以抽成變數,兩邊共用(不要複製兩份)
+  const blkCardEq = (<>
+        <div style={{display:"flex",gap:"6px",marginTop:"3px"}}>
+          <button onClick={()=>saveCl({cardEqPos:true})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos?"#2a8a5a":"#c8d8e8"}`,background:cl.cardEqPos?"#2a8a5a":"#fff",color:cl.cardEqPos?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✓ 一致</button>
+          <button onClick={()=>saveCl({cardEqPos:false})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos===false?"#c02020":"#c8d8e8"}`,background:cl.cardEqPos===false?"#c02020":"#fff",color:cl.cardEqPos===false?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
+        </div>
+  </>);
+  const blkPack = (<>
+        <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",background:"#fdf6ea",borderRadius:"7px",padding:"7px 9px",marginBottom:"6px",lineHeight:"1.7"}}>
+          應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+          <span style={{fontSize:"12px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
+          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="算出來的金額"
+            style={{width:"130px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+        </div>
+        {photoBlock("pack","應包金額攤開照")}
+  </>);
+  const blkBill = (<>
+        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.75"}}>
+          ⚠ 有收訂金的話，<b>單上要手寫「訂金」和「應包金額」</b>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"2px"}}>存錢對帳要用，沒寫之後對不出來</div>
+        </div>
+        {photoBlock("bill","清帳單 & 信用卡單")}
+  </>);
   // 分享文字
   const shareTxt=()=>{
     const d=new Date();const wd=["日","一","二","三","四","五","六"][d.getDay()];
@@ -4241,6 +4257,15 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
     t+=`應包金額 $${cl.shouldPack||"__"}\n信用卡=POS ${cel}\n━━━━━━━━━━\n結班：${cl.doneBy||"__"} ${cl.doneAt||""}`;
     return t;
   };
+  const blkShare = (<>
+        <button onClick={async()=>{
+            const txt=shareTxt();
+            if(navigator.share){ try{ await navigator.share({text:txt}); }catch(e){} }
+            else { try{ await navigator.clipboard.writeText(txt); window.alert("已複製結算內容,請貼到 LINE 群組"); }catch(e){ window.prompt("複製以下內容貼到 LINE:",txt); } }
+            saveCl({s12:hhmm()});
+          }}
+          style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:"#06c755",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>📤 分享結算到 LINE</button>
+  </>);
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",marginBottom:"8px"}}>
@@ -4263,13 +4288,10 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         </div>
       </div>
 
-      <PhaseHead title="先對帳" steps={["s1","s2","s3"]} cl={cl}/>
+      {!pro&&<PhaseHead title="先對帳" steps={["s1","s2","s3"]} cl={cl}/>}
       <CloseStep n={1} doneKey="s1" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s1"} onOpen={setCurStep}/>
       <CloseStep n={2} doneKey="s2" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s2"} onOpen={setCurStep}>
-        <div style={{display:"flex",gap:"6px",marginTop:"3px"}}>
-          <button onClick={()=>saveCl({cardEqPos:true})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos?"#2a8a5a":"#c8d8e8"}`,background:cl.cardEqPos?"#2a8a5a":"#fff",color:cl.cardEqPos?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✓ 一致</button>
-          <button onClick={()=>saveCl({cardEqPos:false})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos===false?"#c02020":"#c8d8e8"}`,background:cl.cardEqPos===false?"#c02020":"#fff",color:cl.cardEqPos===false?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
-        </div>
+        {blkCardEq}
       </CloseStep>
       <CloseStep n={3} doneKey="s3" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s3"} onOpen={setCurStep}>
         {(()=>{
@@ -4342,26 +4364,20 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
             </div>
           );
         })}
+        {pro&&blkCardEq}
       </CloseStep>
 
-      <PhaseHead title="數錢、收好" steps={["s4","s5","s6","s7","s7b","s8","s9","s9b"]} cl={cl}/>
+      {!pro&&<PhaseHead title="數錢、收好" steps={["s4","s5","s6","s7","s7b","s8","s9","s9b"]} cl={cl}/>}
       <CloseStep n={4} doneKey="s4" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s4"} onOpen={setCurStep}/>
       <CloseStep n={5} doneKey="s5" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s5"} onOpen={setCurStep}>
-        <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",background:"#fdf6ea",borderRadius:"7px",padding:"7px 9px",marginBottom:"6px",lineHeight:"1.7"}}>
-          應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
-          <span style={{fontSize:"12px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
-          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="算出來的金額"
-            style={{width:"130px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
-        </div>
-        {photoBlock("pack","應包金額攤開照")}
+        {blkPack}
       </CloseStep>
       <CloseStep n={6} doneKey="s6" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s6"} onOpen={setCurStep}>
         {bases.filter(b=>b.label.includes("錢櫃")).map(b=>(
           <div key={b.id}>{countTable(b.id,b.amt,b.label)}</div>
         ))}
         {photoBlock("count","錢櫃算錢截圖")}
+        {pro&&blkPack}
       </CloseStep>
       <CloseStep n={7} doneKey="s7" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7"} onOpen={setCurStep}>
         {(()=>{
@@ -4390,6 +4406,7 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
             </div>
           );
         })()}
+        {pro&&blkBill}
       </CloseStep>
       <CloseStep n={8} doneKey="s7b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7b"} onOpen={setCurStep}>
         <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",lineHeight:"1.8"}}>
@@ -4399,18 +4416,14 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         </div>
       </CloseStep>
       <CloseStep n={9} doneKey="s8" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8"} onOpen={setCurStep}>
-        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.75"}}>
-          ⚠ 有收訂金的話，<b>單上要手寫「訂金」和「應包金額」</b>
-          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"2px"}}>存錢對帳要用，沒寫之後對不出來</div>
-        </div>
-        {photoBlock("bill","清帳單 & 信用卡單")}
+        {blkBill}
       </CloseStep>
       {pro
-        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s9","釘在一起","10"],["s9b","放金庫","11"]]}/>
+        ? null                                   // v220:已併進 4 大步
         : <><CloseStep n={10} doneKey="s9" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9"} onOpen={setCurStep}/>
           <CloseStep n={11} doneKey="s9b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9b"} onOpen={setCurStep}/></>}
 
-      <PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>
+      {!pro&&<PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>}
       <CloseStep n={12} doneKey="s10" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s10"} onOpen={setCurStep}>
         <div style={{display:"flex",flexDirection:"column",gap:"7px"}}>
           {[["店家報表－營業銷售","桌數（新會員／舊會員）"],
@@ -4424,17 +4437,11 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
         </div>
       </CloseStep>
       {pro
-        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s11","金庫錢櫃上鎖","13"]]}/>
+        ? null                                   // v220:已併進 4 大步
         : <CloseStep n={13} doneKey="s11" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s11"} onOpen={setCurStep}/>}
 
       <CloseStep n={14} doneKey="s12" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s12"} onOpen={setCurStep}>
-        <button onClick={async()=>{
-            const txt=shareTxt();
-            if(navigator.share){ try{ await navigator.share({text:txt}); }catch(e){} }
-            else { try{ await navigator.clipboard.writeText(txt); window.alert("已複製結算內容,請貼到 LINE 群組"); }catch(e){ window.prompt("複製以下內容貼到 LINE:",txt); } }
-            saveCl({s12:hhmm()});
-          }}
-          style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:"#06c755",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>📤 分享結算到 LINE</button>
+        {blkShare}
       </CloseStep>
 
       <CloseStep n={15} doneKey="s13" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s13"} onOpen={setCurStep}>
@@ -4498,6 +4505,7 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           }}
           disabled={tmrBig.length===0}
           style={{width:"100%",marginTop:"7px",padding:"9px",borderRadius:"8px",border:"1.5px solid #8aa0c0",background:"#fff",color:"#3a5a8a",fontSize:"12px",fontWeight:"800",cursor:tmrBig.length?"pointer":"not-allowed",opacity:tmrBig.length?1:0.5}}>🖨 需要列印的話按這裡</button>
+        {pro&&blkShare}
       </CloseStep>
 
       {/* 結束晚結:記夥伴 */}
