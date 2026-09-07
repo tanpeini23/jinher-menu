@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v220";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v222";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3865,6 +3865,62 @@ function NoteCell({ g, setGroups, staffList }){
     </div>
   );
 }
+// v222:備用金(現金＋收據＝$20,000)。晚結和開早共用同一個元件,不要兩份。
+function ReserveCount({ rv, onChange }){
+  const r=rv||{};
+  const cash=+(r.cash||0), rcpt=+(r.rcpt||0);
+  const tot=cash+rcpt, df=tot-SAFE_TOTAL, ok=df===0;
+  const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
+  const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px",marginTop:"5px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
+          <input value={r.cash||""} inputMode="numeric" placeholder="0"
+            onChange={e=>onChange({...r,cash:num(e.target.value)})} style={ipt}/>
+        </div>
+        <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
+          <input value={r.rcpt||""} inputMode="numeric" placeholder="0"
+            onChange={e=>onChange({...r,rcpt:num(e.target.value)})} style={ipt}/>
+        </div>
+        <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
+          <div style={{fontSize:"16px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
+        </div>
+      </div>
+      {tot>0&&(
+        <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",
+          color:"#fff",background:ok?"#2a8a5a":"#c02020",borderRadius:"6px",padding:"5px"}}>
+          {ok?"✓ 備用金正確":(df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`)}
+        </div>
+      )}
+    </div>
+  );
+}
+// v222:跟昨晚晚結逐格對照。pairs=[[標籤,昨晚,今早],...]
+function NightRef({ pairs, at }){
+  const same=(l,n)=>String(+(l||0))===String(+(n||0));
+  const entered=pairs.some(([,,n])=>String(n||"")!=="");
+  const bad=pairs.filter(([,l,n])=>!same(l,n));
+  return (
+    <div style={{fontSize:"11px",color:"#8a7a5a",background:"#fdfaf3",border:"1px solid #e8dcc4",
+      borderRadius:"7px",padding:"6px 9px",marginTop:"5px",display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
+      <span style={{fontWeight:"800",color:"#a08050",whiteSpace:"nowrap"}}>昨晚{at?`(${at})`:""}</span>
+      {pairs.map(([k,l,n],i)=>(
+        <span key={i} style={{whiteSpace:"nowrap",fontWeight:entered&&!same(l,n)?"900":"700",
+          color:entered&&!same(l,n)?"#c06030":"#8a9aaa"}}>{k}×{+(l||0)}</span>
+      ))}
+      <span style={{flex:1}}/>
+      {entered&&(bad.length===0
+        ? <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>✓ 跟昨晚一致</span>
+        : <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#c06030",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>⚠ {bad.length} 格不一樣</span>)}
+    </div>
+  );
+}
 // 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
 function SafeCount({ notes, bags, onChange }){
   const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
@@ -4304,40 +4360,7 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對就自動劃掉）</div>
             <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
-            {(()=>{
-              const rv=cl.reserve||{};
-              const cash=+(rv.cash||0), rcpt=+(rv.rcpt||0);
-              const tot=cash+rcpt, df=tot-SAFE_TOTAL, ok2=df===0;
-              const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
-              return (
-                <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px",marginTop:"5px"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
-                    <div style={{textAlign:"center"}}>
-                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
-                      <input value={rv.cash||""} inputMode="numeric" placeholder="0"
-                        onChange={e=>saveCl({reserve:{...rv,cash:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
-                    </div>
-                    <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
-                    <div style={{textAlign:"center"}}>
-                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
-                      <input value={rv.rcpt||""} inputMode="numeric" placeholder="0"
-                        onChange={e=>saveCl({reserve:{...rv,rcpt:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
-                    </div>
-                    <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
-                    <div style={{textAlign:"center"}}>
-                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
-                      <div style={{fontSize:"16px",fontWeight:"900",color:ok2?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
-                    </div>
-                  </div>
-                  {tot>0&&(
-                    <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",
-                      color:"#fff",background:ok2?"#2a8a5a":"#c02020",borderRadius:"6px",padding:"5px"}}>
-                      {ok2?"✓ 備用金正確":(df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`)}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+            <ReserveCount rv={cl.reserve} onChange={(nv)=>saveCl({reserve:nv})}/>
           </>);
         })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
@@ -4445,7 +4468,8 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
       </CloseStep>
 
       <CloseStep n={15} doneKey="s13" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s13"} onOpen={setCurStep}>
-        <div style={{fontSize:"12px",fontWeight:"800",color:"#2a3a5a",marginBottom:"5px"}}>明天大訂（已封存 {tmrBig.length} 組）</div>
+        {!pro&&<div style={{fontSize:"12px",fontWeight:"800",color:"#2a3a5a",marginBottom:"5px"}}>明天大訂（已封存 {tmrBig.length} 組）</div>}
+        {!pro&&(   /* v221:印的時候/暫時桌號 是教學,老手版不顯示 */
         <div style={{fontSize:"12px",color:"#3a4a5a",background:"#f6f9fc",border:"1.5px solid #b8d0e8",borderRadius:"8px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.85"}}>
           <div style={{fontWeight:"900",color:"#1a4a7a",marginBottom:"3px"}}>📋 印的時候</div>
           ・<b>11:30 以前</b> → 照訂位表上的桌號印<br/>
@@ -4457,7 +4481,7 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
             <span style={{color:"#8a9aaa"}}>（發 mic 叫號才不會聽錯）</span>
             <div style={{fontSize:"11px",color:"#5a7a9a",marginTop:"3px"}}>可用：特殊A/B/C　大訂A/B/C　預訂A/B/C</div>
           </div>
-        </div>
+        </div>)}
         {(()=>{
           // 13:30 以後訂包廂 → 要先確認前面時段有沒有大訂被放進包廂(散包)
           const lateVip=tmrBig.filter(g=>{
@@ -5072,6 +5096,37 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
               <div style={{fontSize:"9px",color:"#b09070",marginTop:"4px"}}>做完點紅點打勾。若今天也沒做完,明天不會再自動帶過來(避免累積)。</div>
             </div>
           )}
+          {/* v222:開早算錢 — 金庫、備用金、錢櫃都實際清點,並跟昨晚晚結逐格對照 */}
+          {(()=>{
+            const yc=((data[yStr]||{}).close)||{};
+            const hasY=!!(yc.safe||yc.counts||yc.reserve);
+            const os=day.openSafe||{}, orv=day.openReserve||{}, oc=day.openCounts||{};
+            const drawer=bases.filter(b=>b.label.includes("錢櫃"))[0];
+            const ySafe=yc.safe||{}, yCnt=(yc.counts||{});
+            return (
+              <div style={{background:"#fff",border:"2px solid #c9a45c",borderRadius:"10px",padding:"10px 11px",marginBottom:"9px"}}>
+                <div style={{fontSize:"13px",fontWeight:"900",color:"#8a5210",marginBottom:"6px"}}>💵 開早算錢</div>
+                {!hasY&&<div style={{fontSize:"11.5px",fontWeight:"800",color:"#a04010",background:"#fdf0e8",border:"1.5px solid #e8c0a0",borderRadius:"7px",padding:"7px 9px",marginBottom:"7px"}}>昨天沒有晚結紀錄，沒得對照 —— 這三項請照實數，數完跟夥伴確認</div>}
+
+                <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"4px"}}>① 金庫</div>
+                <SafeCount notes={os.notes} bags={os.bags} onChange={(nv)=>save({openSafe:{...os,...nv}})}/>
+                {hasY&&<NightRef at={yc.s3||""} pairs={[
+                  ...[1000,500,100].map(d=>[`$${d}`,(ySafe.notes||{})[d],(os.notes||{})[d]]),
+                  ...COIN_BAGS.map(b=>[`$${b.d}袋`,(ySafe.bags||{})[b.d],(os.bags||{})[b.d]]),
+                ]}/>}
+
+                <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
+                <ReserveCount rv={orv} onChange={(nv)=>save({openReserve:nv})}/>
+
+                {drawer&&(<>
+                  <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>③ {drawer.label}</div>
+                  <CountTable counts={oc[drawer.id]||{}} baseAmt={drawer.amt} label={drawer.label}
+                    onChange={(nc)=>save({openCounts:{...oc,[drawer.id]:nc}})}/>
+                  {hasY&&<NightRef at={yc.s6||""} pairs={CASH_DENOM.map(d=>[`$${d}`,(yCnt[drawer.id]||{})[d],(oc[drawer.id]||{})[d]])}/>}
+                </>)}
+              </div>
+            );
+          })()}
           <div style={{background:"#fff",border:"1.5px solid #e8d0a0",borderRadius:"10px",padding:"10px 11px"}}>
             <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
               <span style={{fontSize:"12px",fontWeight:"800",color:"#a06a10"}}>☀️ 開店準備</span>
