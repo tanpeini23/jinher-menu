@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v226";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v228";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3976,6 +3976,10 @@ function NightRef({ pairs, at }){
 // 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
 // v226:金庫「上次清點」= 往回找最近一次真的有數字的紀錄,不分階段。
 // 一天內的先後是 開早 → 中間結算 → 晚結;只往回看,不會拿還沒發生的來比。
+// v227:交接資料的日期鍵一律「西元/月/日」。原本這規則散在 4 處(todayStr 含年份,
+// 兩處 yStr 和 lastSafeCount 卻寫成「月/日」)→ 永遠查不到,抽出來共用。
+function dayKey(d){ return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`; }
+function dayAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d; }
 const SAFE_STAGES=["open","mid","close"];
 function safeOfStage(day,st){
   if(!day) return null;
@@ -3991,16 +3995,16 @@ function lastSafeCount(data,stage){
   const mine=SAFE_STAGES.indexOf(stage);
   const t=new Date();
   for(let i=0;i<60;i++){
-    const d=new Date(t); d.setDate(t.getDate()-i);
-    const k=`${d.getMonth()+1}/${d.getDate()}`;
-    const day=(data||{})[k]; if(!day) continue;
+    const d=dayAgo(i);
+    const k=dayKey(d);
+    const day=(data||{})[k]||(data||{})[`${d.getMonth()+1}/${d.getDate()}`]; if(!day) continue;
     for(let j=SAFE_STAGES.length-1;j>=0;j--){
       if(i===0&&j>=mine) continue;               // 今天:只看比自己早的階段
       const sf=safeOfStage(day,SAFE_STAGES[j]);
       if(safeHasData(sf)){
         const lbl={open:"開早",mid:"中間結算",close:"晚結"}[SAFE_STAGES[j]];
         const at=SAFE_STAGES[j]==="close"?((day.close||{}).s3||""):"";
-        return {safe:sf,label:`${k} ${lbl}${at?` ${at}`:""}`};
+        return {safe:sf,label:`${d.getMonth()+1}/${d.getDate()} ${lbl}${at?` ${at}`:""}`};
       }
     }
   }
@@ -4912,15 +4916,24 @@ function PrintDingwePage({ onClose, groups, onImported }) {
   };
 
   // ── 匯出 Excel:格式比照你手工整理的那份，欄寬列高先設好 ──────────────────
-  const exportXlsx = () => {
+  const exportXlsx = async () => {
     if (!rows.length) return;
+    // v227:社群版 SheetJS 寫不進儲存格樣式(對齊/框線都會被丟掉)。
+    // 只有「匯出」這一支改用 xlsx-js-style;讀大麥檔仍用原本的 XLSX,不受影響。
+    // 載不到就自動退回原本的匯出(只是沒有對齊),不會讓匯出整個壞掉。
+    let X = XLSX, styled = false;
+    try {
+      const m = await import("https://esm.sh/xlsx-js-style@1.2.0");
+      const cand = m.utils ? m : (m.default && m.default.utils ? m.default : null);
+      if (cand) { X = cand; styled = true; }
+    } catch (err) { X = XLSX; styled = false; }
     const head = [oneDay ? dayHdr : "日期", "時間", "姓名", "性別", "聯絡電話", "訂位人數", "店家備註"];
     const body = rows.map(r => [
       r.room ? "包廂" : (oneDay ? "" : r.date),
       r.name ? r.time : "", r.name || "", r.name ? r.sex : "",
       r.name ? r.tel : "", r.name ? r.pax : "", noteOf(r),
     ]);
-    const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
+    const ws = X.utils.aoa_to_sheet([head, ...body]);
     // 尺寸照你手工整理那份的實際數值（用像素，Excel 打開就是一樣的寬度）
     // v224:依內容自動算寬度。中日文字算 2 個字寬,備註可能換行 → 取最長那一行
     const wOf = (v) => String(v??"").split("\n").reduce((mx,line)=>Math.max(mx,
@@ -4930,11 +4943,25 @@ function PrintDingwePage({ onClose, groups, onImported }) {
       return { wpx: Math.min(460, Math.max(56, w*9+18)) };   // 下限56上限460,避免太窄或撐爆一頁
     });
     ws["!rows"] = [head, ...body].map(() => ({ hpt:20 }));
-    // 邊界＋頁首頁尾全部 0（框線 SheetJS 免費版寫不進去，要在 Excel 按 Ctrl+A → 所有框線）
+    // v227:姓名(第3欄)靠左,其餘置中。載不到樣式版就跳過,不影響資料本身
+    if (styled) {
+      const NAME_COL = 2;
+      for (let r = 0; r <= body.length; r++) {
+        for (let c = 0; c < head.length; c++) {
+          const ref = X.utils.encode_cell({ r, c });
+          if (!ws[ref]) ws[ref] = { t:"s", v:"" };
+          ws[ref].s = {
+            alignment: { horizontal: c===NAME_COL ? "left" : "center", vertical:"center", wrapText:false },
+          };
+        }
+      }
+    }
+    // 邊界＋頁首頁尾全部 0（框線仍要在 Excel 按 Ctrl+A → 所有框線）
     ws["!margins"] = { left:0, right:0, top:0, bottom:0, header:0, footer:0 };
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "訂位表");
-    XLSX.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, "訂位表");
+    X.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
+    if (!styled) setMsg("⚠ 已匯出，但樣式函式庫載入失敗，這次沒有套用對齊");
   };
 
   const BD   = "1px solid #000";
@@ -5120,7 +5147,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
   const day = data[todayStr]||{cash:{},printed:false,notes:[],openChk:{},closeChk:{}};
   const bases = data._bases || [{id:"b1",label:"錢櫃",amt:"10000"},{id:"b2",label:"金庫・備用金",amt:"20000"}];
   const saveBases=(bs)=>{ const nd={...data,_bases:bs}; setData(nd); FS.saveDoc("handover",nd); };
-  const yStr=(()=>{ const d=new Date(); d.setDate(d.getDate()-1); return `${d.getMonth()+1}/${d.getDate()}`; })();
+  const yStr=dayKey(dayAgo(1));   // v227:要跟 todayStr 同格式,否則查不到昨天
   const yUndone=((data[yStr]||{}).notes||[]).filter(n=>!n.done);   // 昨天沒做完的交接事項
   useEffect(()=>{
     FS.loadDoc("handover").then(v=>{ if(v) setData(v); });
@@ -5652,7 +5679,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
     setTodoChecks(nn); FS.saveDoc("todo",nn); return true;
   };
   const toggleTodo=(key)=>{ saveTodo({...todoChecks,[key]:!todoChecks[key]}); };
-  const todayStr=(()=>{const d=new Date();return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;})();
+  const todayStr=dayKey(new Date());
   useEffect(()=>{
     const unsub=FS.subscribeDoc("dingwe",d=>{ if(d&&d.lastImport!==undefined) setLastResvImport(d.lastImport); });
     FS.loadDoc("todo").then(d=>{ if(d!==undefined){ if(d) setTodoChecks(d); todoLoaded.current=true; } });
@@ -6080,7 +6107,7 @@ const rowBg=(g)=>{
                   const ot=hoData._openTasks||OPEN_TASKS;
                   const oc=day.openChk||{};
                   items=[{t:"開店準備",done:ot.length>0&&ot.every(x=>oc[x])}];
-                  const yStr=(()=>{const d=new Date();d.setDate(d.getDate()-1);return `${d.getMonth()+1}/${d.getDate()}`;})();
+                  const yStr=dayKey(dayAgo(1));   // v227:同上
                   const yU=((hoData[yStr]||{}).notes||[]).filter(n=>!n.done);
                   if(yU.length>0) items.push({t:`昨天沒做完 ${yU.length} 件`,done:false});
                 } else if(_phase.k==="mid"){
