@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v225";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v226";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -3961,19 +3961,51 @@ function NightRef({ pairs, at }){
   return (
     <div style={{fontSize:"11px",color:"#8a7a5a",background:"#fdfaf3",border:"1px solid #e8dcc4",
       borderRadius:"7px",padding:"6px 9px",marginTop:"5px",display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
-      <span style={{fontWeight:"800",color:"#a08050",whiteSpace:"nowrap"}}>昨晚{at?`(${at})`:""}</span>
+      <span style={{fontWeight:"800",color:"#a08050",whiteSpace:"nowrap"}}>上次清點{at?`（${at}）`:""}</span>
       {pairs.map(([k,l,n],i)=>(
         <span key={i} style={{whiteSpace:"nowrap",fontWeight:entered&&!same(l,n)?"900":"700",
           color:entered&&!same(l,n)?"#c06030":"#8a9aaa"}}>{k}×{+(l||0)}</span>
       ))}
       <span style={{flex:1}}/>
       {entered&&(bad.length===0
-        ? <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>✓ 跟昨晚一致</span>
+        ? <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>✓ 跟上次一致</span>
         : <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#c06030",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>⚠ {bad.length} 格不一樣</span>)}
     </div>
   );
 }
 // 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
+// v226:金庫「上次清點」= 往回找最近一次真的有數字的紀錄,不分階段。
+// 一天內的先後是 開早 → 中間結算 → 晚結;只往回看,不會拿還沒發生的來比。
+const SAFE_STAGES=["open","mid","close"];
+function safeOfStage(day,st){
+  if(!day) return null;
+  if(st==="open") return day.openSafe||null;
+  if(st==="mid")  return day.midSafe||null;
+  return (day.close||{}).safe||null;
+}
+function safeHasData(sf){
+  if(!sf) return false;
+  return ["notes","bags","loose"].some(k=>Object.values(sf[k]||{}).some(v=>String(v??"")!==""));
+}
+function lastSafeCount(data,stage){
+  const mine=SAFE_STAGES.indexOf(stage);
+  const t=new Date();
+  for(let i=0;i<60;i++){
+    const d=new Date(t); d.setDate(t.getDate()-i);
+    const k=`${d.getMonth()+1}/${d.getDate()}`;
+    const day=(data||{})[k]; if(!day) continue;
+    for(let j=SAFE_STAGES.length-1;j>=0;j--){
+      if(i===0&&j>=mine) continue;               // 今天:只看比自己早的階段
+      const sf=safeOfStage(day,SAFE_STAGES[j]);
+      if(safeHasData(sf)){
+        const lbl={open:"開早",mid:"中間結算",close:"晚結"}[SAFE_STAGES[j]];
+        const at=SAFE_STAGES[j]==="close"?((day.close||{}).s3||""):"";
+        return {safe:sf,label:`${k} ${lbl}${at?` ${at}`:""}`};
+      }
+    }
+  }
+  return null;
+}
 function SafeCount({ notes, bags, loose, onChange }){
   const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
   const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((bags||{})[b.d])||0),0);
@@ -4289,7 +4321,7 @@ function CloseMiniChecks({ items, cl, saveCl }){
   );
 }
 // 晚結流程:每天獨立存檔,可回看;分新手/老手版
-function CloseFlow({ day, save, bases, todayStr, groups }){
+function CloseFlow({ day, save, bases, todayStr, groups, data }){
   const pro = !!(day.close&&day.close._pro);    // 老手版(存在資料裡,跨裝置同步)
   const hint=!pro;                              // 老手版不顯示提示
   const cl = day.close||{};                     // 晚結資料存 day.close
@@ -4424,6 +4456,12 @@ function CloseFlow({ day, save, bases, todayStr, groups }){
           return (<>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對就自動劃掉）</div>
             <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
+            {(()=>{ const pv=lastSafeCount(data,"close"); if(!pv) return null;
+              return <NightRef at={pv.label} pairs={[
+                ...[1000,500,100].map(x=>[`$${x}`,(pv.safe.notes||{})[x],(sf.notes||{})[x]]),
+                ...COIN_BAGS.map(b=>[`$${b.d}袋`,(pv.safe.bags||{})[b.d],(sf.bags||{})[b.d]]),
+                ["零散$50",(pv.safe.loose||{})[50],(sf.loose||{})[50]],
+              ]}/>; })()}
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
             <ReserveCount rv={cl.reserve} onChange={(nv)=>saveCl({reserve:nv})}/>
           </>);
@@ -5170,21 +5208,22 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
           {/* v222:開早算錢 — 金庫、備用金、錢櫃都實際清點,並跟昨晚晚結逐格對照 */}
           {(()=>{
             const yc=((data[yStr]||{}).close)||{};
-            const hasY=!!(yc.safe||yc.counts||yc.reserve);
+            const prev=lastSafeCount(data,"open");        // v226:最近一次金庫清點,不分階段
+            const hasY=!!prev;
             const os=day.openSafe||{}, orv=day.openReserve||{}, oc=day.openCounts||{};
             const drawer=bases.filter(b=>b.label.includes("錢櫃"))[0];
             const ySafe=yc.safe||{}, yCnt=(yc.counts||{});
             return (
               <div style={{background:"#fff",border:"2px solid #c9a45c",borderRadius:"10px",padding:"10px 11px",marginBottom:"9px"}}>
                 <div style={{fontSize:"13px",fontWeight:"900",color:"#8a5210",marginBottom:"6px"}}>💵 開早算錢</div>
-                {!hasY&&<div style={{fontSize:"11.5px",fontWeight:"800",color:"#a04010",background:"#fdf0e8",border:"1.5px solid #e8c0a0",borderRadius:"7px",padding:"7px 9px",marginBottom:"7px"}}>昨天沒有晚結紀錄，沒得對照 —— 這三項請照實數，數完跟夥伴確認</div>}
+                {!hasY&&<div style={{fontSize:"11.5px",fontWeight:"800",color:"#a04010",background:"#fdf0e8",border:"1.5px solid #e8c0a0",borderRadius:"7px",padding:"7px 9px",marginBottom:"7px"}}>找不到之前的清點紀錄，沒得對照 —— 這三項請照實數，數完跟夥伴確認</div>}
 
                 <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"4px"}}>① 金庫</div>
                 <SafeCount notes={os.notes} bags={os.bags} loose={os.loose} onChange={(nv)=>save({openSafe:{...os,...nv}})}/>
-                {hasY&&<NightRef at={yc.s3||""} pairs={[
-                  ...[1000,500,100].map(d=>[`$${d}`,(ySafe.notes||{})[d],(os.notes||{})[d]]),
-                  ...COIN_BAGS.map(b=>[`$${b.d}袋`,(ySafe.bags||{})[b.d],(os.bags||{})[b.d]]),
-                ["零散$50",(ySafe.loose||{})[50],(os.loose||{})[50]],
+                {prev&&<NightRef at={prev.label} pairs={[
+                  ...[1000,500,100].map(x=>[`$${x}`,(prev.safe.notes||{})[x],(os.notes||{})[x]]),
+                  ...COIN_BAGS.map(b=>[`$${b.d}袋`,(prev.safe.bags||{})[b.d],(os.bags||{})[b.d]]),
+                  ["零散$50",(prev.safe.loose||{})[50],(os.loose||{})[50]],
                 ]}/>}
 
                 <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
@@ -5221,7 +5260,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
         </>)}
 
         {/* 🌙 晚結:打烊結算清單 */}
-        {phase==="close"&&<CloseFlow day={day} save={save} bases={bases} todayStr={todayStr} groups={groups}/>}
+        {phase==="close"&&<CloseFlow day={day} save={save} bases={bases} todayStr={todayStr} groups={groups} data={data}/>}
 
         {phase==="mid"&&(<>
         {/* 中間結算:做成步驟,跟晚結一樣的操作習慣 */}
@@ -5232,7 +5271,8 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             {(()=>{
               const sf=day.midSafe||{};
               const tot=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0)
-                       +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf.bags||{})[c.d])||0),0);
+                       +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf.bags||{})[c.d])||0),0)
+                       +COIN_BAGS.reduce((s,c)=>s+c.d*(+((sf.loose||{})[c.d])||0),0);   // v226:漏掉的第四處
               if(tot!==SAFE_TOTAL) return null;
               return <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px"}}>🔐 金庫正確</span>;
             })()}
@@ -5260,7 +5300,15 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
           </div>
           {(()=>{
             const sf=day.midSafe||{};
-            return <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose} onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>;
+            const pv=lastSafeCount(data,"mid");
+            return (<>
+              <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose} onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>
+              {pv&&<NightRef at={pv.label} pairs={[
+                ...[1000,500,100].map(x=>[`$${x}`,(pv.safe.notes||{})[x],(sf.notes||{})[x]]),
+                ...COIN_BAGS.map(b=>[`$${b.d}袋`,(pv.safe.bags||{})[b.d],(sf.bags||{})[b.d]]),
+                ["零散$50",(pv.safe.loose||{})[50],(sf.loose||{})[50]],
+              ]}/>}
+            </>);
           })()}
         </div>
 
