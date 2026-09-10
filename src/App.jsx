@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v222";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v224";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -2670,6 +2670,11 @@ function isHoliday(meal){
   const custom = (typeof window!=="undefined" && window.__customHolidays) || [];
   return custom.includes(k);
 }
+// v224:連假特例 —— 整段連假共用一個點餐截止,現行「前一天/該週週五」規則推不出來。
+// key = 用餐日(西元年-M/D)、value = 截止日(M/D,一律中午12:00)。過年沒營業所以不列。
+const DEADLINE_OVERRIDE = {
+  "2026-9/25":"9/24", "2026-9/26":"9/24", "2026-9/27":"9/24", "2026-9/28":"9/24",   // 中秋+教師節連假
+};
 function getOrderDeadline(dateStr) {
   // dateStr "M/D" → 回傳截止 Date 或 null
   if(!dateStr) return null;
@@ -2680,6 +2685,12 @@ function getOrderDeadline(dateStr) {
   let yr=now.getFullYear();
   let meal=new Date(yr,m-1,d);
   if(meal < new Date(now.getFullYear(),now.getMonth(),now.getDate()-180)) meal=new Date(yr+1,m-1,d);
+  const ov=DEADLINE_OVERRIDE[`${meal.getFullYear()}-${m}/${d}`];   // 連假特例優先於下面的一般規則
+  if(ov){
+    const om=+ov.split("/")[0], od=+ov.split("/")[1];
+    const oy=meal.getFullYear()-(om>m?1:0);      // 截止日落在前一年(跨年連假)
+    return new Date(oy,om-1,od,12,0,0);
+  }
   const dow=meal.getDay(); // 0=日 1=一 ... 6=六
   let deadline=new Date(meal);
   if(isHoliday(meal)){ // 國定假日視為平日:前一天12:00
@@ -3550,9 +3561,15 @@ function msgDepChase(g){
   const dep=depDeadlineOf(g);
   const amt=depositAmountOf(g);
   const over=dep&&(new Date()>dep.dl);
-  const head=over
-    ? `您好～提醒您訂金匯款期限已過 🙏\n目前尚未收到款項，座位暫時無法保留`
-    : `您好～提醒您訂金匯款即將到期 ⏰`;
+  if(over) return `今鶴 JINHER
+${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
+
+您好～訂金匯款期限已過 🙏
+很抱歉，本次訂位已為您取消，座位不再保留
+
+如仍需用餐，歡迎重新訂位
+造成不便敬請見諒 🙇`;
+  const head=`您好～提醒您訂金匯款即將到期 ⏰`;
   return `今鶴 JINHER
 ${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
 
@@ -3566,7 +3583,7 @@ ${BANK_INFO.bank}
 帳號：${BANK_INFO.acct}
 
 匯款後請回傳末5碼
-${over?"如已完成匯款，請回覆我們核對；若需取消訂位也請告知，謝謝 🙇":"※ 逾時未收到訂金，恕不保留座位"}`;
+※ 逾時未收到訂金，訂位將取消、恕不保留座位`;
 }
 function msgEarlyLock(g){
   return `今鶴 JINHER
@@ -4817,7 +4834,13 @@ function PrintDingwePage({ onClose, groups }) {
     ]);
     const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
     // 尺寸照你手工整理那份的實際數值（用像素，Excel 打開就是一樣的寬度）
-    ws["!cols"] = [{ wpx:69 }, { wpx:96 }, { wpx:153 }, { wpx:96 }, { wpx:148 }, { wpx:175 }, { wpx:420 }];
+    // v224:依內容自動算寬度。中日文字算 2 個字寬,備註可能換行 → 取最長那一行
+    const wOf = (v) => String(v??"").split("\n").reduce((mx,line)=>Math.max(mx,
+      line.split("").reduce((n,ch)=>n+(/[\u2e80-\u9fff\uff00-\uffef]/.test(ch)?2:1),0)),0);
+    ws["!cols"] = head.map((h,i)=>{
+      const w = Math.max(wOf(h), ...[head,...body].map(r=>wOf(r[i])));
+      return { wpx: Math.min(460, Math.max(56, w*9+18)) };   // 下限56上限460,避免太窄或撐爆一頁
+    });
     ws["!rows"] = [head, ...body].map(() => ({ hpt:20 }));
     // 邊界＋頁首頁尾全部 0（框線 SheetJS 免費版寫不進去，要在 Excel 按 Ctrl+A → 所有框線）
     ws["!margins"] = { left:0, right:0, top:0, bottom:0, header:0, footer:0 };
@@ -5741,9 +5764,7 @@ const rowBg=(g)=>{
   const pendingMai = groups.filter(g=>g.fromMai&&g.memberType&&g.memberType!=="private"&&!g.cancelled);
   const leaveGuard = (go) => {
     if(pendingMai.length===0){ go(); return; }
-    const list=pendingMai.slice(0,6).map(g=>`　・${g.date} ${g.time} ${g.name}（代碼 ${g.code}）`).join("\n");
-    const more=pendingMai.length>6?`\n　…還有 ${pendingMai.length-6} 筆`:"";
-    if(window.confirm(`⚠ 有 ${pendingMai.length} 筆已經確認會員、代碼也出來了，但還沒按「轉入追蹤表」：\n\n${list}${more}\n\n沒轉入追蹤表就不會開始追訂金、催點餐、算低消。\n\n要先回去處理嗎？\n\n【確定】＝留下來處理　【取消】＝仍要離開`)) return;
+    if(window.confirm(`還有 ${pendingMai.length} 筆麥訂沒按「轉入追蹤表」\n\n確定＝回去處理　取消＝直接離開`)) return;
     go();
   };
 
@@ -5846,7 +5867,7 @@ const rowBg=(g)=>{
         <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
           <button title={TIP_TXT.dingwe} onClick={()=>leaveGuard(()=>setShowDingwe(true))} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button title={TIP_TXT.mai} onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂【大訂未加LINE】{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
-          <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
+          <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單（詢問餐評）"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="🔍 搜 日期/姓名/電話/代碼/標籤/備註/大麥備註"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
           {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
