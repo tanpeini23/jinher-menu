@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v228";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v229";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -4010,17 +4010,48 @@ function lastSafeCount(data,stage){
   }
   return null;
 }
-function SafeCount({ notes, bags, loose, onChange }){
-  const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
-  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((bags||{})[b.d])||0),0);
-  // v225:沒成袋的零散硬幣(目前只有 $50,偶爾會多一個)。舊紀錄沒這欄 → 算 0,不影響
-  const looseSum=COIN_BAGS.reduce((s,b)=>s+b.d*(+((loose||{})[b.d])||0),0);
-  const total=noteSum+bagSum+looseSum, diff=total-SAFE_TOTAL, ok=diff===0;
+// v229:金庫總額。sf=這次填的、prev=上次的(沒填的格子沿用上次)。
+// 這算式原本散在 4 個地方各寫一次(坑#1),抽出來共用,畫面和「數對自動劃掉」永遠一致。
+function safeVal(sf,prev,grp,d){
+  const a=((sf||{})[grp]||{})[d], b=((prev||{})[grp]||{})[d];
+  return String(a??"")!=="" ? (+a||0) : (+b||0);
+}
+function safeTotal(sf,prev){
+  return [1000,500,100].reduce((s,d)=>s+d*safeVal(sf,prev,"notes",d),0)
+       + COIN_BAGS.reduce((s,b)=>s+b.per*safeVal(sf,prev,"bags",b.d),0)
+       + COIN_BAGS.reduce((s,b)=>s+b.d*safeVal(sf,prev,"loose",b.d),0);
+}
+function SafeCount({ notes, bags, loose, prev, prevLabel, onChange }){
+  // v229:上次清點的數字直接帶進格子裡(金庫的錢不常動,只改動到的那格就好)。
+  // 淡棕斜體=沿用上次還沒動過;橘色=今天改過且跟上次不同;黑色=今天填的且跟上次一樣。
+  // 純顯示推導,不在畫面繪製期間寫入 state。
+  const has=(v)=>String(v??"")!=="";
+  const own={notes:notes||{}, bags:bags||{}, loose:loose||{}};
+  const pv  ={notes:(prev||{}).notes||{}, bags:(prev||{}).bags||{}, loose:(prev||{}).loose||{}};
+  const val =(g,d)=> has(own[g][d]) ? own[g][d] : (has(pv[g][d]) ? pv[g][d] : "");
+  const carried=(g,d)=> !has(own[g][d]) && has(pv[g][d]);
+  const changed=(g,d)=> has(own[g][d]) && has(pv[g][d]) && (+own[g][d]||0)!==(+pv[g][d]||0);
+  const anyCarried=[["notes",[1000,500,100]],["bags",COIN_BAGS.map(b=>b.d)],["loose",[50]]]
+    .some(([g,ds])=>ds.some(d=>carried(g,d)));
+  const sfNow={notes,bags,loose};
+  const noteSum=[1000,500,100].reduce((s,d)=>s+d*safeVal(sfNow,prev,"notes",d),0);
+  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*safeVal(sfNow,prev,"bags",b.d),0);
+  const looseSum=COIN_BAGS.reduce((s,b)=>s+b.d*safeVal(sfNow,prev,"loose",b.d),0);
+  const total=safeTotal(sfNow,prev), diff=total-SAFE_TOTAL, ok=diff===0;
   const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
+  const useLast=()=>onChange({
+    notes:{...pv.notes,...own.notes}, bags:{...pv.bags,...own.bags}, loose:{...pv.loose,...own.loose} });
   const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
   return (
     <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
-      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</div>
+      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",marginBottom:"5px"}}>
+        <span style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</span>
+        {anyCarried&&(<>
+          <span style={{fontSize:"10.5px",color:"#a89070",fontStyle:"italic"}}>淡字＝沿用{prevLabel?`（${prevLabel}）`:"上次"}，數對就按右邊</span>
+          <span style={{flex:1}}/>
+          <button onClick={useLast} style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#8a7050",border:"none",borderRadius:"6px",padding:"4px 10px",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 跟上次一樣</button>
+        </>)}
+      </div>
 
       <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
         <div style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
@@ -4028,8 +4059,9 @@ function SafeCount({ notes, bags, loose, onChange }){
             <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
               <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
               <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-              <input value={(notes||{})[d]||""} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags,loose})} inputMode="numeric" placeholder="0" style={ipt}/>
-              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((notes||{})[d])||0)>0?`$${(d*(+((notes||{})[d])||0)).toLocaleString()}`:""}</span>
+              <input value={val("notes",d)} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags,loose})} inputMode="numeric" placeholder="0"
+                style={{...ipt,...(carried("notes",d)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("notes",d)?{color:"#c06030",fontWeight:"900"}:{})}}/>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+val("notes",d)||0)>0?`$${(d*(+val("notes",d)||0)).toLocaleString()}`:""}</span>
             </div>
           ))}
         </div>
@@ -4038,17 +4070,18 @@ function SafeCount({ notes, bags, loose, onChange }){
             <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
               <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
               <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-              <input value={(bags||{})[b.d]||""} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)},loose})} inputMode="numeric" placeholder="0" style={ipt}/>
+              <input value={val("bags",b.d)} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)},loose})} inputMode="numeric" placeholder="0"
+                style={{...ipt,...(carried("bags",b.d)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("bags",b.d)?{color:"#c06030",fontWeight:"900"}:{})}}/>
               <span style={{fontSize:"10px",color:"#a08a70",width:"22px"}}>袋</span>
               {b.d===50&&(<>
                 <span style={{fontSize:"10px",color:"#a0b0c0"}}>＋</span>
-                <input value={(loose||{})[50]||""} inputMode="numeric" placeholder="0"
+                <input value={val("loose",50)} inputMode="numeric" placeholder="0"
                   onChange={e=>onChange({notes,bags,loose:{...(loose||{}),50:num(e.target.value)}})}
-                  style={{...ipt,width:"40px"}}/>
+                  style={{...ipt,width:"40px",...(carried("loose",50)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("loose",50)?{color:"#c06030",fontWeight:"900"}:{})}}/>
                 <span style={{fontSize:"10px",color:"#a08a70",whiteSpace:"nowrap"}}>個$50</span>
               </>)}
               <span style={{fontSize:"11px",color:"#8a9aaa",flex:1,textAlign:"right"}}>{(() => {
-                const v=b.per*(+((bags||{})[b.d])||0)+b.d*(+((loose||{})[b.d])||0);
+                const v=b.per*(+val("bags",b.d)||0)+b.d*(+val("loose",b.d)||0);
                 return v>0?`$${v.toLocaleString()}`:`1袋$${b.per}`;
               })()}</span>
             </div>
@@ -4452,29 +4485,20 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
       <CloseStep n={3} doneKey="s3" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s3"} onOpen={setCurStep}>
         {(()=>{
           const sf=cl.safe||{};
-          const noteSum=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0);
-          const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((sf.bags||{})[b.d])||0),0);
-          const looseSum=COIN_BAGS.reduce((s,b)=>s+b.d*(+((sf.loose||{})[b.d])||0),0);
-          const safeOk=(noteSum+bagSum+looseSum)===SAFE_TOTAL;
+          const safeOk=safeTotal(sf,(lastSafeCount(data,"close")||{}).safe)===SAFE_TOTAL;
           const safeId=(bases.filter(b=>b.label.includes("金庫"))[0]||{}).id;
           return (<>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對就自動劃掉）</div>
-            <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
-            {(()=>{ const pv=lastSafeCount(data,"close"); if(!pv) return null;
-              return <NightRef at={pv.label} pairs={[
-                ...[1000,500,100].map(x=>[`$${x}`,(pv.safe.notes||{})[x],(sf.notes||{})[x]]),
-                ...COIN_BAGS.map(b=>[`$${b.d}袋`,(pv.safe.bags||{})[b.d],(sf.bags||{})[b.d]]),
-                ["零散$50",(pv.safe.loose||{})[50],(sf.loose||{})[50]],
-              ]}/>; })()}
+            <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose}
+              prev={(lastSafeCount(data,"close")||{}).safe} prevLabel={(lastSafeCount(data,"close")||{}).label}
+              onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
             <ReserveCount rv={cl.reserve} onChange={(nv)=>saveCl({reserve:nv})}/>
           </>);
         })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
           const sf2=cl.safe||{}, rv2=cl.reserve||{};
-          const safeOk2 = ([1000,500,100].reduce((s,d)=>s+d*(+((sf2.notes||{})[d])||0),0)
-             +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf2.bags||{})[c.d])||0),0)
-             +COIN_BAGS.reduce((s,c)=>s+c.d*(+((sf2.loose||{})[c.d])||0),0))===SAFE_TOTAL;
+          const safeOk2 = safeTotal(sf2,(lastSafeCount(data,"close")||{}).safe)===SAFE_TOTAL;
           const resOk2  = ((+(rv2.cash||0))+(+(rv2.rcpt||0)))===SAFE_TOTAL;
           const autoOk = b.label.includes("金庫") ? (safeOk2&&resOk2) : false;
           const st=autoOk ? "ok" : (cl.spotOk||{})[b.id];
@@ -5246,12 +5270,9 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
                 {!hasY&&<div style={{fontSize:"11.5px",fontWeight:"800",color:"#a04010",background:"#fdf0e8",border:"1.5px solid #e8c0a0",borderRadius:"7px",padding:"7px 9px",marginBottom:"7px"}}>找不到之前的清點紀錄，沒得對照 —— 這三項請照實數，數完跟夥伴確認</div>}
 
                 <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"4px"}}>① 金庫</div>
-                <SafeCount notes={os.notes} bags={os.bags} loose={os.loose} onChange={(nv)=>save({openSafe:{...os,...nv}})}/>
-                {prev&&<NightRef at={prev.label} pairs={[
-                  ...[1000,500,100].map(x=>[`$${x}`,(prev.safe.notes||{})[x],(os.notes||{})[x]]),
-                  ...COIN_BAGS.map(b=>[`$${b.d}袋`,(prev.safe.bags||{})[b.d],(os.bags||{})[b.d]]),
-                  ["零散$50",(prev.safe.loose||{})[50],(os.loose||{})[50]],
-                ]}/>}
+                <SafeCount notes={os.notes} bags={os.bags} loose={os.loose}
+                  prev={(prev||{}).safe} prevLabel={(prev||{}).label}
+                  onChange={(nv)=>save({openSafe:{...os,...nv}})}/>
 
                 <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
                 <ReserveCount rv={orv} onChange={(nv)=>save({openReserve:nv})}/>
@@ -5297,9 +5318,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>金庫清點</span>
             {(()=>{
               const sf=day.midSafe||{};
-              const tot=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0)
-                       +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf.bags||{})[c.d])||0),0)
-                       +COIN_BAGS.reduce((s,c)=>s+c.d*(+((sf.loose||{})[c.d])||0),0);   // v226:漏掉的第四處
+              const tot=safeTotal(sf,(lastSafeCount(data,"mid")||{}).safe);
               if(tot!==SAFE_TOTAL) return null;
               return <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px"}}>🔐 金庫正確</span>;
             })()}
@@ -5329,12 +5348,9 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             const sf=day.midSafe||{};
             const pv=lastSafeCount(data,"mid");
             return (<>
-              <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose} onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>
-              {pv&&<NightRef at={pv.label} pairs={[
-                ...[1000,500,100].map(x=>[`$${x}`,(pv.safe.notes||{})[x],(sf.notes||{})[x]]),
-                ...COIN_BAGS.map(b=>[`$${b.d}袋`,(pv.safe.bags||{})[b.d],(sf.bags||{})[b.d]]),
-                ["零散$50",(pv.safe.loose||{})[50],(sf.loose||{})[50]],
-              ]}/>}
+              <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose}
+                prev={(pv||{}).safe} prevLabel={(pv||{}).label}
+                onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>
             </>);
           })()}
         </div>
