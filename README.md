@@ -1,0 +1,10253 @@
+
+// @ts-nocheck
+import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.2/package/xlsx.mjs";
+
+// ─── FIREBASE CONFIG ──────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyCrPvsmyPh8SIJ0sDExRFJfGAA-3kBOS5g",
+  authDomain: "jinher-3a167.firebaseapp.com",
+  projectId: "jinher-3a167",
+  storageBucket: "jinher-3a167.firebasestorage.app",
+  messagingSenderId: "4973694934",
+  appId: "1:4973694934:web:aa7b28bdd253ba15ab1e77"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
+
+// ─── 匿名登入:客人完全無感(不用註冊/登入),但資料庫可以只開放給「已登入」 ───
+// 這讓 Firestore 規則能從「任何人可讀寫」改成「登入才可讀寫」,擋掉外部亂改。
+let _authReady = null;
+const FSTAT = { auth:"連線中…", err:null, lastSave:null, listeners:new Set() };
+function fstatSet(patch){ Object.assign(FSTAT, patch); FSTAT.listeners.forEach(fn=>{ try{fn();}catch(e){} }); }
+function ensureAuth() {
+  if (_authReady) return _authReady;
+  _authReady = new Promise((resolve) => {
+    let done=false;
+    const fin=(u,msg)=>{ if(done) return; done=true; fstatSet({auth:msg}); resolve(u); };
+    onAuthStateChanged(auth, (u) => { if (u) fin(u, "已連線"); });
+    signInAnonymously(auth).catch((e) => { fin(null, `登入失敗:${e.code||e.message}`); });
+    setTimeout(()=>fin(null, "登入逾時"), 8000);   // 不讓它永遠卡住
+  });
+  return _authReady;
+}
+ensureAuth();
+
+// ─── FIRESTORE HELPERS ────────────────────────────────────────────────────────
+const FS = {
+  async saveDoc(name, obj) {
+    await ensureAuth();
+    try { await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) }); fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})}); }
+    catch(e) { console.error("儲存失敗", name, e); fstatSet({err:`儲存失敗(${name}):${e.code||e.message}`}); }
+  },
+  async loadDoc(name) {
+    await ensureAuth();
+    try {
+      const snap = await getDoc(doc(db, "jinher", name));
+      if (snap.exists()) return JSON.parse(snap.data().data);
+      return null;                      // 文件不存在(正常,例如第一次用)
+    } catch(e) {
+      console.error("讀取失敗", name, e);
+      fstatSet({err:`讀取失敗(${name}):${e.code||e.message}`});
+      return undefined;                 // undefined = 讀取「失敗」,跟「沒有資料」要分清楚
+    }
+  },
+  subscribeDoc(name, callback) {
+    let inner = null, cancelled = false;
+    ensureAuth().then(() => {
+      if (cancelled) return;
+      inner = onSnapshot(doc(db, "jinher", name), (snap) => {
+        if (snap.exists()) { try { callback(JSON.parse(snap.data().data)); } catch(e) {} }
+      }, (err) => { console.warn("subscribe 失敗:", name, err); });
+    });
+    return () => { cancelled = true; if (inner) inner(); };
+  },
+  async saveStatsMonth(ym, obj) {
+    await ensureAuth();
+    try { await setDoc(doc(db, "jinher_stats", "m_"+ym), { data: JSON.stringify(obj) }); return true; } catch(e) { return false; }
+  },
+  async loadStatsMonth(ym) {
+    await ensureAuth();
+    try { const snap = await getDoc(doc(db, "jinher_stats", "m_"+ym)); if(snap.exists()) return JSON.parse(snap.data().data); } catch(e) {}
+    return null;
+  },
+  async loadAllStatsMonths() {
+    await ensureAuth();
+    try {
+      const snap = await getDocs(collection(db, "jinher_stats"));
+      const months = {};
+      snap.forEach(d => { if(d.id.startsWith("m_")) { try { months[d.id.slice(2)] = JSON.parse(d.data().data); } catch(e){} } });
+      return months;
+    } catch(e) { return {}; }
+  },
+  async saveStatsMeta(obj) {
+    await ensureAuth();
+    try { await setDoc(doc(db, "jinher_stats", "meta"), { data: JSON.stringify(obj) }); } catch(e) {}
+  },
+  async loadStatsMeta() {
+    await ensureAuth();
+    try { const snap = await getDoc(doc(db, "jinher_stats", "meta")); if(snap.exists()) return JSON.parse(snap.data().data); } catch(e) {}
+    return null;
+  },
+  async saveGroups(groups) {
+    await ensureAuth();
+    try {
+      await setDoc(doc(db, "jinher", "groups"), { data: JSON.stringify(groups) });
+    } catch(e) {
+      try { localStorage.setItem("jinher_groups", JSON.stringify(groups)); } catch(e2) {}
+    }
+  },
+  async loadGroups() {
+    await ensureAuth();
+    try {
+      const snap = await getDoc(doc(db, "jinher", "groups"));
+      if (snap.exists()) return JSON.parse(snap.data().data);
+    } catch(e) {}
+    try {
+      const v = localStorage.getItem("jinher_groups");
+      if (v) return JSON.parse(v);
+    } catch(e) {}
+    return null;
+  },
+  subscribeGroups(callback) {
+    let inner = null, cancelled = false;
+    ensureAuth().then(() => {
+      if (cancelled) return;
+      inner = onSnapshot(doc(db, "jinher", "groups"), (snap) => {
+        if (snap.exists()) {
+          try {
+            const data = JSON.parse(snap.data().data);
+            callback(data, snap.metadata && snap.metadata.hasPendingWrites);
+          } catch(e) {}
+        }
+      }, (err) => { console.warn("subscribeGroups 失敗", err); });
+    });
+    return () => { cancelled = true; if (inner) inner(); };
+  }
+};
+
+// ─── MENU DATA ───────────────────────────────────────────────────────────────
+const MENU = {
+  durian:   { label:"🍈 榴槤季", emoji:"🍈", note:"季節限定・榴槤為國外進口,若臨時缺貨敬請見諒", items:[
+    {id:"du1",name:"芒果莎莎花束沙拉",      sub:"季節限定",        member:180,normal:180,season:true},
+    {id:"du2",name:"白醬鮮蝦榴槤義大利麵",  sub:"可升級套餐",      member:420,normal:480,season:true,isMain:true},
+    {id:"du4",name:"榴槤忘返舒芙蕾",        sub:"季節限定",        member:330,normal:330,season:true},
+    {id:"du6",name:"榴槤起司紫薯球",        sub:"季節限定",        member:180,normal:180,season:true},
+  ]},
+  duriandrink:{ label:"🍈 榴槤季飲品", emoji:"🍈", note:"季節限定・固定冰糖", items:[
+    {id:"du3",name:"榴槤波波椰椰",     price:150,fixedIce:true,fixedSugar:true,season:true},
+    {id:"du5",name:"烤糖榴槤奶蓋拿鐵", price:150,fixedIce:true,fixedSugar:true,season:true},
+  ]},
+  salad:    { label:"Salad 沙拉", emoji:"🥗", items:[
+    {id:"s1",name:"煙燻鮭魚生菜沙拉",sub:"胡麻／油醋",dressing:true,member:330,normal:330},
+    {id:"s2",name:"酪梨鮮蝦沙拉",    sub:"胡麻／油醋",dressing:true,member:330,normal:330},
+    {id:"s3",name:"七股炸牡蠣沙拉",  sub:"胡麻／油醋",dressing:true,member:330,normal:330},
+  ]},
+  appetizer:{ label:"Appetizer 特色前菜", emoji:"🍢", items:[
+    {id:"a1",name:"炙烤焦糖鮭魚蒔蘿奶酪捲",member:300,normal:300},
+    {id:"a2",name:"油封蒜油馬鈴薯蝦滑",    member:240,normal:240},
+    {id:"a3",name:"西西里肉醬嫩蛋",        member:240,normal:240},
+    {id:"a4",name:"香煎薄鹽櫛瓜與帕瑪森起司",sub:"蛋奶素",member:240,normal:240},
+    {id:"a5",name:"火山奶油雞翅",          member:330,normal:330},
+    {id:"a6",name:"今鶴家唐揚雞",          member:240,normal:240},
+    {id:"a7",name:"義式肉醬脆皮餃",        member:270,normal:270},
+    {id:"a8",name:"法式脆薯佐松露奶醬",    member:240,normal:240},
+  ]},
+  brunch:   { label:"Brunch 早午餐", emoji:"🍳", items:[
+    {id:"b1",name:"和風醬燒梅子雞",        sub:"早午餐",member:420,normal:480},
+    {id:"b2",name:"安格斯嫩煎牛排",        sub:"早午餐",member:450,normal:510},
+    {id:"b3",name:"歐風蜜香炙烤雞腿",      sub:"早午餐",member:420,normal:480},
+    {id:"b4",name:"蔥鹽蒜炒雞松阪",        sub:"早午餐",member:450,normal:510},
+    {id:"b5",name:"起司奶油鮮蔬燉菜",      sub:"早午餐 蛋奶素",member:390,normal:450},
+    {id:"b6",name:"北海道奶油海鮮燉菜",    sub:"早午餐",member:420,normal:480},
+    {id:"b7",name:"伊比利慢烤豬酥脆三明治",sub:"早午餐",member:480,normal:540},
+    {id:"b8",name:"煙燻鮭魚酥脆三明治",    sub:"早午餐",member:390,normal:450},
+    {id:"b9",name:"乾煎培根酥脆三明治",    sub:"早午餐",member:360,normal:420},
+  ]},
+  pasta:    { label:"Pasta 義大利麵", emoji:"🍝", items:[
+    {id:"p1", name:"慢烤蒜酥小羔羊＋金沙辣奶油 🌶️",member:690,normal:750},
+    {id:"p2", name:"炙燒干貝海鮮＋番紅花米蘭醬",   member:660,normal:720},
+    {id:"p3", name:"香煎櫻桃鴨＋松露奶油醬",       member:510,normal:570},
+    {id:"p4", name:"伊比利蒜香慢烤豬＋濃郁椒香麻奶 🌶️",member:660,normal:720},
+    {id:"p5", name:"安格斯黑牛＋香蒜辣炒 🌶️",      member:450,normal:510},
+    {id:"p6", name:"爐烤雞腿＋香蒜辣炒 🌶️",        member:390,normal:450},
+    {id:"p7", name:"七股蛤蜊＋法式白酒清炒",        member:360,normal:420,toggles:["不辣","不白酒"]},
+    {id:"p8", name:"挪威鮭魚＋香蒜辣炒 🌶️",        member:390,normal:450},
+    {id:"p9", name:"爐烤雞腿＋北海道奶油",          member:390,normal:450},
+    {id:"p10",name:"安格斯黑牛＋地中海茄汁",        member:450,normal:510},
+    {id:"p11",name:"安格斯黑牛＋濃郁椒香麻奶 🌶️",  member:450,normal:510},
+    {id:"p12",name:"海鮮總匯＋菠菜青醬",            member:390,normal:450},
+    {id:"p13",name:"七股蛤蜊＋煙花女 🌶️",          member:390,normal:450},
+    {id:"p14",name:"酥炸魚排＋菠菜青醬",            member:360,normal:420},
+    {id:"p15",name:"半熟蛋＋黑松露草菇",sub:"蛋奶素",member:360,normal:420},
+  ]},
+  pizza:    { label:"Pizza 披薩", emoji:"🍕", items:[
+    {id:"pz1",name:"松露野菇起司半熟蛋",sub:"蛋奶素",member:390,normal:450},
+    {id:"pz2",name:"伊比利蒜香慢烤豬",              member:450,normal:510},
+    {id:"pz3",name:"經典瑪格麗特",sub:"蛋奶素",     member:360,normal:420},
+  ]},
+  risotto:  { label:"Risotto 燉飯", emoji:"🍚", items:[
+    {id:"r1", name:"慢烤蒜酥小羔羊＋番紅花米蘭醬",  member:720,normal:780},
+    {id:"r2", name:"伊比利蒜香慢烤豬＋番紅花米蘭醬",member:720,normal:780},
+    {id:"r3", name:"乾煎杏鮑菇＋番紅花米蘭醬",sub:"蛋奶素",member:450,normal:510},
+    {id:"r4", name:"炙烤骰子牛＋菠菜青醬",          member:450,normal:510},
+    {id:"r5", name:"焗烤海量蛤蜊＋菠菜青醬",        member:480,normal:540},
+    {id:"r6", name:"炙烤焦糖鮭魚＋北海道奶油",      member:390,normal:450},
+    {id:"r7", name:"爐烤雞腿＋北海道奶油",          member:390,normal:450},
+    {id:"r8", name:"海鮮總匯＋北海道奶油",          member:390,normal:450},
+    {id:"r9", name:"酥炸牡蠣＋金沙辣奶油 🌶️",      member:420,normal:480},
+    {id:"r10",name:"醬烤戰斧豬＋黑松露草菇",        member:570,normal:630},
+    {id:"r11",name:"嫩煎鮮蝦干貝＋濃郁南瓜",        member:530,normal:590},
+    {id:"r12",name:"安格斯黑牛＋黃金起司",          member:450,normal:510},
+    {id:"r13",name:"爐烤雞腿＋黃金起司",            member:390,normal:450},
+    {id:"r14",name:"酥炸魚排＋香辣墨魚 🌶️",        member:390,normal:450},
+    {id:"r15",name:"半熟蛋＋牛肝菌燉飯",sub:"蛋奶素",member:330,normal:390},
+  ]},
+  dessert:  { label:"Dessert 甜點", emoji:"🍮", items:[
+    {id:"d1",name:"熔岩流沙鹹蛋黃＋舒芙蕾",
+     sub:"⚠ 一次只能做2顆，第3顆需等下一輪（每次45分–1小時），1顆約2-3人分食",
+     member:270,normal:270},
+    {id:"d2",name:"黑糖珍珠厚奶茶＋舒芙蕾",
+     sub:"⚠ 一次只能做2顆，第3顆需等下一輪（每次45分–1小時），1顆約2-3人分食",
+     member:240,normal:240},
+    {id:"d3",name:"烤布蕾法式吐司",member:240,normal:240},
+  ]},
+  classic:  { label:"Classic Bites 經典小品", emoji:"🍟", items:[
+    {id:"c1",name:"酥炸脆薯",           member:120,normal:120},
+    {id:"c2",name:"招牌濃湯",           member:90, normal:90},
+    {id:"c3",name:"硬式法國麵包（2片）", member:60, normal:60},
+    {id:"c4",name:"今鶴楓糖可頌",       member:60, normal:60},
+    {id:"c5",name:"今日甜點",           member:60, normal:60},
+    {id:"c6",name:"堅果優格",           member:60, normal:60},
+  ]},
+  styled:   { label:"Styled Drinks 造型飲品", emoji:"🧋",
+    note:"手工製作，每杯約25–30分鐘｜請選擇造型：柴柴棉花糖 或 泡澡熊", items:[
+    {id:"sd1",name:"沖繩黑糖珍珠鮮奶茶",price:175,fixedIce:true, fixedSugar:true, needsMascot:true},
+    {id:"sd2",name:"沖繩黑糖鮮奶茶",    price:165,noRemoveIce:true,fixedSugar:true,needsMascot:true},
+    {id:"sd3",name:"寶寶歐蕾",          price:185,noRemoveIce:true,fixedSugar:true,needsMascot:true},
+    {id:"sd4",name:"白桃烏龍鮮奶茶",    price:195,noRemoveIce:true,hasSugar:true,  needsMascot:true},
+    {id:"sd5",name:"經典拿鐵",          price:175,noRemoveIce:true,fixedSugar:true,needsMascot:true},
+    {id:"sd6",name:"焦糖拿鐵",sub:"含焦糖醬",price:185,noRemoveIce:true,fixedSugar:true,needsMascot:true},
+  ]},
+  milktea:  { label:"Milk Tea 歐蕾系列", emoji:"🥛", items:[
+    {id:"mt1",name:"沖繩黑糖珍珠鮮奶茶",price:110,fixedIce:true,  fixedSugar:true},
+    {id:"mt2",name:"沖繩黑糖鮮奶茶",    price:100,noRemoveIce:true,fixedSugar:true},
+    {id:"mt3",name:"寶寶歐蕾",          price:120,noRemoveIce:true,fixedSugar:true},
+    {id:"mt4",name:"白桃烏龍鮮奶茶",    price:130,hasIce:true,    hasSugar:true},
+    {id:"mt5",name:"TWG法式伯爵鮮奶茶", price:190,twgIce:true,    fixedSugar:true},
+    {id:"mt6",name:"TWG焦糖奶油鮮奶茶", price:190,twgIce:true,    fixedSugar:true},
+  ]},
+  specials: { label:"House Specials 享特調", emoji:"🍹", note:"固定冰、糖", items:[
+    {id:"sp1",name:"白桃柚香烏龍",  price:120,fixedIce:true,fixedSugar:true},
+    {id:"sp2",name:"白桃蘋果紅茶",  price:120,fixedIce:true,fixedSugar:true},
+    {id:"sp3",name:"芭樂蜂蜜青茶",  price:130,fixedIce:true,fixedSugar:true},
+  ]},
+  sparkling:{ label:"氣泡飲", emoji:"🫧", note:"固定冰、糖", items:[
+    {id:"sp4",name:"冰山美人氣泡飲",     price:130,fixedIce:true,fixedSugar:true},
+    {id:"sp5",name:"紅心芭樂乳酸氣泡飲", price:130,fixedIce:true,fixedSugar:true},
+    {id:"sp6",name:"蜂蜜檸檬氣泡飲",     price:100,fixedIce:true,fixedSugar:true},
+  ]},
+  tea:      { label:"精選茶", emoji:"🍵", items:[
+    {id:"t1",name:"四季青茶",  price:80, hasIce:true,hasSugar:true},
+    {id:"t2",name:"阿薩姆紅茶",price:80, hasIce:true,hasSugar:true},
+    {id:"t3",name:"茉莉綠茶",  price:80, hasIce:true,hasSugar:true},
+    {id:"t4",name:"白桃烏龍",  price:110,hasIce:true,hasSugar:true},
+    {id:"t5",name:"海鹽奶蓋紅茶",price:100,fixedIce:true,hasSugar:true,note:"固定少冰"},
+    {id:"t6",name:"海鹽奶蓋綠茶",price:100,fixedIce:true,hasSugar:true,note:"固定少冰"},
+    {id:"t7",name:"海鹽奶蓋青茶",price:100,fixedIce:true,hasSugar:true,note:"固定少冰"},
+  ]},
+  coffee:   { label:"義式咖啡", emoji:"☕", note:"固定無糖", items:[
+    {id:"cf1",name:"經典拿鐵",      price:110,hasIce:true,  fixedSugar:true},
+    {id:"cf2",name:"美式咖啡",      price:80, hasIce:true,  fixedSugar:true},
+    {id:"cf3",name:"紅心芭樂美式",  price:110,fixedIce:true,fixedSugar:true,note:"固定少冰"},
+    {id:"cf4",name:"西西里氣泡咖啡",price:120,fixedIce:true,fixedSugar:true},
+    {id:"cf5",name:"焦糖拿鐵",sub:"含焦糖醬",price:120,hasIce:true,fixedSugar:true},
+    {id:"cf6",name:"竹炭拿鐵",      price:130,noRemoveIce:true,fixedSugar:true},
+  ]},
+  brewed:   { label:"沖泡茶（熱飲）", emoji:"🫖", note:"只有熱飲，固定無糖", items:[
+    {id:"bt1",name:"天然花草茶",    price:150,fixedIce:true,fixedSugar:true},
+    {id:"bt2",name:"TWG法式伯爵茶", price:160,fixedIce:true,fixedSugar:true},
+    {id:"bt3",name:"TWG焦糖奶油茶", price:160,fixedIce:true,fixedSugar:true},
+  ]},
+  juice:    { label:"果汁 & 汽水", emoji:"🥤", note:"固定冰、糖", items:[
+    {id:"j1",name:"青森蘋果汁",price:150,fixedIce:true,fixedSugar:true},
+    {id:"j2",name:"可樂",      price:80, fixedIce:true,fixedSugar:true},
+    {id:"j3",name:"雪碧",      price:80, fixedIce:true,fixedSugar:true},
+  ]},
+  beer:     { label:"🍺 啤酒", emoji:"🍺", note:"酒類不可升級套餐", items:[
+    {id:"be1",name:"莫雷帝拉格啤酒 Birra Moretti",        price:150,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"be2",name:"MORITZ莫里茲經典啤酒",                price:130,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"be3",name:"MORITZ EPIDOR艾比多強化啤酒",         price:160,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"be4",name:"MORITZ RADLER莫里茲檸檬原汁啤酒",     price:180,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"be5",name:"AMBAR IPA安柏IPA精釀啤酒",            price:180,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"be6",name:"可倫堡1664白啤酒 KRONENBOURG BLANC",  price:160,fixedIce:true,fixedSugar:true,isAlcohol:true},
+  ]},
+  wine:     { label:"🍷 紅白酒（瓶裝）", emoji:"🍷", note:"酒類不可升級套餐", items:[
+    {id:"wn1",name:"攀島粉鑽水果紅酒 SANGRIA",                    price:1500,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn2",name:"Bordeaux Rouge 法國波爾多拉法葉紅酒",          price:1080,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn3",name:"Piccini畢利旗佳釀紅酒",                       price:980, fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn4",name:"CABERNET SAUVIGNON羅伯蒙岱維酒莊紅酒",        price:1380,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn5",name:"Sauvignon Blanc 白蘇維翁白葡萄酒",            price:980, fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn6",name:"Bordeaux Supérieur 純種馬爾貝克茗藤紅酒",     price:1380,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn7",name:"Vietti Moscato d'Asti 慕斯卡艾斯提白酒",      price:1280,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn8",name:"PENFOLDS KOONUNGA HILL 夏多內白酒",           price:980, fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn9",name:"Vespa Bianca Terra Fiano 菲亞諾白酒",         price:1080,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn10",name:"Vespa Bruno Primitivo 布魯諾莊主紅酒",       price:1080,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn11",name:"Ca' dei Frati I Frati Lugana 修道士白酒",    price:1380,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn12",name:"LUCIDO CATARATIO露西多白酒",                 price:1080,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"wn13",name:"Brachetto d'Acqui DOCG 女王微甜紅酒",        price:980, fixedIce:true,fixedSugar:true,isAlcohol:true},
+  ]},
+  nonalc:   { label:"🥂 無酒精系列", emoji:"🥂", note:"酒類不可升級套餐", items:[
+    {id:"na1",name:"瓶- Domaine De La Prade 梅洛&西拉子無酒精紅酒 750ml", price:1180,fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"na2",name:"杯- Domaine De La Prade 梅洛&西拉子無酒精紅酒 150ml", price:220, fixedIce:true,fixedSugar:true,isAlcohol:true},
+    {id:"na3",name:"瓶- 伊威無酒精粉紅酒 Edenvale 750ml",                price:850, fixedIce:true,fixedSugar:true,isAlcohol:true},
+  ]},
+  pets:     { label:"🐾 寵物餐 Pets", emoji:"🐾", note:"本店皆使用寵物專用食品，無添加調味", items:[
+    {id:"pt1",name:"毛孩吃舒肥牛",  sub:"舒肥牛排130g、花椰菜、水煮蛋、寵物牛奶", price:300,fixedIce:true,fixedSugar:true},
+    {id:"pt2",name:"毛孩吃雞胸肉",  sub:"雞胸130g、花椰菜、水煮蛋、寵物牛奶",     price:240,fixedIce:true,fixedSugar:true},
+  ]},
+};
+
+const APP_VER = "v230";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
+const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
+const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
+const SET_DRINK_CATS = DRINK_CATS.filter(c=>!ALCOHOL_CATS.includes(c));  // 套餐可選的飲料分類
+// 客人點餐選單:隱藏酒類(避免誤點)。只是不顯示,舊訂單的酒類品名/價格照常正確
+const CUST_DRINK_CATS = DRINK_CATS.filter(c=>!ALCOHOL_CATS.includes(c));
+const MAIN_CATS  = ["brunch","pasta","pizza","risotto"];
+const SET_MEALS  = [
+  {id:"A",label:"A 經典套餐",price:150,desc:"湯品、麵包、任選飲品折抵80元"},
+  {id:"B",label:"B 甜點套餐",price:120,desc:"季節甜點、任選飲品折抵80元"},
+  {id:"C",label:"C 湯品套餐",price:120,desc:"湯品、任選飲品折抵80元"},
+];
+const ICE_FULL = ["冰","去冰","熱"];
+const ICE_NO_REMOVE = ["冰","熱"];
+const ICE_TWG = ["去冰","熱"];
+const SUGAR_OPT = ["無糖","三分糖","五分糖","七分糖","全糖"];
+const MASCOT_OPT = ["柴柴棉花糖","泡澡熊"];
+const MASCOT_ICO = { "柴柴棉花糖":"🐕", "泡澡熊":"🐻" };   // 全組訂單用圖示標出來,一眼看到要做造型
+const mascotIco = (m) => MASCOT_ICO[m] || (m ? "🎨" : "");
+const DRESSING_OPT = ["胡麻醬","油醋醬"];
+
+function getItemPrice(item, isMember) {
+  if (item.price !== undefined) return item.price;
+  return isMember ? item.member : item.normal;
+}
+
+function getIceOptions(item) {
+  if (item.fixedIce) return null;
+  if (item.twgIce) return ICE_TWG;
+  if (item.noRemoveIce) return ICE_NO_REMOVE;
+  if (item.hasIce) return ICE_FULL;
+  return null;
+}
+
+function addMinutes(timeStr, mins) {
+  if (!timeStr) return "";
+  const m = timeStr.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return timeStr;
+  const total = parseInt(m[1])*60 + parseInt(m[2]) + mins;
+  return `${String(Math.floor(total/60)%24).padStart(2,"0")}:${String(total%60).padStart(2,"0")}`;
+}
+
+function findItem(id) {
+  if (typeof id === "string" && id.startsWith("custom:")) return {id, name:id.slice(7), custom:true};  // 自己打的餐點名
+  for (const cat of [...FOOD_CATS, ...DRINK_CATS]) {
+    const found = MENU[cat]?.items.find(i => i.id === id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function getItemCategory(item) {
+  const catLabels = {
+    salad:"沙拉", appetizer:"前菜", brunch:"早午餐", pasta:"義大利麵",
+    pizza:"披薩", risotto:"燉飯", dessert:"甜點", classic:"小品",
+    styled:"造型飲品", milktea:"歐蕾", specials:"特調", sparkling:"氣泡飲",
+    tea:"精選茶", coffee:"咖啡", brewed:"沖泡茶", juice:"果汁/汽水",
+    beer:"啤酒", wine:"紅白酒", nonalc:"無酒精", pets:"寵物餐"
+  };
+  for (const cat of [...FOOD_CATS, ...DRINK_CATS]) {
+    if (MENU[cat]?.items.find(i => i.id === item.id)) return catLabels[cat] || cat;
+  }
+  return "";
+}
+
+function isAlcohol(item) {
+  return ["beer","wine","nonalc"].some(c => MENU[c]?.items.find(i => i.id === item.id));
+}
+
+function isMainDish(item) {
+  if(item && item.isMain) return true;               // 季節主餐(例:榴槤麵)不在 MAIN_CATS 也算主餐
+  return MAIN_CATS.some(c => MENU[c]?.items.find(i => i.id === item.id));
+}
+
+function isDrink(item) {
+  return DRINK_CATS.some(c => MENU[c]?.items.find(i => i.id === item.id));
+}
+
+// ─── 低消計算 ────────────────────────────────────────────────────────────────
+// 規則:每位「大人」要一份。單點主餐=1、單點飲料=1、套餐(主餐+升級飲料)=1
+//      主餐 + 另外單點飲料 = 2(分開點各算各的)
+//      前菜/甜點/沙拉/經典小品 不算
+const BANK_INFO = { bank:"台新銀行（812）成功分行", name:"今鶴餐飲有限公司", acct:"2085-01-0000754-1" };
+const VIP_MIN_SPEND = 6000;         // 包廂低消(餐點小計,不含服務費、開瓶費)
+const VIP_MIN_DEPOSIT = 1000;
+// 備註欄標籤:只留畫盤兩個。慶生/過敏/素食/寵物/推車已移除,那些寫在備註文字裡
+// (舊資料若還帶著舊標籤,NoteCell 是直接拿 key 當文字顯示,不會消失,只是變預設灰色)
+const NOTE_TAGS = [
+  {k:"畫盤",     c:"#8a5ab4", bg:"#f4e8f8", grp:"服務"},
+  {k:"客製畫盤", c:"#8a5ab4", bg:"#f4e8f8", grp:"服務", needTxt:true},
+];
+// 從大麥備註自動偵測標籤:只偵測畫盤
+function autoTagsFrom(txt){
+  const t=String(txt||"");
+  const out=[];
+  if(/畫盤/.test(t)) out.push("畫盤");
+  return out;
+}
+// 低消是否達標(包廂看金額、一般看份數)
+function lowConsumeOk(g){
+  if(!g) return false;
+  if(g.isVip){
+    const isMem=(g.memberType==="existing"||g.memberType==="new");
+    const tot=(g.orders||[]).reduce((sm,o)=>sm+orderTotal(o.lines||[],isMem),0);
+    return tot>=VIP_MIN_SPEND;
+  }
+  const ad=adultsOfG(g); if(ad<=0) return false;
+  return lowConsumeCount((g.orders||[]).flatMap(o=>o.lines||[]))>=ad;
+}       // 包廂訂金最低 $1,000
+const VIP_MAX = 10;                 // 包廂最多 10 位
+const VIP_HARD_MAX = 11;            // 12 位以上不能存
+const TAKEOUT_PER = 100;            // 外帶每份主菜 $100 訂金(無最低)
+// 備註出現這些字但沒勾包廂 → 提醒(漏勾會導致同時段被接第二組)
+const VIP_HINT_WORDS = ["包廂","包間","包廂訂金","低消","點餐"];
+function lowConsumeCount(lines){
+  let n=0;
+  (lines||[]).forEach(l=>{
+    const q=Math.max(1, parseInt(l.qty)||1);   // 數量:沒填當 1 份
+    const it=findItem(l.itemId);
+    if(it){
+      if(isMainDish(it)) n+=q;     // 主餐(含升級套餐)算 1
+      else if(isDrink(it)) n+=q;   // 單點飲料算 1(啤酒/紅白酒/無酒精都在 DRINK_CATS 內)
+      return;
+    }
+    // 夥伴幫客人加的品項:菜單沒有、自己打名稱的,預設算低消,勾「不算低消」才排除
+    if(l.custom && String(l.name||"").trim() && !l.lcSkip) n+=q;
+  });
+  return n;
+}
+// 大人數(5歲以上算大人;以 headcount 的 p 為準)
+function adultsOfG(g){
+  const hc=(g&&g.headcount||"").toLowerCase();
+  const p=+((hc.match(/(\d+)p/)||[])[1]||0);
+  return p||parseInt(hc)||0;
+}
+function makeLineId() { return Date.now() + Math.random().toString(36).slice(2,6); }
+
+function linePrice(line, isMember) {
+  if (line.custom) return (Number(line.price)||0) * (line.qty||1);
+  const item = findItem(line.itemId);
+  if (!item) return 0;
+  let p = getItemPrice(item, isMember);
+  if (line.setMeal) {
+    const sm = SET_MEALS.find(s => s.id === line.setMeal.id);
+    p += sm?.price || 0;
+    if (line.setMeal.drink) {
+      p += Math.max(0, line.setMeal.drink.price - 80);
+    }
+  }
+  return p * Math.max(1, parseInt(line.qty) || 1);   // 數量:沒填當 1 份
+}
+
+function linePriceBreakdown(line, isMember) {
+  const item = findItem(line.itemId);
+  if (!item) return null;
+  const basePrice = getItemPrice(item, isMember);
+  if (!line.setMeal) return null;
+  const sm = SET_MEALS.find(s => s.id === line.setMeal.id);
+  const setPrice = sm?.price || 0;
+  const drinkPrice = line.setMeal.drink ? line.setMeal.drink.price : 0;
+  const discount = line.setMeal.drink ? 80 : 0;
+  return { basePrice, setPrice, drinkPrice, discount, total: basePrice + setPrice + Math.max(0, drinkPrice - discount) };
+}
+
+function orderTotal(lines, isMember) {
+  return lines.reduce((s, l) => s + linePrice(l, isMember), 0);
+}
+
+function orderTotalWithService(lines, isMember) {
+  const subtotal = orderTotal(lines, isMember);
+  return Math.round(subtotal * 1.1);
+}
+
+function calcMemberFee(lines, memberType) {
+  if (memberType !== "new") return { fee: 0, discount: 0 };
+  // Check if any appetizer OR alcohol is ordered (only discount once)
+  const hasAppetizer = lines.some(l => MENU["appetizer"]?.items.find(i => i.id === l.itemId));
+  const hasAlcohol = lines.some(l => ["beer","wine","nonalc"].some(c => MENU[c]?.items.find(i => i.id === l.itemId)));
+  return { fee: 100, discount: (hasAppetizer || hasAlcohol) ? 100 : 0 };
+}
+
+function lineComplete(line) {
+  const item = findItem(line.itemId);
+  if (!item) return true;
+  if (item.dressing && !line.dressing) return false;
+  if (item.hasSugar && !line.sugar) return false;
+  if (item.needsMascot && !line.mascot) return false;
+  return true;
+}
+
+// ─── DRINK SELECTOR MODAL ────────────────────────────────────────────────────
+function DrinkModal({ onSelect, onClose, discount = 0, itemVisible }) {
+  const [cat, setCat] = useState("styled");
+  const [chosen, setChosen] = useState(null);
+  const [ice, setIce] = useState(null);
+  const [sugar, setSugar] = useState(null);
+  const [mascot, setMascot] = useState(null);
+  const items = ALCOHOL_CATS.includes(cat) ? [] : (MENU[cat]?.items || []).filter(i=>!itemVisible||itemVisible(i));
+  const item = items.find(i => i.id === chosen);
+  const iceOpts = item ? getIceOptions(item) : null;
+
+  const canConfirm = chosen &&
+    (!iceOpts || ice) &&
+    (!item?.hasSugar || sugar) &&
+    (!item?.needsMascot || mascot);
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"flex-end"}} onClick={onClose}>
+      <div style={{width:"100%",maxHeight:"90vh",background:"#ffffff",borderRadius:"24px 24px 0 0",border:"1px solid #d8c2a2",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px 8px",borderBottom:"1px solid #e6d6bd"}}>
+          <div style={{fontSize:"17px",fontWeight:"700",color:"#9c5a1c",fontFamily:"'Noto Serif TC',serif"}}>選擇飲品</div>
+          {discount>0 && <div style={{fontSize:"13px",color:"#b06010"}}>套餐飲品折抵 ${discount}</div>}
+        </div>
+        <div style={{display:"flex",overflowX:"auto",padding:"8px 12px",gap:"6px",borderBottom:"1px solid #e6d6bd"}}>
+          {SET_DRINK_CATS.map(k=>(
+            <button key={k} onClick={()=>{setCat(k);setChosen(null);setIce(null);setSugar(null);setMascot(null);}}
+              style={{flexShrink:0,padding:"5px 12px",borderRadius:"20px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+                background:cat===k?"#b07840":"#e6d6bd",color:cat===k?"#fff":"#b06010"}}>
+              {MENU[k].emoji} {MENU[k].label.split(" ").pop().substring(0,5)}
+            </button>
+          ))}
+        </div>
+        {MENU[cat]?.note && <div style={{fontSize:"12px",color:"#8a6e50",padding:"5px 14px",background:"#f5ede0"}}>※ {MENU[cat].note}</div>}
+        <div style={{overflowY:"auto",flex:1,padding:"8px 14px"}}>
+          {items.map(it=>(
+            <div key={it.id} onClick={()=>{setChosen(it.id);setIce(null);setSugar(null);setMascot(null);}}
+              style={{padding:"10px 12px",marginBottom:"6px",borderRadius:"10px",cursor:"pointer",
+                background:chosen===it.id?"#f6e3cf":"#fdf6ec",border:`1px solid ${chosen===it.id?"#b07840":"#e6d6bd"}`,
+                display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:"11px",color:"#3f8f63",marginBottom:"2px"}}>{"["+getItemCategory(it)+"]"}</div>
+                <div style={{fontSize:"15px",color:"#3a2a18",fontWeight:chosen===it.id?"700":"400"}}>{it.name}</div>
+                {it.sub&&<div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>{it.sub}</div>}
+              </div>
+              <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"700",whiteSpace:"nowrap",marginLeft:"8px"}}>
+                ${it.price}{discount>0&&chosen===it.id&&<span style={{fontSize:"12px",color:"#3f8f63"}}> -{discount}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{padding:"10px 14px",borderTop:"1px solid #e6d6bd"}}>
+          <button onClick={onClose} style={{width:"100%",padding:"12px",borderRadius:"12px",background:"#e6d6bd",border:"none",color:"#b06010",fontSize:"15px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+        </div>
+      </div>
+      {item && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:320,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}
+          onClick={(e)=>{e.stopPropagation();setChosen(null);setIce(null);setSugar(null);setMascot(null);}}>
+          <div style={{background:"#fdfaf4",borderRadius:"20px",padding:"22px",width:"100%",maxWidth:"340px",border:"1px solid #d0c0a8",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"18px",fontWeight:"700",color:"#6a4a2e",marginBottom:"2px",textAlign:"center",fontFamily:"'Noto Serif TC',serif"}}>{item.name}</div>
+            <div style={{fontSize:"14px",color:"#9c5a1c",fontWeight:"700",marginBottom:"14px",textAlign:"center"}}>${item.price}{discount>0&&<span style={{fontSize:"13px",color:"#3f8f63"}}> 折抵 -{discount}</span>}</div>
+            {iceOpts && (
+              <div style={{marginBottom:"14px"}}>
+                <div style={{fontSize:"13px",color:"#7a5e42",fontWeight:"700",marginBottom:"6px",textAlign:"center"}}>冰量（必選）</div>
+                <div style={{display:"flex",gap:"8px",justifyContent:"center",flexWrap:"wrap"}}>
+                  {iceOpts.map(o=><button key={o} onClick={()=>setIce(o)}
+                    style={{padding:"11px 22px",borderRadius:"10px",cursor:"pointer",fontSize:"16px",fontWeight:"700",
+                      background:ice===o?"#e8920a":"#fff4e0",color:ice===o?"#fff":"#b06010",border:ice===o?"2px solid #e8920a":"2px solid #e8b060"}}>{ice===o?"✓ ":""}{o}</button>)}
+                </div>
+              </div>
+            )}
+            {item.hasSugar && (
+              <div style={{marginBottom:"14px"}}>
+                <div style={{fontSize:"13px",color:"#7a5e42",fontWeight:"700",marginBottom:"6px",textAlign:"center"}}>甜度（必選）</div>
+                <div style={{display:"flex",gap:"8px",justifyContent:"center",flexWrap:"wrap"}}>
+                  {SUGAR_OPT.map(o=><button key={o} onClick={()=>setSugar(o)}
+                    style={{padding:"10px 16px",borderRadius:"10px",cursor:"pointer",fontSize:"15px",fontWeight:"700",
+                      background:sugar===o?"#e8920a":"#fff4e0",color:sugar===o?"#fff":"#b06010",border:sugar===o?"2px solid #e8920a":"2px solid #e8b060"}}>{sugar===o?"✓ ":""}{o}</button>)}
+                </div>
+              </div>
+            )}
+            {item.needsMascot && (
+              <div style={{marginBottom:"14px"}}>
+                <div style={{fontSize:"13px",color:"#7a5e42",fontWeight:"700",marginBottom:"6px",textAlign:"center"}}>造型（必選）</div>
+                <div style={{display:"flex",gap:"8px",justifyContent:"center",flexWrap:"wrap"}}>
+                  {MASCOT_OPT.map(o=><button key={o} onClick={()=>setMascot(o)}
+                    style={{padding:"11px 18px",borderRadius:"10px",cursor:"pointer",fontSize:"16px",fontWeight:"700",
+                      background:mascot===o?"#e8920a":"#fff4e0",color:mascot===o?"#fff":"#b06010",border:mascot===o?"2px solid #e8920a":"2px solid #e8b060"}}>{mascot===o?"✓ ":""}{o}</button>)}
+                </div>
+              </div>
+            )}
+            {!iceOpts && !item.hasSugar && !item.needsMascot && (
+              <div style={{fontSize:"13px",color:"#8a6e50",marginBottom:"14px",textAlign:"center",lineHeight:"1.5"}}>此飲品無需特別選項，<br/>確認即可加入。</div>
+            )}
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>{setChosen(null);setIce(null);setSugar(null);setMascot(null);}}
+                style={{flex:1,padding:"13px",borderRadius:"12px",background:"#e6d6bd",border:"none",color:"#b06010",fontSize:"15px",fontWeight:"700",cursor:"pointer"}}>返回</button>
+              <button disabled={!canConfirm} onClick={()=>{
+                const iceVal = item.fixedIce ? null : ice;
+                onSelect({...item, ice:iceVal, sugar:item.fixedSugar?null:sugar, mascot});
+              }} style={{flex:2,padding:"13px",borderRadius:"12px",border:"none",cursor:canConfirm?"pointer":"default",fontSize:"16px",fontWeight:"700",
+                background:canConfirm?"#b07840":"#e6d6bd",color:canConfirm?"#fff":"#b8a892"}}>
+                {canConfirm?"確認加入":"請完成選項"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── LINE ITEM CARD ───────────────────────────────────────────────────────────
+function LineCard({ line, isMember, onRemove, onUpdate, onAddSet, onChangeSet, disabled, drinkOnsite }) {
+  const item = findItem(line.itemId);
+  if (!item) return null;
+  const isMain = isMainDish(item);
+  const iceOpts = getIceOptions(item);
+  const complete = lineComplete(line);
+
+  return (
+    <div style={{background:complete?"#fdf4e8":"#fcebe4",borderRadius:"14px",padding:"14px",marginBottom:"10px",
+      border:`1.5px solid ${complete?"#e0cdb0":"#e09a8a"}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:"16px",color:"#3a2a18",fontWeight:"700"}}>{item.name}</div>
+          {item.sub&&!item.sub.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>{item.sub}</div>}
+          {item.sub?.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#a8741e",marginTop:"4px",lineHeight:"1.6"}}>{item.sub}</div>}
+          <div style={{fontSize:"15px",color:"#9c5a1c",marginTop:"4px"}}>
+            ${getItemPrice(item,isMember)}
+            {(line.qty||1)>1&&<span style={{fontWeight:"800"}}> × {line.qty} ＝ ${getItemPrice(item,isMember)*(line.qty||1)}</span>}
+          </div>
+          {!disabled&&(
+            <div style={{display:"flex",alignItems:"center",gap:"7px",marginTop:"7px"}}>
+              <span style={{fontSize:"12px",color:"#7a5e42",fontWeight:"700"}}>份數</span>
+              <button onClick={()=>onUpdate({qty:Math.max(1,(line.qty||1)-1)})}
+                style={{width:"32px",height:"32px",borderRadius:"8px",border:"1.5px solid #d8c4a4",background:"#fff",color:"#8a6a48",fontSize:"17px",fontWeight:"900",cursor:"pointer",lineHeight:1}}>−</button>
+              <b style={{fontSize:"16px",color:"#3a2a18",minWidth:"24px",textAlign:"center"}}>{line.qty||1}</b>
+              <button onClick={()=>onUpdate({qty:Math.min(30,(line.qty||1)+1)})}
+                style={{width:"32px",height:"32px",borderRadius:"8px",border:"1.5px solid #d8c4a4",background:"#fff",color:"#8a6a48",fontSize:"17px",fontWeight:"900",cursor:"pointer",lineHeight:1}}>＋</button>
+              <span style={{fontSize:"11px",color:"#a89070"}}>甜度/醬料不同要另外點一道</span>
+            </div>
+          )}
+        </div>
+        {!disabled&&<button onClick={onRemove}
+          style={{padding:"4px 10px",borderRadius:"8px",border:"1px solid #e6b0a0",background:"none",color:"#d05a36",fontSize:"13px",cursor:"pointer",marginLeft:"8px"}}>
+          刪除
+        </button>}
+      </div>
+      {!disabled && item.dressing && (
+        <div style={{marginTop:"8px"}}>
+          <div style={{fontSize:"12px",color:line.dressing?"#7a5e42":"#d05a36",marginBottom:"4px"}}>醬料{!line.dressing?" (必選)":""}</div>
+          <div style={{display:"flex",gap:"5px"}}>
+            {DRESSING_OPT.map(d=><button key={d} onClick={()=>onUpdate({dressing:d})}
+              style={{padding:"4px 12px",borderRadius:"16px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+                background:line.dressing===d?"#b07840":"#e6d6bd",color:line.dressing===d?"#fff":"#8a6a48"}}>{d}</button>)}
+          </div>
+        </div>
+      )}
+      {!disabled && iceOpts && (
+        <div style={{marginTop:"8px"}}>
+          <div style={{fontSize:"12px",color:"#7a5e42",marginBottom:"4px"}}>冰量</div>
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+            {iceOpts.map(o=><button key={o} onClick={()=>onUpdate({ice:o})}
+              style={{padding:"4px 10px",borderRadius:"16px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+                background:line.ice===o?"#b07840":"#e6d6bd",color:line.ice===o?"#fff":"#8a6a48"}}>{o}</button>)}
+          </div>
+        </div>
+      )}
+
+
+      {!disabled && item.hasSugar && (
+        <div style={{marginTop:"8px"}}>
+          <div style={{fontSize:"12px",color:line.sugar?"#7a5e42":"#d05a36",marginBottom:"4px"}}>甜度{!line.sugar?" (必選)":""}</div>
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+            {SUGAR_OPT.map(o=><button key={o} onClick={()=>onUpdate({sugar:o})}
+              style={{padding:"4px 10px",borderRadius:"16px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+                background:line.sugar===o?"#b07840":"#e6d6bd",color:line.sugar===o?"#fff":"#8a6a48"}}>{o}</button>)}
+          </div>
+        </div>
+      )}
+      {!disabled && item.needsMascot && (
+        <div style={{marginTop:"8px"}}>
+          <div style={{fontSize:"12px",color:line.mascot?"#7a5e42":"#d05a36",marginBottom:"4px"}}>造型{!line.mascot?" (必選)":""}</div>
+          <div style={{display:"flex",gap:"5px"}}>
+            {MASCOT_OPT.map(o=><button key={o} onClick={()=>onUpdate({mascot:o})}
+              style={{padding:"4px 12px",borderRadius:"16px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+                background:line.mascot===o?"#b07840":"#e6d6bd",color:line.mascot===o?"#fff":"#8a6a48"}}>{o}</button>)}
+          </div>
+        </div>
+      )}
+      {line.dressing&&<div style={{marginTop:"4px",fontSize:"12px",color:"#3f8f63"}}>醬料：{line.dressing}</div>}
+      {line.ice&&<div style={{marginTop:"2px",fontSize:"12px",color:"#3f8f63"}}>冰量：{line.ice}</div>}
+      {line.sugar&&<div style={{marginTop:"2px",fontSize:"12px",color:"#3f8f63"}}>甜度：{line.sugar}</div>}
+      {line.mascot&&<div style={{marginTop:"2px",fontSize:"12px",color:"#3f8f63"}}>造型：{line.mascot}</div>}
+      {line.toggles&&line.toggles.length>0&&<div style={{marginTop:"2px",fontSize:"12px",color:"#e8a030",fontWeight:"700"}}>{line.toggles.join("、")}</div>}
+      {isMain && !disabled && !isAlcohol(item) && (
+        <div style={{marginTop:"10px",borderTop:"1px solid #e6d6bd",paddingTop:"10px"}}>
+          {!line.setMeal ? (
+            <button onClick={onAddSet}
+              style={{padding:"6px 14px",borderRadius:"10px",border:"1px dashed #d8c2a2",background:"transparent",color:"#8a6a48",fontSize:"13px",cursor:"pointer"}}>
+              + 加選套餐（+$120~150）
+            </button>
+          ) : (
+            <div style={{background:"#eaf6ec",borderRadius:"10px",padding:"10px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:"14px",color:"#3f8f63",fontWeight:"700"}}>{SET_MEALS.find(s=>s.id===line.setMeal.id)?.label}</div>
+                  {line.setMeal.drink ? (
+                    <div style={{fontSize:"13px",color:"#7a5e42",marginTop:"2px"}}>
+                      飲品：{line.setMeal.drink.name}
+                      {line.setMeal.drink.ice&&` · ${line.setMeal.drink.ice}`}
+                      {line.setMeal.drink.mascot&&` · ${line.setMeal.drink.mascot}`}
+                    </div>
+                  ) : drinkOnsite ? (
+                    <div style={{fontSize:"13px",color:"#3f8f63",marginTop:"2px",fontWeight:"700"}}>飲品：現場點（櫃檯 POS，不用先選）</div>
+                  ) : (
+                    <div style={{fontSize:"13px",color:"#d05a36",marginTop:"2px"}}>請選擇飲品（必選）</div>
+                  )}
+                </div>
+                <div style={{display:"flex",gap:"5px"}}>
+                  <button onClick={onChangeSet}
+                    style={{padding:"3px 8px",borderRadius:"6px",border:"1px solid #bcd8bf",background:"none",color:"#3f8f63",fontSize:"12px",cursor:"pointer"}}>
+                    {line.setMeal.drink?"換飲品":"選飲品"}
+                  </button>
+                  <button onClick={()=>onUpdate({setMeal:null})}
+                    style={{padding:"3px 8px",borderRadius:"6px",border:"1px solid #e6b0a0",background:"none",color:"#d05a36",fontSize:"12px",cursor:"pointer"}}>
+                    取消套餐
+                  </button>
+                </div>
+              </div>
+              {!line.setMeal.drink && drinkOnsite && (()=>{
+                const sm = SET_MEALS.find(s=>s.id===line.setMeal.id);
+                const setPrice = sm?.price||0;
+                return(
+                  <div style={{marginTop:"8px",fontSize:"12px",color:"#5a8a6a",lineHeight:"1.9",borderTop:"1px solid #d4e4d6",paddingTop:"6px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>主餐</span><span>${getItemPrice(item,isMember)}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>套餐費（{sm?.label}）</span><span>+${setPrice}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between",color:"#9c5a1c",fontWeight:"700",borderTop:"1px solid #cadccb",marginTop:"2px",paddingTop:"2px"}}>
+                      <span>小計</span><span>${getItemPrice(item,isMember)+setPrice}</span>
+                    </div>
+                    <div style={{color:"#b06010",fontWeight:"700",marginTop:"4px",lineHeight:"1.5"}}>
+                      ⚠ 以上<b>不含補差價飲料金額</b>。飲品現場點，超過折抵 $80 的部分於櫃檯結。
+                    </div>
+                  </div>
+                );
+              })()}
+              {line.setMeal.drink && (()=>{
+                const sm = SET_MEALS.find(s=>s.id===line.setMeal.id);
+                const drinkPrice = line.setMeal.drink.price;
+                const setPrice = sm?.price||0;
+                const extra = Math.max(0, drinkPrice-80);
+                return(
+                  <div style={{marginTop:"8px",fontSize:"12px",color:"#5a8a6a",lineHeight:"1.9",borderTop:"1px solid #d4e4d6",paddingTop:"6px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>主餐</span><span>${getItemPrice(item,isMember)}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>套餐費（{sm?.label}）</span><span>+${setPrice}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span>飲品 ${drinkPrice} - 折抵$80</span><span>+${extra}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between",color:"#9c5a1c",fontWeight:"700",borderTop:"1px solid #cadccb",marginTop:"2px",paddingTop:"2px"}}>
+                      <span>小計</span><span>${getItemPrice(item,isMember)+setPrice+extra}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+      {isMain && disabled && line.setMeal && (
+        <div style={{marginTop:"8px",fontSize:"13px",color:"#3f8f63"}}>
+          套餐：{SET_MEALS.find(s=>s.id===line.setMeal.id)?.label}
+          {line.setMeal.drink&&` · ${line.setMeal.drink.name}`}
+        </div>
+      )}
+      {/* 特殊需求:只有夥伴能寫(員工版),客人端只顯示 */}
+      {line.note&&(
+        <div style={{marginTop:"8px",fontSize:"13px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"8px",padding:"6px 9px",lineHeight:"1.6"}}>
+          ⚠ 特殊需求：{line.note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── ITEM CHOICE MODAL ───────────────────────────────────────────────────────
+function ItemChoiceModal({ item, isMember, onConfirm, onClose }) {
+  const [ice, setIce] = useState(null);
+  const [sugar, setSugar] = useState(null);
+  const [mascot, setMascot] = useState(null);
+  const [dressing, setDressing] = useState(null);
+  const [toggles, setToggles] = useState([]);
+
+  const iceOpts = getIceOptions(item);
+  const needsIce = !!iceOpts;
+  const needsSugar = !!item.hasSugar;
+  const needsMascot = !!item.needsMascot;
+  const needsDressing = !!item.dressing;
+
+  const canConfirm = 
+    (!needsIce || ice) &&
+    (!needsSugar || sugar) &&
+    (!needsMascot || mascot) &&
+    (!needsDressing || dressing);
+
+  const hasToggles = !!(item.toggles&&item.toggles.length);
+  const hasOptions = needsIce || needsSugar || needsMascot || needsDressing || hasToggles || item.fixedIce || item.fixedSugar;
+
+  if (!hasOptions) {
+    // No options needed, confirm immediately
+    onConfirm({ ice: null, sugar: null, mascot: null, dressing: null, toggles: [] });
+    return null;
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={onClose}>
+      <div style={{background:"#ffffff",borderRadius:"20px",padding:"20px",width:"100%",maxWidth:"320px",border:"1px solid #d8c2a2",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:"16px",color:"#9c5a1c",fontWeight:"700",marginBottom:"4px"}}>{item.name}</div>
+        {item.sub&&<div style={{fontSize:"12px",color:"#8a6e50",marginBottom:"12px"}}>{item.sub}</div>}
+        <div style={{fontSize:"15px",color:"#9c5a1c",marginBottom:"16px"}}>${getItemPrice(item,isMember)}</div>
+
+        {/* Toggles 特製選項(可複選) */}
+        {hasToggles && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"13px",color:"#7a5e42",fontWeight:"700",marginBottom:"4px"}}>特製需求（可複選）</div>
+            <div style={{fontSize:"12px",color:"#b07020",marginBottom:"8px",lineHeight:"1.5"}}>本道料理為小辣，含白酒風味。<br/>無特殊需求可直接按「加入」。</div>
+            <div style={{display:"flex",gap:"8px"}}>
+              {item.toggles.map(t=>{
+                const on=toggles.includes(t);
+                return (
+                  <button key={t} onClick={()=>setToggles(p=>on?p.filter(x=>x!==t):[...p,t])}
+                    style={{flex:1,padding:"13px",borderRadius:"10px",cursor:"pointer",fontSize:"17px",fontWeight:"700",
+                      background:on?"#e8920a":"#fff4e0",color:on?"#fff":"#b06010",border:on?"2px solid #e8920a":"2px solid #e8b060"}}>
+                    {on?"✓ ":""}{t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {/* Dressing */}
+        {needsDressing && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"13px",color:dressing?"#7a5e42":"#d05a36",fontWeight:"700",marginBottom:"6px"}}>醬料（必選）</div>
+            <div style={{display:"flex",gap:"8px"}}>
+              {DRESSING_OPT.map(o=>(
+                <button key={o} onClick={()=>setDressing(o)}
+                  style={{flex:1,padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"15px",fontWeight:"700",
+                    background:dressing===o?"#e8920a":"#fff4e0",color:dressing===o?"#fff":"#b06010"}}>{o}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Ice */}
+        {needsIce && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"13px",color:ice?"#7a5e42":"#d05a36",fontWeight:"700",marginBottom:"6px"}}>冰量（必選）</div>
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {iceOpts.map(o=>(
+                <button key={o} onClick={()=>setIce(o)}
+                  style={{flex:1,minWidth:"60px",padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"15px",fontWeight:"700",
+                    background:ice===o?"#e8920a":"#fff4e0",color:ice===o?"#fff":"#b06010"}}>{o}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {item.fixedIce && (
+          <div style={{marginBottom:"14px",padding:"8px 12px",background:"#f0ebe0",borderRadius:"8px",fontSize:"13px",color:"#7a5c3e",fontWeight:"700"}}>
+            🧊 冰量：{item.note||"固定少冰"}（此品項不可調整冰量）
+          </div>
+        )}
+
+        {/* Sugar */}
+        {needsSugar && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"13px",color:sugar?"#7a5e42":"#d05a36",fontWeight:"700",marginBottom:"6px"}}>甜度（必選）</div>
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {SUGAR_OPT.map(o=>(
+                <button key={o} onClick={()=>setSugar(o)}
+                  style={{flex:1,minWidth:"60px",padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"14px",fontWeight:"700",
+                    background:sugar===o?"#e8920a":"#fff4e0",color:sugar===o?"#fff":"#b06010"}}>{o}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {item.fixedSugar && (
+          <div style={{marginBottom:"14px",padding:"8px 12px",background:"#fdf8ef",borderRadius:"8px"}}>
+          </div>
+        )}
+
+        {/* Mascot */}
+        {needsMascot && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"13px",color:mascot?"#7a5e42":"#d05a36",fontWeight:"700",marginBottom:"6px"}}>造型（必選）</div>
+            <div style={{display:"flex",gap:"8px"}}>
+              {MASCOT_OPT.map(o=>(
+                <button key={o} onClick={()=>setMascot(o)}
+                  style={{flex:1,padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"14px",fontWeight:"700",
+                    background:mascot===o?"#e8920a":"#fff4e0",color:mascot===o?"#fff":"#b06010"}}>{o}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:"8px",marginTop:"8px"}}>
+          <button onClick={onClose} style={{flex:1,padding:"12px",borderRadius:"12px",background:"#e6d6bd",border:"none",color:"#b06010",fontSize:"15px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+          <button disabled={!canConfirm} onClick={()=>onConfirm({ice,sugar,mascot,dressing,toggles})}
+            style={{flex:2,padding:"12px",borderRadius:"12px",border:"none",cursor:canConfirm?"pointer":"default",fontSize:"15px",fontWeight:"700",
+              background:canConfirm?"#b07840":"#e6d6bd",color:canConfirm?"#fff":"#b8a892"}}>
+            {canConfirm?"加入點餐 ✓":"請完成必選項目"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ORDER FLOW ───────────────────────────────────────────────────────────────
+// 一進點餐頁就全螢幕攔截:非看到截止時間不可(按「我知道了」才能開始點)
+function DeadlineGate({ dateStr, onClose, group, onReportTime }){
+  const dl=getOrderDeadline(dateStr);
+  if(!dl) return null;
+  const ms=dl-new Date();
+  const over=ms<=0;
+  const d=Math.floor(ms/86400000), h=Math.floor(ms%86400000/3600000), mi=Math.floor(ms%3600000/60000);
+  const urgent = !over && ms<=24*3600000;
+  const WD=["日","一","二","三","四","五","六"];
+  const dlTxt=`${dl.getMonth()+1}/${dl.getDate()}（${WD[dl.getDay()]}）${String(dl.getHours()).padStart(2,"0")}:${String(dl.getMinutes()).padStart(2,"0")}`;
+  const main = over?"#c02020" : urgent?"#c02020" : "#b05a10";
+  return createPortal(
+    <div style={{position:"fixed",inset:0,zIndex:9500,background:"rgba(30,20,10,0.82)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+      <div style={{background:"#fffaf2",borderRadius:"20px",padding:"24px 20px",width:"100%",maxWidth:"370px",textAlign:"center",boxShadow:"0 16px 50px rgba(0,0,0,0.45)",border:`3px solid ${main}`}}>
+        <div style={{fontSize:"40px",marginBottom:"4px"}}>{over?"⛔":"⏰"}</div>
+        {over?(<>
+          <div style={{fontSize:"21px",fontWeight:"900",color:"#c02020",marginBottom:"10px"}}>線上點餐已截止</div>
+          <div style={{background:"#fbe0e0",border:"2px solid #c02020",borderRadius:"12px",padding:"13px",marginBottom:"16px"}}>
+            <div style={{fontSize:"14px",color:"#a01010",fontWeight:"800",lineHeight:"1.8"}}>
+              當天請<u>現場點餐</u><br/>
+              餐點需<u>現場排單製作</u><br/>
+              <span style={{fontSize:"17px",fontWeight:"900"}}>等候約 40 分鐘以上</span>
+            </div>
+          </div>
+          <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"16px",lineHeight:"1.7"}}>
+            截止時間為 {dlTxt}。<br/>如有疑問請聯繫店家,敬請見諒。
+          </div>
+        </>):(<>
+          <div style={{fontSize:"13px",fontWeight:"800",color:main,letterSpacing:"0.08em"}}>線上點餐倒數</div>
+          <div className={urgent?"blinkTag":""} style={{fontSize:"36px",fontWeight:"900",color:main,lineHeight:"1.2",margin:"5px 0 3px"}}>
+            {d>0&&<>{d} 天 </>}{h} 小時 {mi} 分
+          </div>
+          <div style={{fontSize:"15px",fontWeight:"800",color:"#5a3a28",marginBottom:"14px"}}>截止：{dlTxt}</div>
+          <div style={{background:urgent?"#fbe0e0":"#fff2e0",border:`2px solid ${urgent?"#c02020":"#e08030"}`,borderRadius:"12px",padding:"13px",marginBottom:"16px"}}>
+            <div style={{fontSize:"13px",color:urgent?"#a01010":"#a05a10",fontWeight:"800",lineHeight:"1.8"}}>
+              ⚠ 逾時<u>無法線上點餐</u><br/>
+              當天需<u>現場點餐、現場排單製作</u><br/>
+              <span style={{fontSize:"17px",fontWeight:"900"}}>等候約 40 分鐘以上</span>
+            </div>
+          </div>
+          <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"16px",lineHeight:"1.7"}}>
+            為了讓您一入座就能享用餐點,<br/>請<b>務必在截止前完成點餐</b> 🙏
+          </div>
+        </>)}
+        {group&&(
+          <div style={{background:"#f7f1e6",border:"1.5px solid #ddd0bc",borderRadius:"12px",padding:"11px",marginBottom:"13px"}}>
+            <div style={{fontSize:"11px",color:"#8a6a48",marginBottom:"2px"}}>您的訂位</div>
+            <div style={{fontSize:"19px",fontWeight:"900",color:"#5a3a28",letterSpacing:"0.02em"}}>
+              {group.date}{(()=>{const m=(group.date||"").match(/^(\d{1,2})\/(\d{1,2})$/);if(!m)return"";const d=new Date(new Date().getFullYear(),+m[1]-1,+m[2]);return `（${["日","一","二","三","四","五","六"][d.getDay()]}）`;})()} {group.time}
+            </div>
+            <div style={{fontSize:"12px",color:"#8a6a48",marginTop:"2px"}}>{group.name}　{group.headcount||""}</div>
+            {group.timeIssue
+              ? <div style={{fontSize:"11px",color:"#b05a10",fontWeight:"700",marginTop:"6px",background:"#fff2e0",borderRadius:"7px",padding:"5px 8px"}}>⏳ 已回報時間有誤，店家處理中</div>
+              : <button onClick={onReportTime}
+                  style={{fontSize:"11px",color:"#8a6a48",background:"none",border:"none",textDecoration:"underline",cursor:"pointer",marginTop:"5px",padding:"2px"}}>時間不對？</button>}
+          </div>
+        )}
+        <button onClick={onClose}
+          style={{width:"100%",padding:"15px",borderRadius:"13px",border:"none",background:over?"#8a6a4a":main,color:"#fff",fontSize:"16px",fontWeight:"900",cursor:"pointer"}}>
+          {over?"我知道了":"我知道了，開始點餐"}
+        </button>
+      </div>
+    </div>, document.body
+  );
+}
+
+// 時間確認:兩段式,防誤觸(按錯的人直接按「對,時間正確」就沒事)
+function TimeCheckModal({ group, onClose, onSubmit }){
+  const [step,setStep]=useState(1);
+  const [t,setT]=useState("");
+  const SLOTS=["11:00","11:30","12:00","12:30","13:00","13:30","14:00","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
+  const wd=(()=>{const m=(group.date||"").match(/^(\d{1,2})\/(\d{1,2})$/);if(!m)return"";const d=new Date(new Date().getFullYear(),+m[1]-1,+m[2]);return `（${["日","一","二","三","四","五","六"][d.getDay()]}）`;})();
+  return createPortal(
+    <div style={{position:"fixed",inset:0,zIndex:9700,background:"rgba(30,20,10,0.85)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+      <div style={{background:"#fffaf2",borderRadius:"18px",padding:"22px 20px",width:"100%",maxWidth:"350px",textAlign:"center"}}>
+        {step===1?(<>
+          <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"5px"}}>您的訂位時間是</div>
+          <div style={{fontSize:"25px",fontWeight:"900",color:"#5a3a28",marginBottom:"3px"}}>{group.date}{wd}</div>
+          <div style={{fontSize:"32px",fontWeight:"900",color:"#9c5a1c",marginBottom:"18px"}}>{group.time}</div>
+          <button onClick={onClose}
+            style={{width:"100%",padding:"16px",borderRadius:"13px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"17px",fontWeight:"900",cursor:"pointer",marginBottom:"9px"}}>對，時間正確</button>
+          <button onClick={()=>setStep(2)}
+            style={{width:"100%",padding:"10px",borderRadius:"10px",border:"1px solid #ddd0bc",background:"transparent",color:"#8a6a48",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>不對，我記得是…</button>
+        </>):(<>
+          <div style={{fontSize:"15px",fontWeight:"800",color:"#5a3a28",marginBottom:"3px"}}>那您記得是幾點?</div>
+          <div style={{fontSize:"11px",color:"#a08a70",marginBottom:"12px"}}>系統顯示 {group.time}，請選您記得的時間</div>
+          <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"center",marginBottom:"14px"}}>
+            {SLOTS.filter(x=>x!==group.time).map(x=>(
+              <button key={x} onClick={()=>setT(x)}
+                style={{padding:"9px 12px",borderRadius:"9px",border:`1.5px solid ${t===x?"#9c5a1c":"#ddd0bc"}`,background:t===x?"#9c5a1c":"#fff",color:t===x?"#fff":"#5a3a28",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{x}</button>
+            ))}
+          </div>
+          <button disabled={!t} onClick={()=>onSubmit(t)}
+            style={{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:t?"#9c5a1c":"#ddd0bc",color:"#fff",fontSize:"15px",fontWeight:"900",cursor:t?"pointer":"not-allowed",marginBottom:"8px"}}>
+            {t?`送出：我記得是 ${t}`:"請先選時間"}
+          </button>
+          <button onClick={onClose}
+            style={{width:"100%",padding:"10px",borderRadius:"10px",border:"1px solid #ddd0bc",background:"transparent",color:"#8a6a48",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>算了，時間是對的</button>
+        </>)}
+      </div>
+    </div>, document.body
+  );
+}
+
+// 點餐截止倒數:離越近越紅,並且把「後果」講清楚(客人才會動)
+function DeadlineBar({ dateStr, compact=false }){
+  const [,tick]=useState(0);
+  useEffect(()=>{ const t=setInterval(()=>tick(x=>x+1),30000); return ()=>clearInterval(t); },[]);
+  const dl=getOrderDeadline(dateStr);
+  if(!dl) return null;
+  const now=new Date();
+  const ms=dl-now;
+  if(ms<=0) return (
+    <div style={{padding:"11px 14px",background:"#c02020",textAlign:"center"}}>
+      <div style={{fontSize:"15px",color:"#fff",fontWeight:"900"}}>⛔ 線上點餐已截止</div>
+      <div style={{fontSize:"12px",color:"#ffdada",marginTop:"3px",lineHeight:"1.7",fontWeight:"700"}}>
+        當天請<u>現場點餐</u>,餐點需現場排單製作,<u>等候約 40 分鐘以上</u>,敬請見諒。
+      </div>
+    </div>
+  );
+  const d=Math.floor(ms/86400000), h=Math.floor(ms%86400000/3600000), mi=Math.floor(ms%3600000/60000);
+  const urgent = ms<=24*3600000;       // 24小時內 = 紅色閃爍
+  const soon   = !urgent && ms<=72*3600000;  // 3天內 = 橘色
+  const WD=["日","一","二","三","四","五","六"];
+  const dlTxt=`${dl.getMonth()+1}/${dl.getDate()}（${WD[dl.getDay()]}）${String(dl.getHours()).padStart(2,"0")}:${String(dl.getMinutes()).padStart(2,"0")}`;
+  const bg = urgent?"#fbe0e0":soon?"#ffeeda":"#fcefd6";
+  const bd = urgent?"#c02020":soon?"#e08030":"#e8cf9a";
+  const fg = urgent?"#c02020":soon?"#b05a10":"#9c5a1c";
+  return (
+    <div style={{padding:compact?"9px 12px":"11px 14px",background:bg,borderBottom:`2px solid ${bd}`,textAlign:"center"}}>
+      <div style={{fontSize:"11px",color:fg,fontWeight:"800",letterSpacing:"0.05em"}}>⏰ 線上點餐倒數</div>
+      <div className={urgent?"blinkTag":""} style={{fontSize:compact?"20px":"24px",color:fg,fontWeight:"900",lineHeight:"1.25",margin:"2px 0"}}>
+        {d>0&&<>{d} 天 </>}{h} 小時 {mi} 分
+      </div>
+      <div style={{fontSize:"12px",color:fg,fontWeight:"800"}}>截止：{dlTxt}</div>
+      <div style={{fontSize:"11px",color:urgent?"#a03030":"#8a5a2a",marginTop:"5px",lineHeight:"1.7",fontWeight:"700",
+        background:urgent?"#fff":"transparent",borderRadius:urgent?"7px":0,padding:urgent?"5px 8px":0}}>
+        ⚠ 逾時無法線上點餐 → 當天需<u>現場點餐、現場排單製作</u>,<u>等候約 40 分鐘以上</u>
+      </div>
+    </div>
+  );
+}
+
+function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGroup }) {
+  const isMember = group.memberType !== "none";
+  // ── 一進來就強制提醒點餐截止(客人常常拖到逾期,現場點餐要等40分鐘)──
+  const [gateOpen, setGateOpen] = useState(()=>{
+    if(!group.date || group.locked) return false;
+    return true;                       // 每次進入點餐都提醒一次
+  });
+  // ── 訂金(訂位人自助) ──
+  const depNeeded = needsDeposit(group.headcount, group.isVip, group.takeout);
+  const depTotal = (()=>{const hc=(group.headcount||"").toLowerCase();const p=+((hc.match(/(\d+)p/)||[])[1]||0),c=+((hc.match(/(\d+)c/)||[])[1]||0),s=+((hc.match(/(\d+)s/)||[])[1]||0);return (p+c+s)||parseInt(hc)||0;})();
+  const depAmount = group.isVip ? Math.max(depTotal,10)*100 : depTotal*100;
+  const depStatus = group.depositStatus || (group.deposit ? "已核對" : (group.depositLast5 ? "待核對" : "未付"));
+  // 訂金截止:跟大訂表同一套 → 訂位日+3天 / 用餐前1天12:00 取最早;前1天才訂位=2小時內
+  const depInfo = (()=>{
+    const dd = depDeadlineOf(group);
+    if(!dd) return {deadline:"",lastMinute:false,daysLeft:null,which:""};
+    const now=new Date();
+    const daysLeft=Math.ceil((dd.dl-now)/86400000);
+    return {deadline:dd.label, lastMinute:dd.lastMinute, daysLeft, which:dd.which};
+  })();
+  const depDeadline = depInfo.deadline;
+  const depDaysLeft = depInfo.daysLeft;
+  const [isBooker,setIsBooker]=useState(false);
+  const [last5,setLast5]=useState("");
+  const [copied,setCopied]=useState(false);
+  const [dlGate,setDlGate]=useState(true);   // 一進點餐頁先攔截,強制看到截止時間
+  const [timeChk,setTimeChk]=useState(false);
+  const [guestName, setGuestName] = useState(existingOrder?.guestName || "");
+  const [lines, setLines] = useState(existingOrder?.lines || []);
+  const [activeCat, setActiveCat] = useState("brunch");
+  const [menuOffMap, setMenuOffMap] = useState({}); // 品項上下架:該日期關閉的品項
+  useEffect(()=>{
+    FS.loadDoc("menuOff").then(v=>{ if(v){ setMenuOffMap(v); if(typeof window!=="undefined") window.__menuOffMap=v; } });
+    const u=FS.subscribeDoc("menuOff", v=>{ if(v){ setMenuOffMap(v); if(typeof window!=="undefined") window.__menuOffMap=v; } });
+    return ()=>u&&u();
+  },[]);
+  const offSet = new Set(menuOffMap[normDate(group.date)]||[]);
+  const [seasonMap, setSeasonMap] = useState({}); // 季節品項檔期 {itemId:{from,to}}
+  useEffect(()=>{
+    FS.loadDoc("menuSeason").then(v=>{ if(v) setSeasonMap(v); });
+    const u=FS.subscribeDoc("menuSeason", v=>{ if(v) setSeasonMap(v); });
+    return ()=>u&&u();
+  },[]);
+  // 季節品項:用餐日在檔期內才看得到;沒設定檔期=下架
+  const seasonOK = (item) => {
+    if(!item.season) return true;
+    const w=seasonMap[item.id];
+    if(!w||!w.from||!w.to) return false;
+    const yr=new Date().getFullYear();
+    const p=(x)=>{ const m=normDate(x).split("/"); const mo=+m[0],da=+m[1]; return (mo&&da)?new Date(yr,mo-1,da):null; };
+    const d=p(group.date), a=p(w.from), b=p(w.to);
+    if(!d||!a||!b) return false;
+    return d>=a && d<=b;
+  };
+  const itemVisible = (item) => !(group.disabledItems||[]).includes(item.id) && !offSet.has(item.id) && seasonOK(item);
+  const [drinkModal, setDrinkModal] = useState(null);
+  const [setMealToggleLine, setSetMealToggleLine] = useState(null);
+  const [setMealPicking, setSetMealPicking] = useState(null);
+  const [mainChoicePending, setMainChoicePending] = useState(null);
+  const [alaNotice, setAlaNotice] = useState(false); // 單點主餐提醒(每次點餐流程提醒一次)
+  const [showAddList, setShowAddList] = useState(false);
+  const [itemChoicePending, setItemChoicePending] = useState(null);
+  const [step, setStep] = useState(existingOrder ? "menu" : "info");
+
+  const updateLine = (id, updates) => setLines(p => p.map(l => l.id === id ? {...l, ...updates} : l));
+  const removeLine = (id) => setLines(p => p.filter(l => l.id !== id));
+  const [addToast, setAddToast] = useState(null);
+  const addItem = (item) => {
+    const newLine = { id: makeLineId(), itemId: item.id, dressing: null, ice: null, sugar: null, mascot: null, setMeal: null };
+    if (item.fixedIce) newLine.ice = null;
+    setLines(p => [...p, newLine]);
+    setAddToast(item.name);
+    setTimeout(() => setAddToast(null), 1500);
+  };
+  const addItemWithOptions = (item, opts) => {
+    const newLine = { id: makeLineId(), itemId: item.id, 
+      dressing: opts.dressing || null, 
+      ice: opts.ice || (item.fixedIce ? null : null), 
+      sugar: opts.sugar || null, 
+      mascot: opts.mascot || null, 
+      toggles: opts.toggles || [],
+      setMeal: null };
+    setLines(p => [...p, newLine]);
+    setAddToast(item.name);
+    setTimeout(() => setAddToast(null), 1500);
+    setItemChoicePending(null);
+  };
+
+  const allComplete = lines.length > 0 && lines.every(lineComplete) &&
+    lines.filter(l => isMainDish(findItem(l.itemId))).every(l => !l.setMeal || l.setMeal.drink || group.setDrinkOnsite);
+
+  const total = orderTotal(lines, isMember);
+  const myNum = existingOrder?.num || nextNum || (group.orders?.length ?? 0) + 1;
+  const hasMain = lines.some(l => isMainDish(findItem(l.itemId)));
+  const setTime  = hasMain ? addMinutes(group.time, 30) : null;
+  const hasSet   = lines.some(l => l.setMeal);
+  const mealTime = hasSet  ? addMinutes(group.time, 20) : null;
+
+  if (step === "info") return (
+    <div style={LS.page}>
+      <style>{GS}</style>
+      {dlGate&&group&&group.date&&<DeadlineGate dateStr={group.date} group={group} onClose={()=>setDlGate(false)} onReportTime={()=>setTimeChk(true)}/>}
+      {timeChk&&group&&<TimeCheckModal group={group} onClose={()=>setTimeChk(false)}
+        onSubmit={(t)=>{
+          const now=new Date();
+          onUpdateGroup&&onUpdateGroup({timeIssue:{said:t,at:`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`,by:guestName||""}});
+          setTimeChk(false);
+          window.alert("已回報給店家,我們會盡快與您確認。\n請先繼續點餐,時間以店家確認為準。");
+        }}/>}
+      {group&&group.date&&<DeadlineBar dateStr={group.date}/>}
+      <div style={{padding:"28px 20px 20px",background:"linear-gradient(180deg,#f3e9da,#fbf6ee)",borderBottom:"1px solid #e6d6bd",textAlign:"center"}}>
+        <div style={{fontSize:"13px",color:"#9a6a40",letterSpacing:"0.2em",marginBottom:"8px"}}>✦ 今鶴 JINHER ✦</div>
+        <div style={{fontSize:"20px",fontFamily:"'Noto Serif TC',serif",fontWeight:"700",color:"#9c5a1c"}}>{group.name} 的訂位</div>
+        <div style={{fontSize:"14px",color:"#8a6a48",marginTop:"4px"}}>{group.date} {group.time} · {group.headcount}</div>
+        <div style={{marginTop:"10px",padding:"8px 16px",borderRadius:"10px",display:"inline-block",
+          background:group.memberType==="new"?"#e2f4ea":group.memberType==="existing"?"#f6e8d2":"#fdf8ef",
+          color:group.memberType==="new"?"#3f8f63":group.memberType==="existing"?"#a86a20":"#8a6e50",
+          fontSize:"14px",fontWeight:"700"}}>
+          {group.memberType==="existing"?"✦ 會員訂位":group.memberType==="new"?"★ 現場入會（整組$100，點前菜可折抵）":"○ 非會員"}
+        </div>
+      </div>
+      <div style={{padding:"16px",overflowY:"auto",flex:1}}>
+        <div style={LS.card}>
+          <label style={LS.label}>您的姓名</label>
+          <input value={guestName} onChange={e=>setGuestName(e.target.value)} placeholder="請輸入姓名" style={LS.input}/>
+        </div>
+        {depNeeded&&(
+          <div style={{...LS.card,marginTop:"14px"}}>
+            <button onClick={()=>setIsBooker(v=>!v)} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",cursor:"pointer",padding:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:"18px",fontWeight:"800",color:"#9c5a1c"}}>📌 我是本次訂位人</span>
+              <span style={{fontSize:"14px",fontWeight:"800",color:"#fff",background:"#d0742a",borderRadius:"8px",padding:"5px 10px",whiteSpace:"nowrap"}}>{isBooker?"收合 ▲":"需匯款訂金 ▼"}</span>
+            </button>
+            <div style={{maxHeight:isBooker?"680px":"0",overflow:"hidden",transition:"max-height 0.35s ease"}}>
+              <div style={{paddingTop:"12px"}}>
+                {depStatus==="已核對"?(
+                  <div style={{background:"#e2f4ea",borderRadius:"10px",padding:"16px",textAlign:"center",color:"#3f8f63",fontWeight:"700",fontSize:"15px"}}>✅ 訂金已確認，謝謝！</div>
+                ):depStatus==="待核對"?(
+                  <div style={{background:"#fcefd6",borderRadius:"10px",padding:"16px",textAlign:"center",color:"#a86a20",fontWeight:"700",fontSize:"14px",lineHeight:"1.6"}}>⏳ 已收到您的末5碼（{group.depositLast5}）<br/>我們核對後會更新狀態</div>
+                ):(
+                  <div>
+                    {(depDaysLeft!=null&&depDaysLeft<0)&&(
+                      <div style={{background:"#fbe0e0",border:"1.5px solid #d06060",borderRadius:"10px",padding:"11px 12px",marginBottom:"10px"}}>
+                        <div style={{fontSize:"15px",color:"#c02020",fontWeight:"900",lineHeight:"1.6"}}>⚠ 已超過匯款期限</div>
+                        <div style={{fontSize:"12px",color:"#a03030",marginTop:"3px",lineHeight:"1.7",fontWeight:"700"}}>依規定<u>逾時未收到訂金,座位不予保留,訂位將自動取消</u>。<br/>若您已匯款或仍要用餐,請<u>立即聯繫店家</u>確認。</div>
+                      </div>
+                    )}
+                    <div style={{background:"#fff4e0",border:"1px solid #e8b060",borderRadius:"10px",padding:"12px",marginBottom:"10px"}}>
+                      <div style={{fontSize:"16px",color:"#b06010",fontWeight:"700"}}>應付訂金 ${depAmount}</div>
+                      <div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>{group.isVip?"包廂 · ":""}{group.headcount} · 每人$100{group.isVip&&depTotal<10?"（包廂最低$1000）":""}</div>
+                      {depInfo.lastMinute
+                        ? <div style={{marginTop:"9px",background:"#c02020",borderRadius:"9px",padding:"10px 11px"}}>
+                            <div style={{fontSize:"14px",color:"#fff",fontWeight:"900",lineHeight:"1.6"}}>⏰ 請於「訂位後 2 小時內」完成匯款</div>
+                            <div style={{fontSize:"12px",color:"#ffdada",fontWeight:"700",marginTop:"3px",lineHeight:"1.7"}}>您是用餐前一天才訂位。<u>逾時未收到訂金,恕不保留座位,訂位將自動取消。</u></div>
+                          </div>
+                        : depDeadline&&(
+                          <div style={{marginTop:"9px",background:"#fff0e0",border:"2px solid #d05a36",borderRadius:"9px",padding:"10px 11px"}}>
+                            <div style={{fontSize:"14px",color:"#c03a10",fontWeight:"900",lineHeight:"1.6"}}>
+                              ⏰ 匯款期限:{depDeadline} 前
+                              {depDaysLeft!=null&&depDaysLeft>=0&&<span style={{fontSize:"12px",fontWeight:"700"}}>（還剩 {depDaysLeft} 天）</span>}
+                            </div>
+                            <div style={{fontSize:"12px",color:"#a03a10",fontWeight:"800",marginTop:"4px",lineHeight:"1.7"}}>
+                              <u>逾時未收到訂金,恕不保留座位,訂位將自動取消。</u>
+                            </div>
+                            <div style={{fontSize:"11px",color:"#8a5a3a",marginTop:"4px",lineHeight:"1.6"}}>
+                              {depInfo.which==="訂位後3天內"?"依規定:訂位後 3 天內須完成匯款。":"依規定:用餐日前需完成匯款;六日與國定假日銀行無法對帳,故提前至前一個上班日。"}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                    <div style={{background:"#fdf8ef",border:"1px solid #e6d6bd",borderRadius:"10px",padding:"12px",marginBottom:"10px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}>
+                        <div style={{fontSize:"12px",color:"#8a6e50"}}>匯款帳號</div>
+                        <button onClick={()=>{ try{navigator.clipboard.writeText(BANK_INFO.acct.replace(/\D/g,""));}catch(e){} setCopied(true); setTimeout(()=>setCopied(false),1500); }}
+                          style={{fontSize:"12px",fontWeight:"800",border:"none",borderRadius:"7px",padding:"5px 12px",cursor:"pointer",background:copied?"#3a8a5a":"#b07840",color:"#fff"}}>{copied?"✓ 已複製":"📋 複製帳號"}</button>
+                      </div>
+                      <div style={{fontSize:"14px",color:"#3a2a18",fontWeight:"700",lineHeight:"1.7"}}>{BANK_INFO.bank}<br/>戶名：{BANK_INFO.name}<br/>帳號：{BANK_INFO.acct}</div>
+                    </div>
+                    <div style={{fontSize:"13px",color:"#6a4f38",fontWeight:"700",marginBottom:"6px"}}>付款後請輸入轉帳「帳號末5碼」</div>
+                    <div style={{display:"flex",gap:"8px"}}>
+                      <input value={last5} onChange={e=>setLast5(e.target.value.replace(/\D/g,"").slice(0,5))} placeholder="末5碼" inputMode="numeric"
+                        style={{flex:1,background:"#fffdf8",border:"1px solid #d8c2a2",borderRadius:"10px",padding:"12px",color:"#3a2a18",fontSize:"16px"}}/>
+                      <button disabled={last5.length<5} onClick={()=>{onUpdateGroup&&onUpdateGroup({depositLast5:last5,depositStatus:"待核對"});}}
+                        style={{padding:"12px 20px",borderRadius:"10px",border:"none",background:last5.length<5?"#e6d6bd":"#b07840",color:last5.length<5?"#b8a892":"#fff",fontSize:"15px",fontWeight:"700",cursor:last5.length<5?"default":"pointer"}}>送出</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{padding:"12px 16px 24px"}}>
+        <button disabled={!guestName.trim()} onClick={()=>setStep("menu")}
+          style={{...LS.primaryBtn,opacity:!guestName.trim()?0.35:1}}>開始點餐 →</button>
+        <button onClick={onBack} style={LS.ghostBtn}>← 返回首頁</button>
+      </div>
+    </div>
+  );
+
+  if (step === "done") return (
+    <div style={{...LS.page,justifyContent:"center",alignItems:"center",textAlign:"center",padding:"24px 20px",overflowY:"auto"}}>
+      <style>{GS}</style>
+      <div style={{fontSize:"36px",marginBottom:"8px"}}>✦</div>
+      <div style={{fontSize:"20px",fontFamily:"'Noto Serif TC',serif",color:"#9c5a1c",marginBottom:"4px"}}>感謝您的點餐！</div>
+      <div style={{fontSize:"14px",color:"#6a4f38",marginBottom:"2px"}}>{guestName}</div>
+      <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"12px"}}>{group.name} · {group.date} {group.time}</div>
+        {group.date&&!group.locked&&(
+          <div style={{margin:"8px -20px 12px",borderRadius:"0"}}><DeadlineBar dateStr={group.date} compact/></div>
+        )}
+      <div style={{background:"#fbf2e2",border:"2px solid #e0b060",borderRadius:"16px",padding:"12px 32px",marginBottom:"12px"}}>
+        <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"4px"}}>您的號碼</div>
+        <div style={{fontSize:"40px",fontWeight:"700",color:"#9c5a1c",fontFamily:"'Noto Serif TC',serif"}}>{myNum}號</div>
+        <div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>員工將依號碼送餐，請記住</div>
+      </div>
+      <div style={{background:"#fdf4e8",border:"1px solid #e0cdb0",borderRadius:"14px",padding:"12px 16px",marginBottom:"10px",width:"100%",maxWidth:"300px",textAlign:"left"}}>
+        <div style={{fontSize:"13px",color:"#9c5a1c",fontWeight:"700",marginBottom:"6px"}}>送餐方式</div>
+        <div style={{fontSize:"13px",color:"#6a4f38",lineHeight:"1.9"}}>現場會用「詢問號碼」的方式送餐，一個號碼對應一個人的餐點。</div>
+        <div style={{fontSize:"13px",color:"#8a6a48",marginTop:"6px",background:"#fbf2e2",borderRadius:"8px",padding:"6px 10px"}}>「例如：1號餐是哪位的呢？」</div>
+      </div>
+      {(mealTime||setTime)&&(
+        <div style={{background:"#fdf4e8",border:"1px solid #e0cdb0",borderRadius:"14px",padding:"12px 16px",marginBottom:"10px",width:"100%",maxWidth:"300px",textAlign:"left"}}>
+          <div style={{fontSize:"13px",color:"#9c5a1c",fontWeight:"700",marginBottom:"8px"}}>出餐時間</div>
+          {mealTime&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}><span style={{fontSize:"13px",color:"#7a5e42"}}>最晚出套餐時間</span><span style={{fontSize:"18px",fontWeight:"700",color:"#9c5a1c"}}>{mealTime}</span></div>}
+          {setTime&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:"13px",color:"#7a5e42"}}>
+              <span style={{color:"#e84040",fontWeight:"900"}}>第一份主餐</span>最晚出餐
+            </span>
+            <span style={{fontSize:"20px",fontWeight:"900",color:"#e84040"}}>{setTime}</span>
+          </div>}
+          <div style={{fontSize:"12px",color:"#d05a36",marginTop:"8px",lineHeight:"1.6"}}>請務必準時抵達現場，會依照現場狀況提早出餐，上述是最晚的出餐時間。</div>
+        </div>
+      )}
+      {(()=>{
+        const mf = calcMemberFee(lines, group.memberType);
+        const subtotal = total + mf.fee;   // 只加入會費,不主動扣折抵
+        const withService = Math.round(subtotal * 1.1);
+        return (<>
+          <div style={{fontSize:"15px",color:"#8a6a48",marginBottom:"2px"}}>小計 ${total}</div>
+          {mf.fee>0&&<div style={{fontSize:"13px",color:"#3f8f63",marginBottom:"1px",fontWeight:"700"}}>★ 入會費 +${mf.fee}</div>}
+          {mf.fee>0&&<div style={{fontSize:"11px",color:"#b06010",marginBottom:"3px",lineHeight:"1.4"}}>結帳時若有前菜或酒類，折$100</div>}
+          <div style={{fontSize:"22px",color:"#9c5a1c",fontWeight:"700",marginBottom:"2px"}}>${withService}</div>
+          <div style={{fontSize:"12px",color:"#7a5e42",marginBottom:"16px"}}>含10%服務費 · 請等待服務人員確認</div>
+        </>);
+      })()}
+      {(!group.locked && !existingOrder?.orderLocked) ? (
+        <div style={{display:"flex",gap:"8px",width:"100%",maxWidth:"280px",marginBottom:"10px"}}>
+          <button onClick={()=>setStep("menu")} style={{...LS.primaryBtn,flex:1,background:"#5a6a8a",fontSize:"14px"}}>✏ 修改</button>
+          <button onClick={()=>setStep("add")} style={{...LS.primaryBtn,flex:1,background:"#4a7a5a",fontSize:"14px"}}>+ 加點</button>
+        </div>
+      ) : (
+        <div style={{fontSize:"13px",color:"#d05a36",marginBottom:"10px",padding:"8px 14px",background:"#fcebe4",borderRadius:"8px",maxWidth:"280px"}}>🔒 訂單已鎖定，如需修改請洽服務人員</div>
+      )}
+      <button onClick={()=>onBack("summary")} style={{...LS.primaryBtn,maxWidth:"280px",margin:"0 auto",marginBottom:"8px",background:"#3a5a7a"}}>📋 查看全組訂單</button>
+      <button onClick={onBack} style={{...LS.ghostBtn,maxWidth:"280px",margin:"0 auto"}}>返回首頁</button>
+    </div>
+  );
+
+  if (step === "add") {
+    const addLines = lines.filter(l => !existingOrder?.lines?.find(el => el.id === l.id));
+    const allAddComplete = addLines.length > 0 && addLines.every(lineComplete) &&
+      addLines.filter(l => isMainDish(findItem(l.itemId))).every(l => !l.setMeal || l.setMeal.drink || group.setDrinkOnsite);
+
+    return (
+      <div style={LS.page}>
+        <style>{GS}</style>
+        <div style={{...LS.header,paddingBottom:"8px"}}>
+          <button onClick={()=>setStep("done")} style={LS.backBtn}>← 返回</button>
+          <div style={LS.logo}>✦ 加點</div>
+          <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
+        </div>
+        <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
+          {[...FOOD_CATS,...CUST_DRINK_CATS].map(k=>(
+            <button key={k} onClick={()=>setActiveCat(k)}
+              style={{flexShrink:0,padding:"6px 12px",borderRadius:"20px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+                background:activeCat===k?"#b07840":"#e6d6bd",color:activeCat===k?"#fff":"#8a6a48"}}>
+              {MENU[k].emoji} {MENU[k].label.split(" ").pop().substring(0,5)}
+            </button>
+          ))}
+        </div>
+        {MENU[activeCat]?.note&&<div style={{fontSize:"12px",color:"#8a6e50",padding:"3px 14px 5px",background:"#f5ede0"}}>※ {MENU[activeCat].note}</div>}
+        {itemChoicePending&&(
+          <ItemChoiceModal item={itemChoicePending} isMember={isMember}
+            onConfirm={(opts)=>addItemWithOptions(itemChoicePending,opts)}
+            onClose={()=>setItemChoicePending(null)}/>
+        )}
+        {addToast&&(
+          <div style={{position:"fixed",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
+            background:"rgba(26,60,26,0.95)",border:"1px solid #3f8f63",borderRadius:"14px",
+            padding:"14px 24px",zIndex:500,textAlign:"center",pointerEvents:"none",
+            boxShadow:"0 4px 20px rgba(0,0,0,0.5)"}}>
+            <div style={{fontSize:"13px",color:"#3f8f63",marginBottom:"4px"}}>✓ 已加點</div>
+            <div style={{fontSize:"15px",color:"#3a2a18",fontWeight:"700",maxWidth:"200px"}}>{addToast}</div>
+          </div>
+        )}
+        <div style={{overflowY:"auto",flex:1,padding:"0 14px 120px"}}>
+          {addLines.length>0&&(
+            <div style={{marginBottom:"14px"}}>
+              <div onClick={()=>setShowAddList(p=>!p)}
+                style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",cursor:"pointer",
+                  background:showAddList?"#e2f2e4":"#dff0e1",borderRadius:"10px",padding:"10px 14px",
+                  border:"1.5px solid #7ab87a"}}>
+                <div style={{fontSize:"14px",color:"#3f8f63",fontWeight:"700"}}>
+                  🛒 已加 {addLines.length} 項 · ${orderTotal(addLines,isMember)}
+                </div>
+                <div style={{fontSize:"14px",color:"#fff",fontWeight:"700",background:"#7ab87a",borderRadius:"6px",padding:"2px 10px"}}>
+                  {showAddList?"▲ 收合":"▼ 查看"}
+                </div>
+              </div>
+              {showAddList&&addLines.map(line=>(
+                <LineCard key={line.id} line={line} isMember={isMember}
+                  onRemove={()=>removeLine(line.id)}
+                  onUpdate={u=>updateLine(line.id,u)}
+                  onAddSet={()=>updateLine(line.id,{setMeal:{id:"A",drink:null}})}
+                  onChangeSet={()=>{setSetMealPicking(line.id);setDrinkModal(line.id);}} drinkOnsite={group.setDrinkOnsite}
+                />
+              ))}
+            </div>
+          )}
+          <div style={{fontSize:"13px",color:"#8a6a48",fontWeight:"700",marginBottom:"8px"}}>繼續選擇</div>
+          {MENU[activeCat].items.filter(itemVisible).map(item=>(
+            <div key={item.id} onClick={()=>{
+              if(isMainDish(item)){
+                setMainChoicePending(item);
+              } else {
+                setItemChoicePending(item);
+              }
+            }}
+              style={{padding:"12px 14px",marginBottom:"7px",borderRadius:"12px",cursor:"pointer",background:"#fffdf8",border:"1px solid #e6d6bd",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"15px",color:"#4a3826"}}>{item.name}</div>
+                {item.sub&&!item.sub.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>{item.sub}</div>}
+              </div>
+              <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"700",marginLeft:"8px"}}>+${getItemPrice(item,isMember)}</div>
+            </div>
+          ))}
+        </div>
+        {/* Main dish single/set choice popup */}
+        {alaNotice&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:260,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setAlaNotice(false)}>
+            <div style={{background:"#fff",borderRadius:"20px",padding:"22px",width:"100%",maxWidth:"300px",border:"2px solid #d8a24a",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:"30px",marginBottom:"8px"}}>⏳</div>
+              <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"800",marginBottom:"8px"}}>小提醒</div>
+              <div style={{fontSize:"14px",color:"#5a4530",lineHeight:"1.7",marginBottom:"14px"}}>現場加點會依照<b style={{color:"#c05a10"}}>入單順序</b>排單製作，建議想吃的餐點先一次點齊喔！</div>
+              <button onClick={()=>setAlaNotice(false)} style={{width:"100%",padding:"12px",borderRadius:"12px",border:"none",background:"#b07840",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>知道了</button>
+            </div>
+          </div>
+        )}
+        {mainChoicePending&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setMainChoicePending(null)}>
+            <div style={{background:"#ffffff",borderRadius:"20px",padding:"20px",width:"100%",maxWidth:"320px",border:"1px solid #d8c2a2"}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:"16px",color:"#9c5a1c",fontWeight:"700",marginBottom:"4px"}}>{mainChoicePending.name}</div>
+              <div style={{fontSize:"13px",color:"#8a6e50",marginBottom:"16px"}}>${getItemPrice(mainChoicePending,isMember)} · 請選擇點餐方式</div>
+              <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+                <button onClick={()=>{const mi=mainChoicePending;setMainChoicePending(null);setAlaNotice(true);if(mi.toggles&&mi.toggles.length){setItemChoicePending(mi);}else{addItem(mi);}}}
+                  style={{padding:"14px",borderRadius:"12px",background:"#fbf0e0",border:"1px solid #d0b48c",color:"#9c5a1c",fontSize:"15px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
+                  <div>單點</div>
+                  <div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>只點主餐 ${getItemPrice(mainChoicePending,isMember)}</div>
+                </button>
+                {SET_MEALS.map(sm=>(
+                  <button key={sm.id} onClick={()=>{
+                    const mi2=mainChoicePending;
+                    const newLine={id:makeLineId(),itemId:mi2.id,dressing:null,ice:null,sugar:null,mascot:null,toggles:[],setMeal:{id:sm.id,drink:null}};
+                    setLines(p=>[...p,newLine]);
+                    setAddToast(mi2.name);
+                    setTimeout(()=>setAddToast(null),1500);
+                    setMainChoicePending(null);
+                    if(mi2.toggles&&mi2.toggles.length){
+                      setSetMealToggleLine({lineId:newLine.id,item:mi2});
+                    } else {
+                      setTimeout(()=>{setSetMealPicking(newLine.id);setDrinkModal(newLine.id);},100);
+                    }
+                  }}
+                    style={{padding:"14px",borderRadius:"12px",background:"#eaf6ec",border:"1px solid #bcd8bf",color:"#3f8f63",fontSize:"15px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
+                    <div>{sm.label}</div>
+                    <div style={{fontSize:"12px",color:"#3f8f5a",marginTop:"2px"}}>{sm.desc} · +${sm.price}</div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={()=>setMainChoicePending(null)} style={{...LS.ghostBtn,marginTop:"10px",padding:"10px"}}>取消</button>
+            </div>
+          </div>
+        )}
+        {setMealToggleLine&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:260,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div style={{background:"#fdfaf4",borderRadius:"20px",padding:"22px",width:"100%",maxWidth:"320px",border:"1px solid #d0c0a8"}}>
+            <div style={{fontSize:"17px",fontWeight:"700",color:"#6a4a2e",marginBottom:"4px",textAlign:"center"}}>{setMealToggleLine.item.name}</div>
+            <div style={{fontSize:"13px",color:"#7a5e42",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>特製需求（可複選）</div>
+            <div style={{fontSize:"12px",color:"#b07020",marginBottom:"12px",lineHeight:"1.5",textAlign:"center"}}>本道料理為小辣，含白酒風味。<br/>無特殊需求可直接按「下一步」。</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
+              {setMealToggleLine.item.toggles.map(t=>{
+                const cur=lines.find(l=>l.id===setMealToggleLine.lineId);
+                const on=cur&&cur.toggles&&cur.toggles.includes(t);
+                return (
+                  <button key={t} onClick={()=>{
+                    updateLine(setMealToggleLine.lineId,{toggles:on?(cur.toggles||[]).filter(x=>x!==t):[...(cur.toggles||[]),t]});
+                  }} style={{flex:1,padding:"13px",borderRadius:"10px",cursor:"pointer",fontSize:"17px",fontWeight:"700",
+                    background:on?"#e8920a":"#fff4e0",color:on?"#fff":"#b06010",border:on?"2px solid #e8920a":"2px solid #e8b060"}}>
+                    {on?"✓ ":""}{t}
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={()=>{
+              const lid=setMealToggleLine.lineId;
+              setSetMealToggleLine(null);
+              setTimeout(()=>{setSetMealPicking(lid);setDrinkModal(lid);},100);
+            }} style={{width:"100%",padding:"13px",borderRadius:"12px",border:"none",background:"#b07840",color:"#fff",fontSize:"17px",fontWeight:"700",cursor:"pointer"}}>下一步（選飲料）</button>
+          </div>
+        </div>
+      )}
+      {setMealPicking&&!drinkModal&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={()=>setSetMealPicking(null)}>
+            <div style={{width:"100%",background:"#ffffff",borderRadius:"24px 24px 0 0",padding:"20px 16px 30px",border:"1px solid #d8c2a2"}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:"16px",color:"#9c5a1c",fontWeight:"700",marginBottom:"12px"}}>選擇套餐類型</div>
+              {SET_MEALS.map(sm=>(
+                <div key={sm.id} onClick={()=>{updateLine(setMealPicking,{setMeal:{id:sm.id,drink:null}});setDrinkModal(setMealPicking);}}
+                  style={{padding:"12px",marginBottom:"8px",borderRadius:"12px",cursor:"pointer",background:"#fbf0e0",border:"1px solid #e0cdb0"}}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <div>
+                      <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"700"}}>{sm.label}</div>
+                      <div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>{sm.desc}</div>
+                    </div>
+                    <div style={{color:"#9c5a1c",fontWeight:"700"}}>+${sm.price}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {drinkModal&&<DrinkModal discount={80} itemVisible={itemVisible}
+          onSelect={drink=>{updateLine(drinkModal,{setMeal:{...lines.find(l=>l.id===drinkModal)?.setMeal,drink}});setDrinkModal(null);setSetMealPicking(null);}}
+          onClose={()=>{setDrinkModal(null);setSetMealPicking(null);}}/>}
+        <div style={{position:"sticky",bottom:0,background:"linear-gradient(to top,#fbf6ee 80%,transparent)",padding:"12px 14px 18px"}}>
+          {addLines.length===0?(
+            <button onClick={()=>setStep("done")} style={{...LS.primaryBtn,background:"#e6d6bd",color:"#8a6e50"}}>返回</button>
+          ):!allAddComplete?(
+            <button disabled style={{...LS.primaryBtn,opacity:0.4}}>請先完成所有必選項目</button>
+          ):(
+            <button onClick={()=>{onSubmit({guestName,lines,num:myNum});setStep("done");}} style={{...LS.primaryBtn,background:"#4a7a5a"}}>確認加點 ✓</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={LS.page}>
+      <style>{GS}</style>
+      <div style={{...LS.header,paddingBottom:"8px"}}>
+        <button onClick={()=>lines.length>0?setStep("done"):onBack()} style={LS.backBtn}>← 返回</button>
+        <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+          <div style={{fontSize:"12px",color:"#8a6a48"}}>{guestName}</div>
+          <div style={{fontSize:"9px",color:"#c8b49a"}}>{APP_VER}</div>
+        </div>
+      </div>
+      <div style={{display:"flex",overflowX:"auto",padding:"0 12px 10px",gap:"6px"}}>
+        {[...FOOD_CATS,...CUST_DRINK_CATS].map(k=>(
+          <button key={k} onClick={()=>setActiveCat(k)}
+            style={{flexShrink:0,padding:"6px 12px",borderRadius:"20px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+              background:activeCat===k?"#b07840":"#e6d6bd",color:activeCat===k?"#fff":"#8a6a48"}}>
+            {MENU[k].emoji} {MENU[k].label.split(" ").pop().substring(0,5)}
+          </button>
+        ))}
+      </div>
+      {MENU[activeCat]?.note&&<div style={{fontSize:"12px",color:"#8a6e50",padding:"3px 14px 5px",background:"#f5ede0"}}>※ {MENU[activeCat].note}</div>}
+      <div style={{overflowY:"auto",flex:1,padding:"0 14px 120px"}}>
+        {lines.length>0&&(
+          <div style={{marginBottom:"14px"}}>
+            <div onClick={()=>setShowAddList(p=>!p)}
+              style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",cursor:"pointer",
+                background:showAddList?"#e2ecf8":"#e8f0fb",borderRadius:"10px",padding:"10px 14px",
+                border:"1.5px solid #4a6a8a"}}>
+              <div style={{fontSize:"14px",color:"#3a6aa0",fontWeight:"700"}}>
+                🧾 已選 {lines.length} 項 · ${total}
+              </div>
+              <div style={{fontSize:"14px",color:"#fff",fontWeight:"700",background:"#4a6a8a",borderRadius:"6px",padding:"2px 10px"}}>
+                {showAddList?"▲ 收合":"▼ 查看"}
+              </div>
+            </div>
+            {showAddList&&lines.map(line=>(
+              <LineCard key={line.id} line={line} isMember={isMember}
+                onRemove={()=>removeLine(line.id)}
+                onUpdate={u=>updateLine(line.id,u)}
+                onAddSet={()=>updateLine(line.id,{setMeal:{id:"A",drink:null}})}
+                onChangeSet={()=>{setSetMealPicking(line.id);setDrinkModal(line.id);}} drinkOnsite={group.setDrinkOnsite}
+              />
+            ))}
+          </div>
+        )}
+        {lines.length>0&&(
+          <div style={{fontSize:"14px",color:"#9c5a1c",fontWeight:"700",marginBottom:"8px",padding:"8px 14px",
+            background:"#fdf8ef",borderRadius:"10px",border:"1px dashed #d8c2a2",textAlign:"center"}}>
+            👇 繼續往下選餐點可加點
+          </div>
+        )}
+        {lines.length===0&&(
+          <div style={{fontSize:"13px",color:"#8a6a48",fontWeight:"700",marginBottom:"8px",padding:"0 2px"}}>選擇餐點</div>
+        )}
+        {MENU[activeCat].items.filter(itemVisible).map(item=>(
+          <div key={item.id} onClick={()=>{
+              if(isMainDish(item)){
+                setMainChoicePending(item);
+              } else {
+                setItemChoicePending(item);
+              }
+            }}
+            style={{padding:"12px 14px",marginBottom:"7px",borderRadius:"12px",cursor:"pointer",background:"#fffdf8",border:"1px solid #e6d6bd",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:"15px",color:"#4a3826"}}>{item.name}</div>
+              {item.sub&&!item.sub.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>{item.sub}</div>}
+              {item.sub?.startsWith("⚠")&&<div style={{fontSize:"12px",color:"#a8741e",marginTop:"2px"}}>{item.sub}</div>}
+            </div>
+            <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"700",marginLeft:"8px"}}>+${getItemPrice(item,isMember)}</div>
+          </div>
+        ))}
+      </div>
+      {setMealPicking&&!drinkModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={()=>setSetMealPicking(null)}>
+          <div style={{width:"100%",background:"#ffffff",borderRadius:"24px 24px 0 0",padding:"20px 16px 30px",border:"1px solid #d8c2a2"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",color:"#9c5a1c",fontWeight:"700",marginBottom:"12px"}}>選擇套餐類型</div>
+            {SET_MEALS.map(sm=>(
+              <div key={sm.id} onClick={()=>{updateLine(setMealPicking,{setMeal:{id:sm.id,drink:null}});setDrinkModal(setMealPicking);}}
+                style={{padding:"12px",marginBottom:"8px",borderRadius:"12px",cursor:"pointer",background:"#fbf0e0",border:"1px solid #e0cdb0"}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"700"}}>{sm.label}</div>
+                    <div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>{sm.desc}</div>
+                  </div>
+                  <div style={{color:"#9c5a1c",fontWeight:"700"}}>+${sm.price}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {drinkModal&&<DrinkModal discount={80} itemVisible={itemVisible}
+        onSelect={drink=>{
+          updateLine(drinkModal,{setMeal:{...lines.find(l=>l.id===drinkModal)?.setMeal,drink}});
+          setDrinkModal(null);setSetMealPicking(null);
+        }}
+        onClose={()=>{setDrinkModal(null);setSetMealPicking(null);}}/>}
+      {alaNotice&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:260,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setAlaNotice(false)}>
+          <div style={{background:"#fff",borderRadius:"20px",padding:"22px",width:"100%",maxWidth:"300px",border:"2px solid #d8a24a",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"30px",marginBottom:"8px"}}>⏳</div>
+            <div style={{fontSize:"15px",color:"#9c5a1c",fontWeight:"800",marginBottom:"8px"}}>小提醒</div>
+            <div style={{fontSize:"14px",color:"#5a4530",lineHeight:"1.7",marginBottom:"14px"}}>現場加點會依照<b style={{color:"#c05a10"}}>入單順序</b>排單製作，建議想吃的餐點先一次點齊喔！</div>
+            <button onClick={()=>setAlaNotice(false)} style={{width:"100%",padding:"12px",borderRadius:"12px",border:"none",background:"#b07840",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>知道了</button>
+          </div>
+        </div>
+      )}
+      {mainChoicePending&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setMainChoicePending(null)}>
+          <div style={{background:"#ffffff",borderRadius:"20px",padding:"20px",width:"100%",maxWidth:"320px",border:"1px solid #d8c2a2"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",color:"#9c5a1c",fontWeight:"700",marginBottom:"4px"}}>{mainChoicePending.name}</div>
+            <div style={{fontSize:"13px",color:"#8a6e50",marginBottom:"16px"}}>${getItemPrice(mainChoicePending,isMember)} · 請選擇點餐方式</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+              <button onClick={()=>{const mi=mainChoicePending;setMainChoicePending(null);setAlaNotice(true);if(mi.toggles&&mi.toggles.length){setItemChoicePending(mi);}else{addItem(mi);}}}
+                style={{padding:"14px",borderRadius:"12px",background:"#fbf0e0",border:"1px solid #d0b48c",color:"#9c5a1c",fontSize:"15px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
+                <div>單點</div>
+                <div style={{fontSize:"12px",color:"#8a6e50",marginTop:"2px"}}>只點主餐 ${getItemPrice(mainChoicePending,isMember)}</div>
+              </button>
+              {SET_MEALS.map(sm=>(
+                <button key={sm.id} onClick={()=>{
+                  const mi2=mainChoicePending;
+                  const newLine={id:makeLineId(),itemId:mi2.id,dressing:null,ice:null,sugar:null,mascot:null,toggles:[],setMeal:{id:sm.id,drink:null}};
+                  setLines(p=>[...p,newLine]);
+                  setAddToast(mi2.name);
+                  setTimeout(()=>setAddToast(null),1500);
+                  setMainChoicePending(null);
+                  if(mi2.toggles&&mi2.toggles.length){
+                    setSetMealToggleLine({lineId:newLine.id,item:mi2});
+                  } else {
+                    setTimeout(()=>{setSetMealPicking(newLine.id);setDrinkModal(newLine.id);},100);
+                  }
+                }}
+                  style={{padding:"14px",borderRadius:"12px",background:"#eaf6ec",border:"1px solid #bcd8bf",color:"#3f8f63",fontSize:"15px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
+                  <div>{sm.label}</div>
+                  <div style={{fontSize:"12px",color:"#3f8f5a",marginTop:"2px"}}>{sm.desc} · +${sm.price}</div>
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>setMainChoicePending(null)} style={{...LS.ghostBtn,marginTop:"10px",padding:"10px"}}>取消</button>
+          </div>
+        </div>
+      )}
+      {itemChoicePending&&(
+        <ItemChoiceModal item={itemChoicePending} isMember={isMember}
+          onConfirm={(opts)=>addItemWithOptions(itemChoicePending,opts)}
+          onClose={()=>setItemChoicePending(null)}/>
+      )}
+      {setMealToggleLine&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:260,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div style={{background:"#fdfaf4",borderRadius:"20px",padding:"22px",width:"100%",maxWidth:"320px",border:"1px solid #d0c0a8"}}>
+            <div style={{fontSize:"17px",fontWeight:"700",color:"#6a4a2e",marginBottom:"4px",textAlign:"center"}}>{setMealToggleLine.item.name}</div>
+            <div style={{fontSize:"13px",color:"#7a5e42",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>特製需求（可複選）</div>
+            <div style={{fontSize:"12px",color:"#b07020",marginBottom:"12px",lineHeight:"1.5",textAlign:"center"}}>本道料理為小辣，含白酒風味。<br/>無特殊需求可直接按「下一步」。</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
+              {setMealToggleLine.item.toggles.map(t=>{
+                const cur=lines.find(l=>l.id===setMealToggleLine.lineId);
+                const on=cur&&cur.toggles&&cur.toggles.includes(t);
+                return (
+                  <button key={t} onClick={()=>{
+                    updateLine(setMealToggleLine.lineId,{toggles:on?(cur.toggles||[]).filter(x=>x!==t):[...(cur.toggles||[]),t]});
+                  }} style={{flex:1,padding:"13px",borderRadius:"10px",cursor:"pointer",fontSize:"17px",fontWeight:"700",
+                    background:on?"#e8920a":"#fff4e0",color:on?"#fff":"#b06010",border:on?"2px solid #e8920a":"2px solid #e8b060"}}>
+                    {on?"✓ ":""}{t}
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={()=>{
+              const lid=setMealToggleLine.lineId;
+              setSetMealToggleLine(null);
+              setTimeout(()=>{setSetMealPicking(lid);setDrinkModal(lid);},100);
+            }} style={{width:"100%",padding:"13px",borderRadius:"12px",border:"none",background:"#b07840",color:"#fff",fontSize:"17px",fontWeight:"700",cursor:"pointer"}}>下一步（選飲料）</button>
+          </div>
+        </div>
+      )}
+      {addToast&&(
+        <div style={{position:"fixed",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
+          background:"rgba(26,60,26,0.95)",border:"1px solid #3f8f63",borderRadius:"14px",
+          padding:"14px 24px",zIndex:500,textAlign:"center",pointerEvents:"none",
+          boxShadow:"0 4px 20px rgba(0,0,0,0.5)"}}>
+          <div style={{fontSize:"13px",color:"#3f8f63",marginBottom:"4px"}}>✓ 已加點</div>
+          <div style={{fontSize:"15px",color:"#3a2a18",fontWeight:"700",maxWidth:"200px"}}>{addToast}</div>
+        </div>
+      )}
+      {lines.length>0&&(
+        <div style={{position:"sticky",bottom:0,background:"linear-gradient(to top,#fbf6ee 80%,transparent)",padding:"12px 14px 18px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:"2px"}}>
+            <span style={{fontSize:"14px",color:"#8a6a48"}}>{lines.length} 項 · 小計</span>
+            <span style={{fontSize:"15px",color:"#8a6a48"}}>${total}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:"8px"}}>
+            <span style={{fontSize:"14px",color:"#9c5a1c",fontWeight:"700"}}>含10%服務費</span>
+            <span style={{fontSize:"18px",color:"#9c5a1c",fontWeight:"700"}}>${Math.round(total*1.1)}</span>
+          </div>
+          {!allComplete ? (
+            <button disabled style={{...LS.primaryBtn,opacity:0.4}}>請先完成所有必選項目</button>
+          ) : (
+            <button onClick={()=>{onSubmit({guestName,lines,num:myNum});setStep("done");}} style={{...LS.primaryBtn,background:"#4a7a5a"}}>
+              {existingOrder?"確認修改 ✓":"送出點餐 ✦"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── STAFF PAGE ───────────────────────────────────────────────────────────────
+
+// ─── SIGNATURE MODAL ─────────────────────────────────────────────────────────
+function SignatureModal({ group, sigType, onSave, onClose }) {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [lastPos, setLastPos] = useState(null);
+  const [signed, setSigned] = useState(false);
+
+  const getPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    if (e.touches && e.touches.length > 0) {
+      return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
+    }
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+  };
+  const startDraw = (e) => {
+    if(e.preventDefault) e.preventDefault();
+    try{ e.currentTarget.setPointerCapture&&e.pointerId!=null&&e.currentTarget.setPointerCapture(e.pointerId); }catch(err){}
+    setIsDrawing(true); setLastPos(getPos(e, canvasRef.current)); setSigned(true);
+  };
+  const draw = (e) => {
+    if(e.preventDefault) e.preventDefault();
+    if (!isDrawing) return;
+    const canvas = canvasRef.current; const ctx = canvas.getContext("2d");
+    const pos = getPos(e, canvas);
+    ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.stroke();
+    setLastPos(pos);
+  };
+  const stopDraw = () => setIsDrawing(false);
+  const clearCanvas = () => { const canvas = canvasRef.current; canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height); setSigned(false); };
+  // React 的觸控事件是被動的,preventDefault 沒用 → 用原生監聽擋掉捲動/側滑返回
+  useEffect(()=>{
+    const c = canvasRef.current; if(!c) return;
+    const block = (e)=>{ e.preventDefault(); };
+    c.addEventListener("touchstart", block, {passive:false});
+    c.addEventListener("touchmove", block, {passive:false});
+    c.addEventListener("touchend", block, {passive:false});
+    return ()=>{ c.removeEventListener("touchstart",block); c.removeEventListener("touchmove",block); c.removeEventListener("touchend",block); };
+  },[]);
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"#fff",zIndex:400,display:"flex",flexDirection:"column",userSelect:"none",WebkitUserSelect:"none",touchAction:"none",overscrollBehavior:"none"}}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid #eee",background:"#f5f0e8"}}>
+        <div style={{fontSize:"18px",fontWeight:"700",color:"#3a2a1a",textAlign:"center",marginBottom:"10px"}}>
+          {sigType==="staff"?"員工簽名確認":"客人簽名確認"}
+        </div>
+        <div style={{fontSize:"13px",color:"#5a3a28",lineHeight:"1.9"}}>
+          <div><b>姓名：</b>{group.name}　<b>電話：</b>{group.phone}</div>
+          <div><b>訂位：</b>{group.date} {group.time}　<b>退還訂金：</b>${group.deposit||"—"}</div>
+        </div>
+      </div>
+      <div style={{flex:1,display:"flex",flexDirection:"column",padding:"16px",gap:"12px"}}>
+        <div style={{fontSize:"14px",color:"#555",textAlign:"center"}}>
+          {sigType==="staff"?"員工請在下方簽名：":"請客人在下方簽名確認收到退款："}
+        </div>
+        <canvas ref={canvasRef} width={800} height={500}
+          style={{border:"2px solid #ccc",borderRadius:"12px",background:"#fafafa",touchAction:"none",
+            width:"100%",flex:1,display:"block",cursor:"crosshair",userSelect:"none",WebkitUserSelect:"none",
+            WebkitTouchCallout:"none",overscrollBehavior:"none"}}
+          onPointerDown={startDraw} onPointerMove={draw} onPointerUp={stopDraw} onPointerCancel={stopDraw} onPointerLeave={stopDraw}
+          onContextMenu={e=>e.preventDefault()}/>
+      </div>
+      <div style={{display:"flex",gap:"10px",padding:"16px 20px",borderTop:"1px solid #eee",background:"#f9f9f9"}}>
+        <button onClick={clearCanvas} style={{flex:1,padding:"14px",borderRadius:"12px",background:"#f0f0f0",border:"none",fontSize:"15px",cursor:"pointer",fontWeight:"600"}}>清除</button>
+        <button onClick={onClose} style={{flex:1,padding:"14px",borderRadius:"12px",background:"#f0f0f0",border:"none",fontSize:"15px",cursor:"pointer",fontWeight:"600"}}>取消</button>
+        <button disabled={!signed} onClick={()=>onSave(canvasRef.current.toDataURL("image/png"),sigType)}
+          style={{flex:2,padding:"14px",borderRadius:"12px",border:"none",fontSize:"15px",fontWeight:"700",
+            background:signed?"#2a7a4a":"#ccc",color:"#fff",cursor:signed?"pointer":"default"}}>確認簽名 ✓</button>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── STATUS CELL ─────────────────────────────────────────────────────────────
+// 今天就要來的，封存到期提醒沒意義（當天不會再重新封存）
+// 這些情況都不該催點餐(以前散在三個地方各寫各的,漏掉封存)
+function noChase(g){
+  if(!g) return true;
+  if(g.onsiteOrder) return true;                                  // 現場點餐:不用線上點
+  if(g.cancelled||g.archived||g.locked) return true;              // 取消/封存/已鎖單
+  const st=(g.statusLog&&g.statusLog.status)||"";
+  if(st==="餐點封存"||g.archiveType==="menu") return true;         // 餐點已封存:單已經進 POS
+  if(st.startsWith("未KEY")||st==="已KEY需改單") return true;      // 已經在處理 KEY 單
+  return false;
+}
+function isMealToday(g){
+  const t=new Date();
+  return String((g&&g.date)||"")===`${t.getMonth()+1}/${t.getDate()}`;
+}
+function archiveExpiring(g){
+  if(!g||g.cancelled||isPastMeal(g)||isMealToday(g)) return false;
+  const a=archiveAgeDays(g);
+  return a!==null&&a>=6;
+}
+const STATUS_AUTOLOCK = ["未KEY-需優先KEY","未KEY-超過1週無法先KEY","餐點封存"];   // 選了這些狀態自動鎖單
+// 限時解鎖:鎖不解開，只開一個時間窗，到點自動鎖回去
+// v216:整條鎖單規則收在這裡。以前散在 5 個呼叫處各寫一次(坑#1),改一個會漏四個。
+// 呼叫一律 isLockedNow(g),不要再自己組 unlockOverride/locked/isPastDeadline。
+function isLockedNow(g){
+  if(!g) return false;
+  if(g.unlockOverride) return false;                                    // 永久豁免:不提前鎖單
+  // v216:從 archiveType 直接推導。舊的已封存訂單當年沒寫過 locked 欄位,這樣才鎖得住
+  if(!(g.locked||g.archiveType==="menu"||isPastDeadline(g.date))) return false;
+  const u=g.unlockUntil ? new Date(g.unlockUntil) : null;
+  if(u&&!isNaN(u)&&u>new Date()) return false;   // 還在解鎖時間窗內
+  return true;
+}
+// v217:鎖單原因。提前鎖(封存進POS/夥伴確認點完)跟過截止是兩回事,
+// 不要一律講「已過點餐時間」。客人看得到的 3 個地方共用這一個(坑#1)。
+function lockReason(g){
+  return isPastDeadline(g&&g.date) ? "已過點餐時間" : "已點完餐，提早鎖單";
+}
+// v218:「單已進 POS 之後又被改」的判斷。原本只寫在總覽頁那一列裡(坑#1),
+// 現在待辦區也要用 → 抽出來共用,兩邊永遠一致。
+function stampToMin(s){
+  const m=String(s||"").match(/(\d+)\/(\d+)(?:\s+(\d+):(\d+))?/);
+  return m?((+m[1])*100000+(+m[2])*1440+(+(m[3]||0))*60+(+(m[4]||0))):0;
+}
+function isPosLocked(g){                      // 單已經進 POS(拍照封存 或 已KEY)
+  const st=(g&&g.statusLog&&g.statusLog.status)||"";
+  return ["餐點封存","已KEY需改單"].includes(st)||!!(g&&g.archiveType==="menu");
+}
+function editedAfterLock(g,order){            // 這一筆訂單在進 POS 之後有沒有被改
+  if(!isPosLocked(g)) return false;
+  const eds=(order&&order.editLog)||[];
+  if(eds.length===0) return false;
+  return stampToMin(eds[eds.length-1])>=stampToMin((g.statusLog&&g.statusLog.date)||"");
+}
+function ordersEditedAfterLock(g){            // 這一組裡所有被改過的訂單
+  return ((g&&g.orders)||[]).filter(o=>editedAfterLock(g,o));
+}
+function unlockLeft(g){
+  if(!g||!g.unlockUntil) return "";
+  const u=new Date(g.unlockUntil); if(isNaN(u)||u<=new Date()) return "";
+  return `${String(u.getHours()).padStart(2,"0")}:${String(u.getMinutes()).padStart(2,"0")}`;
+}
+const STATUS_OPTIONS = ["已加LINE","已提醒點餐","未接","未KEY-需優先KEY","未KEY-超過1週無法先KEY","現場點餐","餐點封存"];
+
+const DEFAULT_STAFF = ["佩霓","TINA","07","佑庭","大銘"];
+
+function ComplaintPanel({ g, setGroups, groups, walkin, onAdd }) {
+  const list = g.complaints||[];
+  const ph = normPhone(g.phone);
+  const history = (ph&&groups)?groups.filter(x=>x.id!==g.id&&normPhone(x.phone)===ph&&(x.complaints||[]).length>0)
+    .flatMap(x=>(x.complaints||[]).map(c=>({...c,_from:`${x.date||""} ${x.name||""}`}))):[];
+  if(ph&&Array.isArray(walkin)) walkin.filter(c=>normPhone(c.phone)===ph).forEach(c=>history.push({...c,_from:"散客"}));
+  const del = (idx) => setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,complaints:(x.complaints||[]).filter((_,i2)=>i2!==idx)}));
+  const AddBtn = onAdd ? (
+    <button onClick={()=>onAdd(g)} style={{fontSize:"11px",fontWeight:"800",background:"#a04020",color:"#fff",border:"none",borderRadius:"7px",padding:"6px 12px",cursor:"pointer"}}>＋ 新增客訴</button>
+  ) : null;
+  if(list.length===0 && history.length===0) return AddBtn?<div style={{marginBottom:"8px"}}>{AddBtn}</div>:null;
+  const Row = ({it, from, onDel}) => (
+    <div style={{background:"#fff",borderRadius:"8px",padding:"8px 10px",marginBottom:"6px",border:"1px solid #eecfc0"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}>
+        <span style={{fontSize:"11px",fontWeight:"800",color:"#a04020"}}>📅 {it.date}{from?`　（${from}）`:""}</span>
+        {onDel&&<button onClick={onDel} style={{background:"none",border:"1px solid #d4a0a0",borderRadius:"6px",color:"#b05050",fontSize:"10px",cursor:"pointer",padding:"1px 8px"}}>刪</button>}
+      </div>
+      {(it.type||(it.kinds||[]).length>0)&&(
+        <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginBottom:"5px"}}>
+          {it.type&&<span style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"2px 7px"}}>{it.type==="環境"?"🏠":it.type==="餐點"?"🍽":"🙋"} {it.type}</span>}
+          {(it.kinds||[]).map(k=><span key={k} style={{fontSize:"10px",fontWeight:"700",background:"#fdeae0",border:"1px solid #e0b0a0",color:"#a04020",borderRadius:"5px",padding:"2px 6px"}}>{k}</span>)}
+        </div>
+      )}
+      {((it.attitudes||[]).length>0||it.attitude)&&(
+        <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginBottom:"5px"}}>
+          {(it.attitudes||[]).map(a=><span key={a} style={{fontSize:"10px",fontWeight:"700",background:a==="願意回訪"?"#dff0e6":"#f0e8f4",border:`1px solid ${a==="願意回訪"?"#7ab88a":"#c0a0d0"}`,color:a==="願意回訪"?"#1a6a3a":"#6a3a8a",borderRadius:"5px",padding:"2px 6px"}}>{a}</span>)}
+          {it.attitude&&<span style={{fontSize:"10px",color:"#6a3a8a"}}>「{it.attitude}」</span>}
+        </div>
+      )}
+      {(it.dishes||[]).length>0&&(
+        <div style={{marginBottom:"5px"}}>
+          {(it.dishes||[]).map((dd,j)=>{
+            const id=typeof dd==="string"?dd:dd.id;
+            const nm=(findItem(id)||{}).name||id;
+            const dk=(typeof dd==="object"&&dd.kinds)||[];
+            const nt=(typeof dd==="object"&&dd.note)||"";
+            return (
+              <div key={j} style={{fontSize:"11px",color:"#8a4a10",lineHeight:"1.6",marginBottom:"4px"}}>
+                🍽 <b>{nm}</b>{dk.length>0?`　${dk.join("、")}`:""}{nt?`　—「${nt}」`:""}
+                {(typeof dd==="object"&&dd.photo)&&<img src={dd.photo} style={{display:"block",width:"100%",maxWidth:"180px",borderRadius:"7px",border:"1px solid #e0c0b0",marginTop:"3px"}}/>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {it.photo&&<img src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
+      <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 8px",fontSize:"11px",color:"#5a4030",lineHeight:"1.5"}}>
+        <span style={{color:"#a08070"}}>原因</span><span>{it.reason||"—"}</span>
+        <span style={{color:"#a08070"}}>如何調整</span><span>{it.adjust||it.note||"—"}</span>
+        <span style={{color:"#a08070"}}>下次招待</span><span style={{color:"#1a6a3a",fontWeight:"700"}}>{it.treat||"—"}</span>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{padding:"10px 12px",background:"#fdf5f0",borderRadius:"10px",margin:"8px 0",border:"1.5px solid #e0a080"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",gap:"8px"}}>
+        <span style={{fontSize:"13px",color:"#a04020",fontWeight:"800"}}>⚠ 客訴記錄（共 {list.length+history.length} 筆）</span>
+        {AddBtn}
+      </div>
+      {list.map((it,idx)=><Row key={"c"+idx} it={it} onDel={()=>del(idx)}/>)}
+      {history.length>0&&(
+        <>
+          <div style={{fontSize:"10px",color:"#a04020",fontWeight:"800",margin:"6px 0 5px"}}>📞 同一支電話、其他訂位的客訴</div>
+          {history.map((it,idx)=><Row key={"h"+idx} it={it} from={it._from}/>)}
+        </>
+      )}
+    </div>
+  );
+}
+function _ComplaintPanelOld({ g, setGroups, groups }) {
+  const [f, setF] = useState({reason:"",attitude:"",adjust:"",treat:""});
+  const list = g.complaints||[];
+  const ph = normPhone(g.phone);
+  const history = (ph&&groups)?groups.filter(x=>x.id!==g.id&&normPhone(x.phone)===ph&&(x.complaints||[]).length>0)
+    .flatMap(x=>(x.complaints||[]).map(c=>({...c,_from:`${x.date||""} ${x.name||""}`}))):[];
+  const add = () => {
+    if(!f.reason.trim()&&!f.attitude.trim()&&!f.adjust.trim()&&!f.treat.trim()) return;
+    const now=new Date();
+    const date=`${now.getMonth()+1}/${now.getDate()}`;
+    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,complaints:[...(x.complaints||[]),{...f,date}]}));
+    setF({reason:"",attitude:"",adjust:"",treat:""});
+  };
+  const del = (idx) => setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,complaints:(x.complaints||[]).filter((_,i2)=>i2!==idx)}));
+  const inp = {flex:1,padding:"7px 10px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"12px"};
+  return (
+    <div style={{padding:"10px 12px",background:"#fdf5f0",borderRadius:"10px",margin:"8px 0",border:"1px solid #e0c8b8"}}>
+      <div style={{fontSize:"12px",color:"#a05030",fontWeight:"700",marginBottom:"8px"}}>⚠ 客訴記錄（{list.length}）</div>
+      {history.length>0&&(
+        <div style={{background:"#fce8e0",border:"1px solid #d08060",borderRadius:"8px",padding:"7px 9px",marginBottom:"7px"}}>
+          <div style={{fontSize:"10px",color:"#a04020",fontWeight:"800",marginBottom:"3px"}}>📞 同電話過去的客訴（{history.length} 筆,來自其他訂位）</div>
+          {history.slice(0,5).map((it,i2)=>(
+            <div key={i2} style={{fontSize:"10px",color:"#7a4030",lineHeight:"1.6"}}>{it.date}（{it._from}）原因：{it.reason||"—"}　招待：{it.treat||"—"}</div>
+          ))}
+        </div>
+      )}
+      {list.map((it,idx)=>(
+        <div key={idx} style={{fontSize:"11px",color:"#6a4a2e",padding:"6px 8px",background:"#fff",borderRadius:"8px",marginBottom:"5px",display:"flex",justifyContent:"space-between",gap:"8px"}}>
+          <div style={{lineHeight:"1.6"}}>
+            <b>{it.date}</b>　原因：{it.reason||"—"}　態度：{it.attitude||"—"}　如何調整：{it.adjust||it.note||"—"}　下次招待：{it.treat||"—"}
+          </div>
+          <button onClick={()=>del(idx)} style={{background:"none",border:"1px solid #d4a0a0",borderRadius:"6px",color:"#b05050",fontSize:"10px",cursor:"pointer",padding:"1px 7px",flexShrink:0,alignSelf:"center"}}>刪</button>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:"6px",marginTop:"6px",flexWrap:"wrap"}}>
+        <input value={f.reason} onChange={e=>setF(p=>({...p,reason:e.target.value}))} placeholder="原因" style={inp}/>
+        <input value={f.attitude} onChange={e=>setF(p=>({...p,attitude:e.target.value}))} placeholder="態度" style={inp}/>
+        <input value={f.adjust} onChange={e=>setF(p=>({...p,adjust:e.target.value}))} placeholder="如何調整" style={inp}/>
+        <input value={f.treat} onChange={e=>setF(p=>({...p,treat:e.target.value}))} placeholder="下次用餐招待什麼" style={inp}/>
+        <button onClick={add} style={{padding:"7px 14px",borderRadius:"8px",border:"none",background:"#b07840",color:"#fff",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>新增</button>
+      </div>
+    </div>
+  );
+}
+
+// 把照片壓小(避免塞爆資料庫):縮到最寬 1080、JPEG 品質 0.55
+function compressImage(file, maxW=1080, quality=0.55){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        const scale=Math.min(1, maxW/(img.width||maxW));
+        const w=Math.max(1,Math.round((img.width||maxW)*scale)), h=Math.max(1,Math.round((img.height||maxW)*scale));
+        const canvas=document.createElement("canvas");
+        canvas.width=w; canvas.height=h;
+        canvas.getContext("2d").drawImage(img,0,0,w,h);
+        try{ resolve(canvas.toDataURL("image/jpeg",quality)); }catch(err){ reject(err); }
+      };
+      img.onerror=reject;
+      img.src=e.target.result;
+    };
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// 封存照片:存在獨立的一筆紀錄(arch_xxx),需要時才載入,點縮圖可放大
+function ArchivePhoto({ photoId, size=54 }){
+  const [img,setImg]=useState(null);
+  const [big,setBig]=useState(false);
+  const [err,setErr]=useState(false);
+  useEffect(()=>{
+    let alive=true;
+    if(!photoId){ return; }
+    FS.loadDoc(`arch_${photoId}`).then(d=>{ if(alive){ if(d&&d.img) setImg(d.img); else setErr(true); } }).catch(()=>{ if(alive) setErr(true); });
+    return ()=>{ alive=false; };
+  },[photoId]);
+  if(!photoId) return null;
+  if(err) return <span style={{fontSize:"10px",color:"#c06030"}}>照片載入失敗</span>;
+  if(!img) return <span style={{display:"inline-block",width:size,height:size,borderRadius:"6px",background:"#e8e0d0"}}/>;
+  return (
+    <>
+      <img src={img} onClick={()=>setBig(true)} style={{width:size,height:size,objectFit:"cover",borderRadius:"6px",cursor:"pointer",border:"1px solid #c8b89c"}}/>
+      {big&&(
+        <div onClick={()=>setBig(false)} style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,0.9)",display:"flex",alignItems:"center",justifyContent:"center",padding:"12px"}}>
+          <img src={img} style={{maxWidth:"100%",maxHeight:"100%",borderRadius:"8px"}}/>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── 手繪風 SVG 圖示(統一細線條、圓潤,配米白金棕色系)────────────────
+const Ico = ({d, size=16, color="currentColor", fill="none"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={color}
+    strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+    style={{verticalAlign:"-3px",flexShrink:0}}>{d}</svg>
+);
+const IcoFood = (p)=><Ico {...p} d={<><path d="M7 3v8M5 3v4a2 2 0 0 0 4 0V3M7 11v10"/><path d="M17 3c-1.5 1.5-2 3.5-2 5.5 0 1.7.8 2.5 2 2.5s2-.8 2-2.5c0-2-.5-4-2-5.5zM17 11v10"/></>}/>;
+const IcoService = (p)=><Ico {...p} d={<><path d="M12 3a5 5 0 0 0-5 5c0 4-1.5 5.5-2.5 6.5h15C18.5 13.5 17 12 17 8a5 5 0 0 0-5-5z"/><path d="M10.5 18a1.6 1.6 0 0 0 3 0"/><path d="M12 2.2v.8"/></>}/>;
+const IcoEnv = (p)=><Ico {...p} d={<><path d="M3.5 10.5 12 4l8.5 6.5"/><path d="M5.5 9.8V20h13V9.8"/><path d="M10 20v-5h4v5"/></>}/>;
+const IcoStore = (p)=><Ico {...p} d={<><path d="M4 9h16l-1 11H5L4 9z"/><path d="M4 9 5.5 4h13L20 9"/><path d="M9.5 13.5h5"/><path d="M8 9c0 1.4-.9 2.5-2 2.5M16 9c0 1.4.9 2.5 2 2.5M12 9v2.5"/></>}/>;
+const IcoForm = (p)=><Ico {...p} d={<><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3.5"/></>}/>;
+const IcoSearchChat = (p)=><Ico {...p} d={<><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 4v-4H6.5A2.5 2.5 0 0 1 4 13.5v-7z"/><circle cx="11.2" cy="9.8" r="2.6"/><path d="m13.3 11.9 2.1 2.1"/></>}/>;
+const IcoChart = (p)=><Ico {...p} d={<><path d="M4 20h16"/><path d="M7 20v-6M12 20V7M17 20v-9"/></>}/>;
+const IcoWarn = (p)=><Ico {...p} d={<><path d="M12 4.5 21 19H3l9-14.5z"/><path d="M12 10v4M12 16.6v.4"/></>}/>;
+const IcoTag = (p)=><Ico {...p} d={<><path d="M3 11.5V4.5A1.5 1.5 0 0 1 4.5 3h7l8.5 8.5a1.5 1.5 0 0 1 0 2.1l-6.4 6.4a1.5 1.5 0 0 1-2.1 0L3 11.5z"/><circle cx="7.5" cy="7.5" r="1.3"/></>}/>;
+const IcoUser = (p)=><Ico {...p} d={<><circle cx="12" cy="8" r="3.4"/><path d="M5.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/></>}/>;
+const IcoCrown = (p)=><Ico {...p} d={<><path d="M4 8l3.2 3L12 5l4.8 6L20 8l-1.6 10H5.6L4 8z"/><path d="M5.6 18h12.8"/></>}/>;
+const IcoStar = (p)=><Ico {...p} d={<><path d="M12 4l2.3 4.9 5.2.7-3.8 3.6 1 5.1L12 15.8 7.3 18.3l1-5.1L4.5 9.6l5.2-.7L12 4z"/></>}/>;
+const IcoParty = (p)=><Ico {...p} d={<><path d="M3 21l5.5-13 6.5 6.5L3 21z"/><path d="M14 3v2M19 8h2M16.5 5.5 18 4M17 12c2 0 3-1 3-3"/></>}/>;
+const IcoPeople = (p)=><Ico {...p} d={<><circle cx="8.5" cy="8" r="2.8"/><path d="M3.5 19c0-3 2.2-5 5-5s5 2 5 5"/><path d="M15.5 6.2A2.6 2.6 0 0 1 17 11M16.5 14.2c2.2.3 4 2.1 4 4.8"/></>}/>;
+const IcoDoor = (p)=><Ico {...p} d={<><path d="M6 3h12v18H6zM6 3v18"/><rect x="8.5" y="6" width="7" height="12" rx="1"/><circle cx="13.5" cy="12" r="0.9" fill="currentColor"/></>}/>;
+
+const CPL_SOURCES = [
+  {k:"大訂餐評", Icon:IcoForm,       desc:"從過期訂單記的"},
+  {k:"現場餐評", Icon:IcoStore,      desc:"沒訂位的現場客人"},
+  {k:"Google",  Icon:IcoSearchChat, desc:"Google 評論"},
+];
+const CPL_TYPES = [
+  {k:"餐點", Icon:IcoFood},
+  {k:"服務", Icon:IcoService},
+  {k:"環境", Icon:IcoEnv},
+  {k:"價格", Icon:IcoTag},
+];
+const ATTITUDE_OPTS = ["客氣理性","情緒不滿","大聲激動","要求賠償","表示要給負評","當場已安撫","願意回訪","其他"];
+
+// 客訴細項:分類(環境/餐點/服務)+ 餐點兩層下拉複選 + 照片
+const CPL_KINDS = {
+  環境: ["桌況/清潔","冷氣溫度","噪音吵雜","廁所","停車","座位安排","其他"],
+  服務: ["等待過久","服務態度","送錯餐","漏餐","結帳問題","訂位問題","其他"],
+  餐點: ["不新鮮","味道太鹹","味道太淡","份量太少","溫度不對","異物","與圖不符","過敏原","其他"],
+  價格: ["價格偏高","與菜單不符","加收費用","服務費爭議","促銷/優惠問題","低消爭議","其他"],
+};
+function CplDetail({ val, onChange }) {
+  const v = val||{};
+  const kinds = v.kinds||[];
+  const dishes = v.dishes||[];
+  const [cat,setCat] = useState("appetizer");
+  const [busy,setBusy] = useState(false);
+  const set = (patch)=>onChange({...v,...patch});
+  const toggleKind = (k)=>set({kinds: kinds.includes(k)?kinds.filter(x=>x!==k):[...kinds,k]});
+  const addDish = (id)=>{
+    if(!id) return;
+    if(id==="__custom__"){                                  // Google 評論常只說「牛排」「燉飯」→ 自己打
+      const nm=window.prompt("客人說的餐點名稱\n（例如:牛排、燉飯、義大利麵）");
+      if(!nm||!nm.trim()) return;
+      const key=`custom:${nm.trim()}`;
+      if(dishes.some(d=>d.id===key)) return;
+      set({dishes:[...dishes,{id:key,custom:nm.trim(),kinds:[],note:""}]});
+      return;
+    }
+    if(dishes.some(d=>d.id===id)) return;
+    set({dishes:[...dishes,{id,kinds:[],note:""}]});
+  };
+  const pickPhoto = async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; setBusy(true);
+    try{ set({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } setBusy(false); e.target.value=""; };
+  const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
+  return (
+    <div style={{marginBottom:"12px"}}>
+      <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客訴類型（可複選）</div>
+      <div style={{display:"flex",gap:"6px",marginBottom:"8px",flexWrap:"wrap"}}>
+        {CPL_TYPES.map(({k,Icon})=>(
+          <button key={k} onClick={()=>{
+              const cur=Array.isArray(v.types)?v.types:(v.type?[v.type]:[]);
+              const nt=cur.includes(k)?cur.filter(x=>x!==k):[...cur,k];
+              set({types:nt, type:nt[0]||""});          // type 保留第一個(舊資料相容)
+            }} style={{...chip((Array.isArray(v.types)?v.types:(v.type?[v.type]:[])).includes(k)),flex:"1 1 calc(50% - 3px)",padding:"9px",display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}}>
+            <Icon size={16} color={(Array.isArray(v.types)?v.types:(v.type?[v.type]:[])).includes(k)?"#fff":"#8a6a4a"}/>{k}
+          </button>
+        ))}
+      </div>
+      {v.type&&v.type!=="餐點"&&(
+        <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
+          {(Array.isArray(v.types)&&v.types.length?v.types:(v.type?[v.type]:[])).flatMap(t=>(CPL_KINDS[t]||[]).map(k=>`${k}`)).filter((x,i,a)=>a.indexOf(x)===i).map(k=>(
+            <button key={k} onClick={()=>toggleKind(k)} style={chip(kinds.includes(k))}>{k}</button>
+          ))}
+        </div>
+      )}
+      {((Array.isArray(v.types)?v.types:(v.type?[v.type]:[])).includes("餐點"))&&(
+        <div style={{background:"#fff",border:"1px solid #e0d5c0",borderRadius:"10px",padding:"10px",marginBottom:"8px"}}>
+          <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>🍽 是哪道餐點?（先選分類 → 點餐點加入,可複選）</div>
+          <select value={cat} onChange={e=>setCat(e.target.value)}
+            style={{width:"100%",boxSizing:"border-box",padding:"9px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700",marginBottom:"7px"}}>
+            {[...FOOD_CATS,...DRINK_CATS].map(c=><option key={c} value={c}>{MENU[c]?.label||c}</option>)}
+          </select>
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"7px"}}>
+            {(MENU[cat]?.items||[]).map(i=>{
+              const on=dishes.some(d=>d.id===i.id);
+              return (
+                <button key={i.id} onClick={()=>{ if(on){ set({dishes:dishes.filter(d=>d.id!==i.id)}); } else { addDish(i.id); } }}
+                  style={{padding:"7px 10px",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                    border:`1.5px solid ${on?"#a04020":"#d8c8b0"}`, background:on?"#a04020":"#fff", color:on?"#fff":"#5a4030"}}>
+                  {on?"✓ ":""}{i.name}
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={()=>addDish("__custom__")}
+            style={{width:"100%",padding:"9px",borderRadius:"8px",border:"1.5px dashed #b07840",background:"#fdf6ea",color:"#8a5210",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
+            ✏️ 菜單找不到?直接打名稱（例如:牛排、燉飯）
+          </button>
+          {dishes.map((d,i2)=>{
+            const it=findItem(d.id);
+            const dk=d.kinds||[];
+            const upd=(patch)=>set({dishes:dishes.map((x,j)=>j===i2?{...x,...patch}:x)});
+            return (
+              <div key={d.id} style={{background:"#fdf7ee",border:"1px solid #e0c8a8",borderRadius:"9px",padding:"9px",marginTop:"8px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+                  <span style={{flex:1,fontSize:"13px",fontWeight:"800",color:"#8a4a10"}}>🍽 {it?it.name:d.id}</span>
+                  <button onClick={()=>set({dishes:dishes.filter((_,j)=>j!==i2)})} style={{border:"none",background:"#e0b080",color:"#fff",borderRadius:"5px",fontSize:"10px",padding:"2px 8px",cursor:"pointer",fontWeight:"800"}}>移除</button>
+                </div>
+                <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginBottom:"6px"}}>
+                  {CPL_KINDS["餐點"].map(k=>(
+                    <button key={k} onClick={()=>upd({kinds: dk.includes(k)?dk.filter(x=>x!==k):[...dk,k]})}
+                      style={{padding:"3px 8px",borderRadius:"6px",border:`1px solid ${dk.includes(k)?"#a04020":"#ddd0bc"}`,fontSize:"11px",fontWeight:"700",cursor:"pointer",background:dk.includes(k)?"#a04020":"#fff",color:dk.includes(k)?"#fff":"#7a5c3e"}}>{k}</button>
+                  ))}
+                </div>
+                <input value={d.note||""} onChange={e=>upd({note:e.target.value})} placeholder="這道的詳細說明（選填）"
+                  style={{width:"100%",boxSizing:"border-box",padding:"7px 9px",borderRadius:"7px",border:"1px solid #d8c8b0",background:"#fff",color:"#2e2010",fontSize:"12px"}}/>
+                <div style={{marginTop:"7px"}}>
+                  {d.photo?(
+                    <div style={{position:"relative"}}>
+                      <img src={d.photo} style={{width:"100%",borderRadius:"7px",border:"1px solid #d0c0a8"}}/>
+                      <button onClick={()=>upd({photo:null})} style={{position:"absolute",top:"5px",right:"5px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"3px 8px",fontSize:"11px",cursor:"pointer"}}>移除</button>
+                    </div>
+                  ):(
+                    <label style={{display:"block",textAlign:"center",padding:"8px",borderRadius:"7px",border:"1.5px dashed #c0a880",background:"#fff",color:"#9a6a30",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>
+                      📷 這道的照片（選填）
+                      <input type="file" accept="image/*" style={{display:"none"}}
+                        onChange={async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ upd({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } e.target.value=""; }}/>
+                    </label>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{fontSize:"10px",color:"#a08070",marginTop:"7px"}}>每道菜可各自選原因、寫說明、上傳照片。</div>
+        </div>
+      )}
+      {v.type&&v.type!=="餐點"&&(
+        <div style={{marginTop:"4px"}}>
+          {v.photo?(
+            <div style={{position:"relative"}}>
+              <img src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
+              <button onClick={()=>set({photo:null})} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
+            </div>
+          ):(
+            <label style={{display:"block",textAlign:"center",padding:"11px",borderRadius:"8px",border:"1.5px dashed #c0a880",background:"#faf4e8",color:"#9a6a30",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>
+              {busy?"處理中…":"📷 上傳照片（選填）"}
+              <input type="file" accept="image/*" onChange={pickPhoto} style={{display:"none"}}/>
+            </label>
+          )}
+        </div>
+      )}
+      <div style={{marginTop:"12px"}}>
+        <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>客人態度（可複選）</div>
+        <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+          {ATTITUDE_OPTS.map(a=>{
+            const on=(v.attitudes||[]).includes(a);
+            return <button key={a} onClick={()=>set({attitudes:on?(v.attitudes||[]).filter(x=>x!==a):[...(v.attitudes||[]),a]})}
+              style={{...chip(on),background:on?(a==="願意回訪"?"#2a7a4a":"#a04020"):"#fff",borderColor:on?(a==="願意回訪"?"#2a7a4a":"#a04020"):"#d8c8b0"}}>{a}</button>;
+          })}
+        </div>
+        {(v.attitudes||[]).includes("其他")&&(
+          <input value={v.attitude||""} onChange={e=>set({attitude:e.target.value})} placeholder="其他態度,請描述"
+            style={{width:"100%",boxSizing:"border-box",marginTop:"6px",padding:"9px 11px",borderRadius:"9px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"13px"}}/>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatusCell({ g, onSave, groups, setGroups, staffList }) {
+  const [open, setOpen] = useState(false);
+  const [pickStaff, setPickStaff] = useState(false);
+  const [pickArchiveType, setPickArchiveType] = useState(false);
+  const [pendingArchiveType, setPendingArchiveType] = useState("");
+  const [pendingStatus, setPendingStatus] = useState("");
+  const staff = (staffList&&staffList.length>0)?staffList:DEFAULT_STAFF;
+  const sl = g.statusLog || {};
+  const isPast = isPastMeal(g) && !g.archived && !g.cancelled;
+
+  const [archModal, setArchModal] = useState(false);
+  const [cplOpen, setCplOpen] = useState(false); // 過期→客訴與建議
+  const [cplIdx, setCplIdx] = useState(null);     // v225:null=新增一筆;數字=正在編輯既有的第幾筆
+  const [cpl, setCpl] = useState({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
+  const [archTime, setArchTime] = useState("");
+  const [archPhoto, setArchPhoto] = useState(null);
+  const [archBusy, setArchBusy] = useState(false);
+  const [archStaffPick, setArchStaffPick] = useState(false);
+  const [archPending, setArchPending] = useState(null); // {time, photoId}
+  const nowStamp = () => { const d=new Date(); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const openArchive = () => { setArchTime(nowStamp()); setArchPhoto(null); setArchModal(true); };
+  const onPickPhoto = async (e) => {
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    setArchBusy(true);
+    try{ const c=await compressImage(f); setArchPhoto(c); }catch(err){ window.alert("照片處理失敗，請再試一次"); }
+    setArchBusy(false);
+    e.target.value="";
+  };
+  const confirmArchive = async () => {
+    setArchBusy(true);
+    let photoId=null;
+    if(archPhoto){ photoId=`${g.id}_${Date.now()}`; await FS.saveDoc(`arch_${photoId}`, {img:archPhoto}); }
+    setArchPending({time:archTime||nowStamp(), photoId});
+    setArchBusy(false); setArchModal(false); setArchPhoto(null);
+    setArchStaffPick(true); // 接著選夥伴
+  };
+  const finalizeArchive = (operator) => {
+    const pid=archPending?archPending.photoId:null;
+    let noPhotoReason="";
+    if(!pid){
+      // 防呆:封存一定要附照片;沒附要寫原因(避免按錯)
+      const r=window.prompt("⚠ 這次封存沒有附照片\n\n封存餐點一定要拍照存證。\n如果真的無法拍照,請寫原因(例如:客人臨時取消、系統當機):");
+      if(r===null) return;                                  // 取消 → 不封存
+      if(!r.trim()){ window.alert("請填寫沒有拍照的原因,或返回補拍照片"); return; }
+      noPhotoReason=r.trim();
+    }
+    const snap={id:`${Date.now()}`, time:(archPending&&archPending.time)||nowStamp(), photoId:pid, by:operator, noPhotoReason};
+    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x, archived:false, archiveType:"menu", archiveTime:snap.time, archiveBy:operator, archiveSnaps:[...(x.archiveSnaps||[]), snap],
+      locked:true, unlockUntil:"",                                    // 封存＝已進 POS,自動鎖單
+      statusLog:{status:"餐點封存", operator, date:snap.time}}));      // 狀態一起帶上,不然點餐狀態還停在舊的
+    setArchStaffPick(false); setArchPending(null);
+  };
+
+  const selectStatus = (status) => {
+    setPendingStatus(status);
+    setOpen(false);
+    if(status === "餐點封存") {
+      openArchive();               // 直接進拍照封存,不用再選類型
+    } else if(status === "現場點餐") {
+      setPendingArchiveType("onsite");
+      setPickStaff(true);
+    } else {
+      setPendingArchiveType("");
+      setPickStaff(true);
+    }
+  };
+
+  const confirmStatus = (operator) => {
+    const now = new Date();
+    const date = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    // Handle archived separately
+    const isArchive = pendingStatus === "餐點封存";
+    const isOnsite = pendingArchiveType==="onsite";
+    const isMissed = pendingStatus === "未接";
+    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,
+      statusLog: isOnsite ? {status:"",operator,date} : {status:pendingStatus,operator,date},
+      missedCount: isMissed ? ((x.missedCount||0)+1) : x.missedCount,
+      missedFirst: isMissed ? (x.missedFirst||Date.now()) : x.missedFirst,
+      archived: (isArchive&&pendingArchiveType!=="onsite") ? (pendingArchiveType==="booking" ? true : false) : x.archived,
+      onsiteOrder: isOnsite ? true : x.onsiteOrder,
+      onsiteBy: isOnsite ? operator : x.onsiteBy,
+      onsiteAt: isOnsite ? date : x.onsiteAt,
+      archiveType: (isArchive&&pendingArchiveType!=="onsite") ? pendingArchiveType : x.archiveType,
+      keyed: pendingStatus==="已KEY需改單" ? true : x.keyed,
+      menuReminded: pendingStatus==="已提醒點餐" ? true : x.menuReminded,
+      locked: STATUS_AUTOLOCK.includes(pendingStatus) ? true : x.locked,        // 未KEY/已封存 → 自動鎖單
+      unlockUntil: STATUS_AUTOLOCK.includes(pendingStatus) ? "" : x.unlockUntil, // 自動鎖時把舊的解鎖時間窗清掉
+    }));
+    setPickStaff(false);
+    setPendingStatus("");
+  };
+
+  return (
+    <div style={{position:"relative",minWidth:"80px",overflow:"visible"}}>
+      {open&&<div style={{position:"fixed",inset:0,zIndex:99}} onClick={()=>setOpen(false)}/>}
+      <div onClick={(e)=>{e.stopPropagation();if(isPast)return;setOpen(p=>!p);}} style={{cursor:isPast?"default":"pointer",textAlign:"center"}}>
+        {isPast ? (
+          <div>
+            {sl.status&&<div style={{fontSize:"10px",color:"#9a8a76",marginBottom:"3px"}}>{sl.status}</div>}
+            <button onClick={(e)=>{e.stopPropagation();setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,archiveType:"booking"}));}}
+              style={{fontSize:"12px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"6px",padding:"6px 12px",marginTop:"2px",fontWeight:"700",cursor:"pointer",display:"block",width:"100%"}}>直接封存</button>
+            <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplIdx(null);setCplOpen(true);}}
+              style={{fontSize:"12px",background:"#a05030",color:"#fff",border:"none",borderRadius:"6px",padding:"6px 12px",marginTop:"4px",fontWeight:"700",cursor:"pointer",display:"block",width:"100%"}}>客訴與建議</button>
+          </div>
+        ) : g.archiveType==="menu" ? (
+          <div>
+            <div style={{fontSize:"12px",color:"#8a5aa8",fontWeight:"800",marginBottom:"2px"}}>📦 餐點已封存</div>
+            {g.archiveTime&&<div style={{fontSize:"9px",color:"#7a5c3e",marginBottom:"1px"}}>🕒 {g.archiveTime}</div>}
+            {g.archiveBy&&<div style={{fontSize:"9px",color:"#7a5c3e",marginBottom:"3px"}}>👤 {g.archiveBy}</div>}
+            {(()=>{
+              const last=(g.archiveSnaps||[])[(g.archiveSnaps||[]).length-1];
+              return (last&&!last.photoId&&last.noPhotoReason)
+                ? <div title={last.noPhotoReason} style={{fontSize:"9px",color:"#c02020",background:"#fbe4e4",borderRadius:"4px",padding:"1px 4px",marginBottom:"3px",fontWeight:"800"}}>⚠ 無照片：{last.noPhotoReason.slice(0,10)}{last.noPhotoReason.length>10?"…":""}</div>
+                : null;
+            })()}
+            {(g.archiveSnaps||[]).filter(s=>s.photoId).length>0 && (()=>{
+              const snaps=(g.archiveSnaps||[]).filter(s=>s.photoId);
+              const last=snaps[snaps.length-1];
+              return (
+                <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:"4px"}}>
+                  <ArchivePhoto photoId={last.photoId} size={46}/>
+                  {snaps.length>1 && <span style={{fontSize:"8px",color:"#9a8a76"}}>+{snaps.length-1}張</span>}
+                </div>
+              );
+            })()}
+            {isPastMeal(g)&&!g.cancelled&&(<>
+              <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplIdx(null);setCplOpen(true);}}
+                style={{fontSize:"10px",background:"#fdeae0",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"5px",padding:"2px 7px",marginTop:"4px",fontWeight:"800",cursor:"pointer"}}>⚠ 補寫客訴</button>
+              {!g.cplDone&&(
+                <button onClick={(e)=>{e.stopPropagation();
+                    if(!window.confirm(`把「${g.name}」從過期清單收起來?\n\n（客訴紀錄和照片都會保留，之後在客訴中心/封存還查得到）`)) return;
+                    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
+                  }}
+                  style={{fontSize:"10px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer",display:"block"}}>✓ 收起來</button>
+              )}
+            </>)}
+          </div>
+        ) : sl.status ? (
+          <div>
+            <div style={{fontSize:"13px",
+              color:sl.status==="未KEY-需優先KEY"?"#ff6060":(sl.status==="未接"?"#c06030":"#d8c8b0"),
+              fontWeight:"700",
+              background:sl.status==="未KEY-需優先KEY"?"#ffd0d0":"transparent",
+              borderRadius:"4px",padding:sl.status==="未KEY-需優先KEY"?"2px 4px":"0"
+            }}>{sl.status}{sl.status==="未接"&&g.missedCount>1?` ×${g.missedCount}`:""}</div>
+            {g.archived&&isPastMeal(g)&&!g.cancelled&&(<>
+              <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplIdx(null);setCplOpen(true);}}
+                style={{fontSize:"10px",background:"#fdeae0",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer"}}>⚠ 補寫客訴</button>
+              {!g.cplDone&&(
+                <button onClick={(e)=>{e.stopPropagation();
+                    if(!window.confirm(`把「${g.name}」從過期清單收起來?\n\n（客訴紀錄和照片都會保留，之後在客訴中心/封存還查得到）`)) return;
+                    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
+                  }}
+                  style={{fontSize:"10px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer",display:"block"}}>✓ 收起來</button>
+              )}
+            </>)}
+            <div style={{fontSize:"9px",color:"#7a5c3e"}}>{sl.operator} {sl.date}</div>
+            {sl.status==="未接"&&(g.missedCount>=3||missedOverdue(g))&&(
+              <div style={{fontSize:"9px",color:"#fff",background:"#c0302a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>⚠ 聯絡不上</div>
+            )}
+            {g.fromMai&&(
+              <button onClick={(e)=>{e.stopPropagation();setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false}));}}
+                title="轉入追蹤表後才會開始追訂金、催點餐、算低消。留在麥訂這些都不會動" style={{marginTop:"3px",fontSize:"11px",background:"#b07840",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 10px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",minHeight:"30px"}}>📥 轉入追蹤表→</button>
+            )}
+          </div>
+        ) : g.fromMai ? (
+            <div style={{marginTop:"2px",display:"flex",flexDirection:"column",gap:"3px",alignItems:"center"}}>
+              {g.maiMissed>0&&<div style={{fontSize:"9px",fontWeight:"800",color:"#fff",background:g.maiMissed>=3?"#c02020":"#c06030",borderRadius:"4px",padding:"1px 5px"}}>📵 未接 ×{g.maiMissed}{g.maiMissed>=3?" 聯絡不上":""}</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:"4px",marginTop:"2px"}}>
+                <button onClick={(e)=>{e.stopPropagation();const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,maiMissed:(x.maiMissed||0)+1,maiMissedAt:at}));}}
+                  style={{fontSize:"12px",background:"#c06030",color:"#fff",border:"none",borderRadius:"7px",padding:"8px 10px",minHeight:"34px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",width:"100%"}}>📵 未接</button>
+                <button onClick={(e)=>{e.stopPropagation();const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false,maiMissed:0,statusLog:{status:"已加LINE",operator:"",date:d}}));}}
+                  style={{fontSize:"12px",background:"#b07840",color:"#fff",border:"none",borderRadius:"7px",padding:"8px 10px",minHeight:"34px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",width:"100%"}}>轉入追蹤表 →</button>
+              </div>
+              {g.maiMissedAt&&<div style={{fontSize:"8px",color:"#a05030"}}>{g.maiMissedAt}</div>}
+            </div>
+          ) : g.onsiteOrder ? (
+            <div>
+              <div style={{fontSize:"11px",background:"#f5e2c0",color:"#8a5210",borderRadius:"4px",padding:"2px 6px",marginTop:"2px",fontWeight:"700",display:"inline-block"}}>🍽 現點</div>
+              {(g.onsiteBy||g.onsiteAt)&&<div style={{fontSize:"9px",color:"#7a5c3e",marginTop:"2px"}}>{g.onsiteBy} {g.onsiteAt}</div>}
+            </div>
+          ) : (
+          <div style={{fontSize:"13px",color:"#9a8a76"}}>選擇狀態</div>
+        )}
+      </div>
+      {open&&(
+        <div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setOpen(false)}>
+          <div style={{background:"#f0e8d8",border:"1px solid #d0c0a8",borderRadius:"14px",padding:"10px",width:"100%",maxWidth:"300px",boxShadow:"0 10px 36px rgba(0,0,0,0.45)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",textAlign:"center",padding:"4px 0 10px"}}>選擇點餐狀態</div>
+            {STATUS_OPTIONS.map(s=>(
+              <div key={s} onClick={(e)=>{e.stopPropagation();selectStatus(s);}}
+                style={{padding:"13px 14px",cursor:"pointer",fontSize:"15px",borderRadius:"8px",marginBottom:"2px",
+                  color:s==="未KEY-需優先KEY"?"#ff6060":"#8a5210",
+                  background:sl.status===s?"#ede2d0":"#fbf6ec"}}>
+                {s==="未KEY-需優先KEY"?"🔴 "+s:s}
+              </div>
+            ))}
+            <div onClick={()=>{onSave(g.id,"statusLog",{status:"",operator:"",date:""});setOpen(false);}}
+              style={{padding:"11px 14px",cursor:"pointer",fontSize:"14px",color:"#7a3030",borderTop:"1px solid #d0c0a8",marginTop:"6px",textAlign:"center",fontWeight:"700"}}>
+              清除狀態
+            </div>
+          </div>
+        </div>
+      )}
+      {cplOpen&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={(e)=>{e.stopPropagation();setCplOpen(false);}}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"420px",textAlign:"left",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"17px",color:"#a05030",fontWeight:"800",marginBottom:"3px"}}>⚠ 客訴與建議</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px"}}>{g.name}（{g.date} {g.time}）— 記錄後會跟著這支電話,下次訂位自動提醒</div>
+            <CplDetail val={cpl} onChange={setCpl}/>
+            {[["原因/經過","reason"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+              <div key={k} style={{marginBottom:"12px"}}>
+                <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>{l}</div>
+                <textarea value={cpl[k]} onChange={e=>setCpl(p=>({...p,[k]:e.target.value}))} rows={2}
+                  style={{width:"100%",boxSizing:"border-box",padding:"11px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"15px",lineHeight:"1.5",resize:"vertical",fontFamily:"inherit"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:"8px",marginTop:"6px"}}>
+              <button onClick={()=>setCplOpen(false)} style={{flex:1,padding:"13px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const now=new Date(); const date=`${now.getMonth()+1}/${now.getDate()}`;
+                  const hasContent=cpl.type||(cpl.kinds||[]).length>0||(cpl.dishes||[]).length>0||cpl.photo||cpl.reason.trim()||cpl.attitude.trim()||cpl.adjust.trim()||cpl.treat.trim();
+                  setGroups(p=>p.map(x=>{
+                    if(x.id!==g.id) return x;
+                    const old=x.complaints||[];
+                    // v225:cplIdx 有值 → 取代那一筆(保留原本日期);否則才是新增
+                    const next = !hasContent ? old
+                      : (cplIdx!=null&&old[cplIdx]
+                          ? old.map((c,i)=>i!==cplIdx?c:{...cpl,date:c.date,editedAt:date,source:c.source||"大訂餐評"})
+                          : [...old,{...cpl,date,source:"大訂餐評"}]);
+                    return {...x,
+                    complaints: next,
+                    archived:true, archiveType:x.archiveType==="menu"?"menu":"booking",
+                    cplDone:true};
+                  }));   // 記完客訴 → 從過期清單收起來(照片/客訴仍可查)
+                  setCplIdx(null); setCplOpen(false);
+                }}
+                style={{flex:2,padding:"13px",borderRadius:"10px",background:"#a05030",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{cplIdx!=null?"更新這筆客訴":(g.archived?"儲存客訴":"記錄並封存")}</button>
+            </div>
+            {(g.complaints||[]).length>0&&(
+              <div style={{marginTop:"10px",borderTop:"1px solid #ddd0bc",paddingTop:"8px"}}>
+                <div style={{fontSize:"11px",fontWeight:"800",color:"#8a6a4a",marginBottom:"5px"}}>已記錄的客訴（點〔編輯〕可以改，不會再多一筆）</div>
+                {(g.complaints||[]).map((c,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:"7px",background:cplIdx===i?"#fdeae0":"#faf6ee",
+                    border:`1px solid ${cplIdx===i?"#e0b0a0":"#e8ddc8"}`,borderRadius:"7px",padding:"6px 8px",marginBottom:"4px"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:"11px",fontWeight:"800",color:"#6a4a2e"}}>
+                        {c.date}{c.editedAt?`（${c.editedAt} 改過）`:""}　{c.type||"未分類"}
+                        {(c.kinds||[]).length>0?`　${(c.kinds||[]).join("、")}`:""}
+                        {c.photo?"　📷":""}
+                      </div>
+                      {c.reason&&<div style={{fontSize:"11px",color:"#8a6a4a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.reason}</div>}
+                    </div>
+                    <button onClick={()=>{setCpl({type:c.type||"",kinds:c.kinds||[],dishes:c.dishes||[],photo:c.photo||null,
+                        reason:c.reason||"",attitude:c.attitude||"",adjust:c.adjust||"",treat:c.treat||""});setCplIdx(i);}}
+                      style={{fontSize:"11px",background:"#8a5210",color:"#fff",border:"none",borderRadius:"6px",padding:"5px 10px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>編輯</button>
+                    <button onClick={()=>{ if(!window.confirm("刪掉這一筆客訴紀錄?")) return;
+                        setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,complaints:(x.complaints||[]).filter((_,j)=>j!==i)}));
+                        setCplIdx(null); }}
+                      style={{fontSize:"11px",background:"transparent",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"6px",padding:"5px 8px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>刪</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(g.complaints||[]).length>0&&cplIdx==null&&(
+              <button onClick={()=>{
+                  setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
+                  setCplOpen(false);
+                }}
+                style={{width:"100%",marginTop:"8px",padding:"11px",borderRadius:"10px",background:"#8a6a4a",border:"none",color:"#fff",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>
+                僅收起來（已有 {(g.complaints||[]).length} 筆客訴，不再新增）
+              </button>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {pickArchiveType&&createPortal(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div style={{background:"#f0e8d8",borderRadius:"16px",padding:"20px",width:"280px",border:"1px solid #d0c0a8",textAlign:"center"}}>
+            <div style={{fontSize:"15px",color:"#8a5210",fontWeight:"700",marginBottom:"8px"}}>選擇封存類型</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"10px",marginBottom:"12px"}}>
+              <button onClick={()=>{setPendingArchiveType("booking");setPickArchiveType(false);setPickStaff(true);}}
+                style={{padding:"14px",borderRadius:"12px",background:"#dfeadf",border:"1px solid #7ab87a",color:"#2a7a4a",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
+                📁 訂位封存
+                <div style={{fontSize:"13px",color:"#4a7a4a",marginTop:"4px"}}>整組訂位結束，隱藏表格</div>
+              </button>
+              <button onClick={()=>{setPickArchiveType(false);openArchive();}}
+                style={{padding:"14px",borderRadius:"12px",background:"#e8e8f8",border:"1px solid #a0a0d0",color:"#5a5aa8",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
+                🖨 餐點封存（可拍照）
+                <div style={{fontSize:"13px",color:"#6a6aaa",marginTop:"4px"}}>已KEY需改單，訂單留在表上、附POS照片</div>
+              </button>
+              <button onClick={()=>{setPendingArchiveType("onsite");setPickArchiveType(false);setPickStaff(true);}}
+                style={{padding:"14px",borderRadius:"12px",background:"#f5ead8",border:"1px solid #8a6a4a",color:"#8a5a20",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
+                🍽 標記現場點餐
+                <div style={{fontSize:"13px",color:"#aa8a6a",marginTop:"4px"}}>顯示「現點」，不隱藏，需手動封存</div>
+              </button>
+            </div>
+            <button onClick={()=>{setPickArchiveType(false);setPendingStatus("");}}
+              style={{width:"100%",padding:"9px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"13px",cursor:"pointer"}}>取消</button>
+          </div>
+        </div>
+      ,document.body)}
+      {pickStaff&&createPortal(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:"#f0e8d8",borderRadius:"16px",padding:"20px",width:"260px",border:"1px solid #d0c0a8"}}>
+            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"4px"}}>{pendingStatus}</div>
+            <div style={{fontSize:"13px",color:"#7a5c3e",marginBottom:"12px"}}>選擇操作人員</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+              {staff.map(name=>(
+                <button key={name} onClick={()=>confirmStatus(name)}
+                  style={{padding:"10px",borderRadius:"10px",background:"#ede2d0",border:"1px solid #d0c0a8",color:"#8a5210",fontSize:"13px",cursor:"pointer",fontWeight:"600"}}>
+                  {name}
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>{setPickStaff(false);setPendingStatus("");}}
+              style={{width:"100%",padding:"9px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"13px",cursor:"pointer",marginTop:"10px"}}>
+              取消
+            </button>
+          </div>
+        </div>
+      ,document.body)}
+      {archModal&&createPortal(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px"}} onClick={()=>!archBusy&&setArchModal(false)}>
+          <div style={{background:"#f0e8d8",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"320px",border:"1px solid #d0c0a8"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"15px",color:"#8a5210",fontWeight:"700",marginBottom:"3px"}}>📦 封存這筆訂單</div>
+            <div style={{fontSize:"11px",color:"#9a7c5a",marginBottom:"12px"}}>{g.name}（{g.date} {g.time}）</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",fontWeight:"700",marginBottom:"4px"}}>封存日期時間</div>
+            <input value={archTime} onChange={e=>setArchTime(e.target.value)} placeholder="2026/06/28 20:21"
+              style={{width:"100%",padding:"10px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#fff",color:"#5a3a28",fontSize:"14px",marginBottom:"4px",boxSizing:"border-box"}}/>
+            <div style={{fontSize:"11px",color:"#c06030",marginBottom:"12px",fontWeight:"700"}}>⚠ 請改成「POS 照片上」的時間，不是現在時間</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",fontWeight:"700",marginBottom:"6px"}}>POS 照片（選填）</div>
+            {archPhoto ? (
+              <div style={{position:"relative",marginBottom:"12px"}}>
+                <img src={archPhoto} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
+                <button onClick={()=>setArchPhoto(null)} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
+              </div>
+            ) : (
+              <label style={{display:"block",textAlign:"center",padding:"14px",borderRadius:"8px",border:"1.5px dashed #c0a880",background:"#faf4e8",color:"#9a6a30",fontSize:"13px",fontWeight:"700",cursor:"pointer",marginBottom:"12px"}}>
+                📷 拍照 / 選照片
+                <input type="file" accept="image/*" onChange={onPickPhoto} style={{display:"none"}}/>
+              </label>
+            )}
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setArchModal(false)} disabled={archBusy}
+                style={{flex:1,padding:"11px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={confirmArchive} disabled={archBusy}
+                style={{flex:2,padding:"11px",borderRadius:"10px",background:archBusy?"#b0a088":"#8a6a4a",border:"none",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:archBusy?"default":"pointer"}}>{archBusy?"處理中…":"確認封存 →"}</button>
+            </div>
+          </div>
+        </div>
+      ,document.body)}
+      {archStaffPick&&<StaffPicker staffList={staffList} onSelect={n=>finalizeArchive(n)} onClose={()=>{setArchStaffPick(false);setArchPending(null);}}/>}
+    </div>
+  );
+}
+
+
+
+// ─── COLLECTOR CELL ──────────────────────────────────────────────────────────
+function CollectorCell({ g, onSave, staffList }) {
+  const [open, setOpen] = useState(false);
+  const collector = g.collector || "";
+  const names = (staffList&&staffList.length)?staffList:DEFAULT_STAFF;
+  return (
+    <div style={{position:"relative",textAlign:"center"}}>
+      {open&&<div style={{position:"fixed",inset:0,zIndex:99}} onClick={()=>setOpen(false)}/>}
+      <div onClick={(e)=>{e.stopPropagation();setOpen(p=>!p);}} style={{cursor:"pointer",fontSize:"13px",color:collector?"#8a5210":"#d8c8b0",padding:"2px 4px"}}>
+        {collector||"選擇"}
+      </div>
+      {open&&(
+        <div style={{position:"fixed",top:"50%",left:"50%",transform:"translate(-50%,-50%)",zIndex:300,background:"#f0e8d8",border:"1px solid #d0c0a8",borderRadius:"10px",padding:"6px",minWidth:"100px",boxShadow:"0 4px 20px rgba(0,0,0,0.5)"}}>
+          {names.map(name=>(
+            <div key={name} onClick={()=>{onSave(g.id,"collector",name);setOpen(false);}}
+              style={{padding:"8px 12px",cursor:"pointer",fontSize:"13px",color:"#8a5210",borderRadius:"6px",background:collector===name?"#ede2d0":"transparent"}}
+              onMouseEnter={e=>e.currentTarget.style.background="#ede2d0"}
+              onMouseLeave={e=>e.currentTarget.style.background=collector===name?"#ede2d0":"transparent"}>
+              {name}
+            </div>
+          ))}
+          <div onClick={()=>{onSave(g.id,"collector","");setOpen(false);}}
+            style={{padding:"6px 12px",cursor:"pointer",fontSize:"13px",color:"#7a3030",borderTop:"1px solid #d8c8b0",marginTop:"4px"}}>清除</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+const BLANK_G = {name:"",phone:"",date:"",time:"",headcount:"",bookDate:"",deposit:"",depositDate:"",collector:"",takeout:false,takeoutQty:"",gender:"",maiNote:"",noteLogs:[],
+  lineNotified:false,menuReminded:false,keyed:false,archived:false,cancelled:false,refundSigned:false,
+  note:"",code:"",orders:[],memberType:"",disabledItems:[],locked:false,isVip:false};
+
+const DEMO = [
+  {...BLANK_G,id:"g1",name:"陳's",phone:"0903667068",date:"11/5",time:"11:00",headcount:"12p1s1c",bookDate:"11/1",deposit:"1400",depositDate:"現 11/3",collector:"NI",lineNotified:true,code:"112",memberType:"existing",orders:[]},
+  {...BLANK_G,id:"g2",name:"廖's",phone:"0912629294",date:"4/29",time:"18:30",headcount:"7p",bookDate:"4/16",deposit:"2400",depositDate:"4/14",code:"287",memberType:"none",orders:[]},
+  {...BLANK_G,id:"g3",name:"謝's",phone:"0918524568",date:"5/3", time:"12:30",headcount:"6p2c",code:"394",memberType:"new",orders:[]},
+];
+
+
+function HeadcountCell({ g, onSave, setGroups }) {
+  const [open, setOpen] = useState(false);
+  const h = (g.headcount||"").toLowerCase();
+  const a = parseInt((h.match(/(\d+)p/)||[])[1])||0;
+  const ch = parseInt((h.match(/(\d+)c/)||[])[1])||0;
+  const s = parseInt((h.match(/(\d+)s/)||[])[1])||0;
+  const [eA,setEA]=useState(String(a||""));
+  const [eC,setEC]=useState(String(ch||""));
+  const [eS,setES]=useState(String(s||""));
+  const openEdit=()=>{ setEA(String(a||""));setEC(String(ch||""));setES(String(s||""));setOpen(true); };
+  const saveHC=()=>{
+    const pa=parseInt(eA)||0,pc=parseInt(eC)||0,ps=parseInt(eS)||0;
+    const hc=[pa>0?pa+"p":"",pc>0?pc+"c":"",ps>0?ps+"s":""].filter(Boolean).join("");
+    onSave(g.id,"headcount",hc);
+    setOpen(false);
+  };
+  const toggleVip=()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,isVip:!x.isVip}));
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"3px"}}>
+      <div onClick={openEdit} style={{cursor:"pointer",fontSize:"14px",color:"#2e2010",fontWeight:"600"}}>
+        {g.headcount||"—"}
+      </div>
+      {g.takeout&&(
+        <div title={`外帶 ${g.takeoutQty} 份主菜・訂金 $${(+g.takeoutQty||0)*100}`}
+          style={{fontSize:"14px",fontWeight:"800",borderRadius:"5px",padding:"2px 9px",background:"#c9752a",color:"#fff",whiteSpace:"nowrap"}}>
+          外帶 {g.takeoutQty}份
+        </div>
+      )}
+      <div onClick={toggleVip} title="包廂"
+        style={{cursor:"pointer",fontSize:g.isVip?"14px":"9px",fontWeight:g.isVip?"800":"700",borderRadius:"5px",padding:g.isVip?"2px 9px":"1px 5px",
+          background:g.isVip?"#8a5ab4":"#efe8dc",color:g.isVip?"#fff":"#b0a290"}}>
+        {g.isVip?"包廂":"包"}
+      </div>
+      {open&&(
+        <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)"}} onClick={()=>setOpen(false)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"18px",width:"260px"}} onClick={ev=>ev.stopPropagation()}>
+            <div style={{fontSize:"13px",color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",textAlign:"center"}}>修改人數</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"12px"}}>
+              <div style={{flex:2}}>
+                <div style={{fontSize:"10px",color:"#7a5c3e",marginBottom:"3px",textAlign:"center"}}>大人 P</div>
+                <input type="number" autoFocus value={eA} onChange={e=>setEA(e.target.value)}
+                  style={{width:"100%",padding:"10px 4px",fontSize:"18px",fontWeight:"700",textAlign:"center",border:"1.5px solid #c8b89c",borderRadius:"10px",background:"#fff",color:"#2e2010"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"10px",color:"#7a5c3e",marginBottom:"3px",textAlign:"center"}}>兒童椅 C</div>
+                <select value={eC} onChange={e=>setEC(e.target.value)} style={{width:"100%",padding:"10px 2px",fontSize:"15px",textAlign:"center",border:"1.5px solid #c8b89c",borderRadius:"10px",background:"#fff",color:"#2e2010"}}>
+                  {["",0,1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"10px",color:"#7a5c3e",marginBottom:"3px",textAlign:"center"}}>餐具 S</div>
+                <select value={eS} onChange={e=>setES(e.target.value)} style={{width:"100%",padding:"10px 2px",fontSize:"15px",textAlign:"center",border:"1.5px solid #c8b89c",borderRadius:"10px",background:"#fff",color:"#2e2010"}}>
+                  {["",0,1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            </div>
+            <button onClick={saveHC} style={{width:"100%",padding:"11px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 固定國曆國定假日(每年同一天,自動適用)
+const FIXED_HOLIDAYS = ["1/1","2/28","4/4","4/5","5/1","10/10","10/25","12/25"];
+// 特殊節日(訂位會爆的日子)—— 只顯示提醒,不影響訂金/截止計算
+// 國曆固定
+const FEST_FIXED = {
+  "1/1":"元旦","2/14":"情人節","3/8":"婦女節","4/4":"兒童節/清明","4/5":"清明","5/1":"勞動節",
+  "7/7":"七夕(國曆)","8/8":"父親節","9/28":"教師節","10/10":"雙十","10/31":"萬聖節",
+  "11/11":"雙11","12/24":"平安夜","12/25":"聖誕節","12/31":"跨年",
+};
+// 農曆/浮動節日:每年日期不同,用「西元年-M/D」精準對應(2026~2028)
+const FEST_LUNAR = {
+  "2026-2/17":"除夕","2026-2/18":"春節","2026-3/3":"元宵","2026-5/10":"母親節",
+  "2026-6/19":"端午","2026-8/19":"七夕","2026-8/27":"中元","2026-9/25":"中秋","2026-10/18":"重陽",
+  "2027-2/6":"除夕","2027-2/7":"春節","2027-2/20":"元宵","2027-5/9":"母親節",
+  "2027-6/9":"端午","2027-8/8":"七夕","2027-8/16":"中元","2027-9/15":"中秋","2027-10/8":"重陽",
+  "2028-1/26":"除夕","2028-1/27":"春節","2028-2/9":"元宵","2028-5/14":"母親節",
+  "2028-5/28":"端午","2028-8/26":"七夕","2028-9/3":"中元","2028-10/3":"中秋","2028-10/26":"重陽",
+};
+function festivalOf(dateOrStr, year){
+  let m,d,y;
+  if(dateOrStr instanceof Date){ m=dateOrStr.getMonth()+1; d=dateOrStr.getDate(); y=dateOrStr.getFullYear(); }
+  else { const mm=String(dateOrStr||"").match(/(\d{1,2})\/(\d{1,2})/); if(!mm) return null; m=+mm[1]; d=+mm[2]; y=year||new Date().getFullYear(); }
+  const key=`${m}/${d}`;
+  return FEST_LUNAR[`${y}-${key}`] || FEST_FIXED[key] || null;
+}
+// 農曆假日(每年不同)由後台維護,存在 window.__customHolidays
+function isHoliday(meal){
+  const k=`${meal.getMonth()+1}/${meal.getDate()}`;
+  if(FIXED_HOLIDAYS.includes(k)) return true;
+  const custom = (typeof window!=="undefined" && window.__customHolidays) || [];
+  return custom.includes(k);
+}
+// v224:連假特例 —— 整段連假共用一個點餐截止,現行「前一天/該週週五」規則推不出來。
+// key = 用餐日(西元年-M/D)、value = 截止日(M/D,一律中午12:00)。過年沒營業所以不列。
+const DEADLINE_OVERRIDE = {
+  "2026-9/25":"9/24", "2026-9/26":"9/24", "2026-9/27":"9/24", "2026-9/28":"9/24",   // 中秋+教師節連假
+};
+function getOrderDeadline(dateStr) {
+  // dateStr "M/D" → 回傳截止 Date 或 null
+  if(!dateStr) return null;
+  const parts=dateStr.split("/"); if(parts.length<2) return null;
+  const m=parseInt(parts[0]), d=parseInt(parts[1]);
+  if(!m||!d) return null;
+  const now=new Date();
+  let yr=now.getFullYear();
+  let meal=new Date(yr,m-1,d);
+  if(meal < new Date(now.getFullYear(),now.getMonth(),now.getDate()-180)) meal=new Date(yr+1,m-1,d);
+  const ov=DEADLINE_OVERRIDE[`${meal.getFullYear()}-${m}/${d}`];   // 連假特例優先於下面的一般規則
+  if(ov){
+    const om=+ov.split("/")[0], od=+ov.split("/")[1];
+    const oy=meal.getFullYear()-(om>m?1:0);      // 截止日落在前一年(跨年連假)
+    return new Date(oy,om-1,od,12,0,0);
+  }
+  const dow=meal.getDay(); // 0=日 1=一 ... 6=六
+  let deadline=new Date(meal);
+  if(isHoliday(meal)){ // 國定假日視為平日:前一天12:00
+    deadline.setDate(meal.getDate()-1);
+  } else if(dow>=2&&dow<=5){ // 週二~五:前一天12:00
+    deadline.setDate(meal.getDate()-1);
+  } else if(dow===6||dow===0){ // 週六、日:該週週五12:00
+    const back=dow===6?1:2;
+    deadline.setDate(meal.getDate()-back);
+  } else if(dow===1){ // 週一:前一天(週日)12:00
+    deadline.setDate(meal.getDate()-1);
+  }
+  deadline.setHours(12,0,0,0);
+  return deadline;
+}
+function deadlineText(dateStr){
+  const dl=getOrderDeadline(dateStr);
+  if(!dl) return "";
+  return `${dl.getMonth()+1}月${dl.getDate()}日 中午12:00`;
+}
+function isPastDeadline(dateStr) {
+  const dl=getOrderDeadline(dateStr);
+  if(!dl) return false;
+  return new Date() > dl;
+}
+
+function getDishSeries(name){
+  if(!name) return null;
+  // 先用 MENU 比對(找得到品項就用其分類)
+  for(const catKey in MENU){
+    const cat=MENU[catKey];
+    if(cat.items&&cat.items.some(it=>it.name&&(name===it.name||name.includes(it.name)||it.name.includes(name)))){
+      return cat.label;
+    }
+  }
+  // 關鍵字後備(換菜單下架的舊品項)
+  if(name.includes("義大利麵")||name.includes("麵")) return "Pasta 義大利麵";
+  if(name.includes("沙拉")) return "Salad 沙拉";
+  if(name.includes("燉飯")) return "Risotto 燉飯";
+  if(name.includes("披薩")||name.includes("Pizza")) return "Pizza 披薩";
+  if(name.includes("早午餐")) return "Brunch 早午餐";
+  return null;
+}
+// 日期正規化 → 一律變成「月/日」(去年份、全形轉半形、- 或 / 都通),讓上下架日期跟訂位日期一定對得上
+function normDate(s){
+  let t=(s||"").toString().trim();
+  t=t.replace(/[０-９]/g,d=>"０１２３４５６７８９".indexOf(d)+"");     // 全形數字→半形
+  t=t.replace(/[／．。\-]/g,"/");                                      // 各種分隔符→/
+  const parts=t.split("/").map(x=>x.trim()).filter(x=>x!=="");
+  if(parts.length>=2){
+    const mo=parseInt(parts[parts.length-2],10), da=parseInt(parts[parts.length-1],10);
+    if(!isNaN(mo)&&!isNaN(da)) return `${mo}/${da}`;
+  }
+  return t.replace(/^0+/,"");
+}
+
+// 電話正規化:去掉空格/破折號等,+886→0,只留數字(讓大麥匯入跟手打的比對得上)
+function normPhone(s){
+  let d=(s||"").replace(/\D/g,"");
+  if(d.startsWith("886")) d="0"+d.slice(3);
+  return d;
+}
+
+// 過用餐日「2天以上」才算要催的過期單(前一天的還在等客人回覆,不閃紅燈)
+// 封存只保留 7 天:算最後一次封存過幾天了(第6天要提醒重新封存,不然餐點訂單會消失)
+function archiveAgeDays(g){
+  if(g.archiveType!=="menu") return null;
+  const snaps=g.archiveSnaps||[];
+  const last=snaps.length?snaps[snaps.length-1].time:g.archiveTime;
+  if(!last) return null;
+  const str=String(last);
+  const t=new Date(); t.setHours(0,0,0,0);
+  let d=null;
+  const full=str.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);      // 2026/08/12 15:30
+  if(full){ d=new Date(+full[1],+full[2]-1,+full[3]); }
+  else {
+    const md=str.match(/^\s*(\d{1,2})\/(\d{1,2})/);            // 8/12
+    if(!md) return null;
+    d=new Date(t.getFullYear(),+md[1]-1,+md[2]);
+    if(d>t) d=new Date(t.getFullYear()-1,+md[1]-1,+md[2]);      // 跨年
+  }
+  d.setHours(0,0,0,0);
+  const days=Math.round((t-d)/86400000);
+  return (days<0||days>400)?null:days;                          // 解析怪怪的就不顯示
+}
+function isPastMeal2d(g){
+  if(!g.date) return false;
+  const parts=g.date.split("/").map(Number); const m=parts[0],d=parts[1];
+  if(!m||!d) return false;
+  const today=new Date(); today.setHours(0,0,0,0);
+  let meal=new Date(today.getFullYear(),m-1,d);
+  if(meal<new Date(today.getFullYear(),today.getMonth()-2,today.getDate())) meal=new Date(today.getFullYear()+1,m-1,d);
+  return (today-meal)/86400000 >= 2;
+}
+function isPastMeal(g){
+  if(!g.date) return false;
+  const parts=g.date.split("/").map(Number); const m=parts[0],d=parts[1];
+  if(!m||!d) return false;
+  const today=new Date(); today.setHours(0,0,0,0);
+  let meal=new Date(today.getFullYear(),m-1,d);
+  if(meal<new Date(today.getFullYear(),today.getMonth()-2,today.getDate())) meal=new Date(today.getFullYear()+1,m-1,d);
+  return meal<today;
+}
+
+function missedOverdue(g){
+  if(!g.missedFirst) return false;
+  return (Date.now() - g.missedFirst) > 1000*60*60*24*2; // 第一次未接超過2天仍聯絡不上
+}
+
+// 應收訂金金額:一般 人數×100;包廂 最低$1,000;外帶 主菜份數×100(無最低)
+function depositAmountOf(g){
+  const hc=(g&&g.headcount||"").toLowerCase();
+  if(g&&g.takeout){
+    const n=parseInt(String(g.takeoutQty||"").replace(/\D/g,""))||0;
+    return n*TAKEOUT_PER;
+  }
+  const p=+((hc.match(/(\d+)p/)||[])[1]||0), c=+((hc.match(/(\d+)c/)||[])[1]||0), sN=+((hc.match(/(\d+)s/)||[])[1]||0);
+  const total=(p+c+sN)||parseInt(hc)||0;
+  const amt=total*100;
+  if(g&&g.isVip) return Math.max(amt, VIP_MIN_DEPOSIT);
+  return amt;
+}
+function needsDeposit(headcount, isVip=false, takeout=false) {
+  if(takeout) return true;          // 外帶:先點餐、一定要付訂金
+  if(isVip) return true;
+  const hc = (headcount||"").toLowerCase();
+  const pM=hc.match(/(\d+)p/); const p=pM?parseInt(pM[1]):0;
+  const cM=hc.match(/(\d+)c/); const cc=cM?parseInt(cM[1]):0;
+  const sM=hc.match(/(\d+)s/); const s=sM?parseInt(sM[1]):0;
+  const total = p+cc+s || parseInt(hc) || 0;
+  return total >= 10;
+}
+
+function makeCode(existing=[]) {
+  let c; do { c=String(Math.floor(100+Math.random()*900)); } while(existing.includes(c));
+  return c;
+}
+
+function daysSinceBook(bookDate) {
+  const m = (bookDate||"").trim().match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (!m) return null;
+  const now=new Date(); now.setHours(0,0,0,0);
+  const d=new Date(now.getFullYear(),parseInt(m[1])-1,parseInt(m[2]));
+  return Math.floor((now-d)/86400000);
+}
+
+// 銀行不營業日:六、日、國定假日(含後台自訂)→ 無法對帳,不能當截止日
+function isBankOff(d){ const w=d.getDay(); return w===0 || w===6 || isHoliday(d); }
+// 訂金截止:兩條規則取「先到的」
+//   A. 訂位日算第1天,第3天中午12:00(= 訂位日+2天)   例:7/14訂 → 7/16 12:00
+//   B. 用餐日往前推,最後一個「銀行有上班日」的中午12:00  例:7/18(六)用餐 → 7/17(五) 12:00
+//   C. 用餐前1天才訂位 → 訂位後2小時內
+const WD_TXT=["日","一","二","三","四","五","六"];
+function depDeadlineOf(g){
+  const yr=new Date().getFullYear();
+  const mm=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/);
+  // 若人數後來改到需訂金,訂金起算日改用 depositFrom(改人數那天),而非原訂位日
+  const bm=(g.depositFrom||g.bookDate||"").match(/^(\d{1,2})\/(\d{1,2})$/);
+  if(!mm) return null;
+  const meal=new Date(yr,+mm[1]-1,+mm[2]);
+  // B:從用餐日前一天往前找,找到第一個銀行有上班的日子
+  let bDay=new Date(meal); bDay.setDate(meal.getDate()-1);
+  let guard=0;
+  while(isBankOff(bDay) && guard++<10){ bDay.setDate(bDay.getDate()-1); }
+  const B=new Date(bDay); B.setHours(12,0,0,0);
+  const fmt=(d)=>`${d.getMonth()+1}/${d.getDate()}（${WD_TXT[d.getDay()]}）12:00`;
+  if(!bm) return {meal,dl:B,lastMinute:false,which:"用餐日前",label:fmt(B)};
+  const book=new Date(yr,+bm[1]-1,+bm[2]);
+  const lastMinute=Math.round((meal-book)/86400000)<=1;
+  if(lastMinute) return {meal,dl:B,lastMinute:true,which:"訂位後2小時內",label:"訂位後2小時內"};
+  // A:訂位日算第1天 → 第3天中午12:00
+  const A=new Date(book); A.setDate(book.getDate()+2); A.setHours(12,0,0,0);
+  const useA = A<=B;
+  const dl = useA?A:B;
+  return {meal, dl, lastMinute:false,
+          which: useA?"訂位後3天內":"用餐日前",
+          label: fmt(dl)};
+}
+
+function depositUrgency(g) {
+  if (g.deposit||g.cancelled||g.archived||g.depositLast5||g.depositStatus==="已核對"||g.depositStatus==="待核對") return null;
+  // 用跟客人端同一套判定:包廂(isVip) 一律要訂金;人數要把 大人+小孩+嬰兒 加總
+  if (!needsDeposit(g.headcount, g.isVip, g.takeout)) return null;
+  const dd=depDeadlineOf(g);
+  if(!dd) return null;
+  const now=new Date();
+  const mealEnd=new Date(dd.meal); mealEnd.setHours(23,59,59,999);
+  if(now>mealEnd) return null;               // 用餐日已過 → 不用再催訂金(人都沒來了)
+  if(dd.lastMinute) return "urgent";         // 前1天才訂位:2小時內
+  if(now>dd.dl) return "overdue";            // 已過截止
+  if(dd.dl-now <= 72*3600*1000) return "urgent";  // 截止前3天內 → 黃色
+  return null;
+}
+
+// 電話檢查:台灣手機 09開頭10碼;市話 02/03/04.. 9~10碼
+function phoneWarn(raw){
+  const d=String(raw||"").replace(/\D/g,"");
+  if(!d) return "";                                   // 空的不管
+  if(/[A-Za-z]/.test(String(raw))) return "含英文字";
+  if(d.startsWith("09")) return d.length===10?"":`手機應為10碼（現在${d.length}碼）`;
+  if(/^0[2-8]/.test(d)) return (d.length>=9&&d.length<=10)?"":`市話應為9~10碼（現在${d.length}碼）`;
+  if(d.startsWith("886")) return "";                  // 國碼開頭放行
+  return "開頭不是 09 或 0X";
+}
+function EditCell({g,field,w,onSave}) {
+  const [v,setV]=useState(g[field]||"");
+  useEffect(()=>setV(g[field]||""),[g[field]]);
+  const warn=field==="phone"?phoneWarn(v):"";
+  return (
+    <div style={{position:"relative",width:w,minWidth:0}}>
+      <input value={v} onChange={e=>setV(e.target.value)} onBlur={()=>onSave(g.id,field,v)}
+        style={{width:"100%",background:"transparent",border:"none",borderBottom:`1px solid ${warn?"#c02020":"#c8b89c"}`,color:warn?"#c02020":"#4a3520",
+          fontSize:"13px",padding:"2px 3px",fontFamily:"'Noto Sans TC',sans-serif",outline:"none",minWidth:0}}/>
+      {warn&&<div title={`電話可能有誤：${warn}`} style={{fontSize:"9px",color:"#c02020",fontWeight:"800",lineHeight:"1.2",marginTop:"1px"}}>⚠ {warn}</div>}
+    </div>
+  );
+}
+
+// ─── 品項上下架(按日期關閉餐點,客人該日點不到) ─────────────────────────────
+function ItemsOffPage({ onBack }) {
+  const today=new Date();
+  const [data,setData]=useState({});           // {"7/12":["p7",...]}
+  const [date,setDate]=useState(`${today.getMonth()+1}/${today.getDate()}`);
+  const [dateEnd,setDateEnd]=useState("");      // 空=只關單日;有值=關到這天(區間)
+  const [q,setQ]=useState("");
+  const [cat,setCat]=useState("pasta");
+  const [sData,setSData]=useState({});          // 季節檔期 {itemId:{from,to}}
+  const [sFrom,setSFrom]=useState("");
+  const [sTo,setSTo]=useState("");
+  useEffect(()=>{
+    FS.loadDoc("menuOff").then(v=>{ if(v) setData(v); });
+    const u=FS.subscribeDoc("menuOff", v=>{ if(v) setData(v); });
+    FS.loadDoc("menuSeason").then(v=>{ if(v) setSData(v); });
+    const u2=FS.subscribeDoc("menuSeason", v=>{ if(v) setSData(v); });
+    return ()=>{ u&&u(); u2&&u2(); };
+  },[]);
+  const dkey=normDate(date);
+  // 依「起~迄」列出要套用的所有日期(M/D)。跨月用今年年份推算,最多 90 天防呆
+  const rangeKeys=(()=>{
+    if(!dateEnd.trim()) return [dkey];
+    const yr=today.getFullYear();
+    const p=(s)=>{ const [m,d]=normDate(s).split("/").map(n=>parseInt(n,10)); return (isNaN(m)||isNaN(d))?null:new Date(yr,m-1,d); };
+    let a=p(date), b=p(dateEnd);
+    if(!a||!b) return [dkey];
+    if(b<a){ const t=a; a=b; b=t; }
+    const out=[]; const cur=new Date(a);
+    for(let i=0;i<90 && cur<=b;i++){ out.push(`${cur.getMonth()+1}/${cur.getDate()}`); cur.setDate(cur.getDate()+1); }
+    return out;
+  })();
+  const offList=data[dkey]||[];
+  const offSet=new Set(offList);
+  const saveData=(nd)=>{ setData(nd); FS.saveDoc("menuOff",nd); };
+  const toggle=(id)=>{
+    const willClose=!offSet.has(id);   // 依起始日的狀態決定整段要關還是開
+    const nd={...data};
+    rangeKeys.forEach(k=>{
+      const cur=new Set(nd[k]||[]);
+      willClose?cur.add(id):cur.delete(id);
+      if(cur.size===0) delete nd[k]; else nd[k]=[...cur];
+    });
+    saveData(nd);
+  };
+  const allItems=[...FOOD_CATS,...DRINK_CATS].flatMap(c=>(MENU[c]?.items||[]).map(i=>({...i,_cat:c,_catLabel:MENU[c].label||c})));
+  const results=q.trim()?allItems.filter(i=>i.name.includes(q.trim())):[];
+  const dates=Object.keys(data).filter(k=>Array.isArray(data[k])&&data[k].length>0);
+  const chip=(on)=>({padding:"6px 12px",borderRadius:"8px",border:"none",fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#b07840":"#efe6d4",color:on?"#fff":"#6a4a2e"});
+  const ItemRow=({it})=>{
+    const off=offSet.has(it.id);
+    return (
+      <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 6px",borderTop:"1px solid #f0e8d6"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:off?"#a09070":"#3a2a1a",textDecoration:off?"line-through":"none"}}>{it.name}</div>
+          <div style={{fontSize:"10px",color:"#8a6a4a"}}>{it._catLabel||""} {it.normal?`$${it.normal}`:""}</div>
+        </div>
+        <button onClick={()=>toggle(it.id)}
+          style={{padding:"7px 12px",borderRadius:"8px",border:"none",fontSize:"12px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",
+            background:off?"#c04030":"#dfeadf",color:off?"#fff":"#1a6a3a"}}>
+          {off?"已關閉(點恢復)":"關閉此品項"}
+        </button>
+      </div>
+    );
+  };
+  return (
+    <div style={{minHeight:"100vh",background:"#f5efe2",display:"flex",flexDirection:"column"}}>
+      <div className="np" style={{padding:"8px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>🚫 品項上下架（按日期）</div>
+        <div style={{width:"50px"}}/>
+      </div>
+      <div style={{overflowY:"auto",flex:1,padding:"12px"}}>
+        <div style={{background:"#fdfaf4",border:"1px solid #e0d5c0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+          <div style={{fontSize:"12px",fontWeight:"700",color:"#5a3a28",marginBottom:"5px"}}>選日期（該日訂位的客人點不到關閉的品項）</div>
+          <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
+            <input value={date} onChange={e=>setDate(e.target.value)} placeholder="起 7/12"
+              style={{width:"92px",padding:"9px 8px",borderRadius:"9px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"15px",fontWeight:"800",textAlign:"center"}}/>
+            <span style={{color:"#8a6a4a",fontWeight:"800"}}>~</span>
+            <input value={dateEnd} onChange={e=>setDateEnd(e.target.value)} placeholder="迄（可空）"
+              style={{width:"92px",padding:"9px 8px",borderRadius:"9px",border:"1.5px solid #d8c8b0",background:"#fff",color:"#2e2010",fontSize:"15px",fontWeight:"800",textAlign:"center"}}/>
+            {dateEnd.trim()&&<button onClick={()=>setDateEnd("")} style={{...chip(false),padding:"6px 8px"}}>只關單日</button>}
+          </div>
+          <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginTop:"6px"}}>
+            {[0,1,2].map(d=>{ const t=new Date(); t.setDate(t.getDate()+d); const s=`${t.getMonth()+1}/${t.getDate()}`;
+              return <button key={d} style={chip(dkey===s&&!dateEnd.trim())} onClick={()=>{setDate(s);setDateEnd("");}}>{d===0?"今天":d===1?"明天":"後天"} {s}</button>; })}
+          </div>
+          <div style={{marginTop:"6px",fontSize:"11px",color:dateEnd.trim()?"#b05a10":"#8a6a4a",fontWeight:dateEnd.trim()?"800":"400"}}>
+            {dateEnd.trim()
+              ? `📆 這段共 ${rangeKeys.length} 天都會套用:${rangeKeys[0]} ~ ${rangeKeys[rangeKeys.length-1]}（關/開會一次套整段）`
+              : "只關這一天。要一次關連續幾天,右邊「迄」填結束日期。"}
+          </div>
+          {dates.length>0&&(
+            <div style={{marginTop:"8px",fontSize:"11px",color:"#8a6a4a"}}>
+              有設定的日期:{dates.map(k=><button key={k} style={{...chip(dkey===k),padding:"3px 8px",marginRight:"5px",fontSize:"11px"}} onClick={()=>{setDate(k);setDateEnd("");}}>{k}（{data[k].length}）</button>)}
+            </div>
+          )}
+        </div>
+
+        {offList.length>0&&(
+          <div style={{background:"#fbe0e0",border:"1px solid #d09090",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+            <div style={{fontSize:"12px",fontWeight:"800",color:"#b03030",marginBottom:"6px"}}>🚫 {dkey} 已關閉 {offList.length} 項（客人看不到、點不到）</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:"6px"}}>
+              {offList.map(id=>{ const it=findItem(id);
+                return <span key={id} style={{display:"inline-flex",alignItems:"center",gap:"5px",background:"#fff",border:"1px solid #d09090",borderRadius:"7px",padding:"4px 8px",fontSize:"12px",color:"#7a3030",fontWeight:"700"}}>
+                  {it?it.name:id}
+                  <button onClick={()=>toggle(id)} style={{border:"none",background:"#c04030",color:"#fff",borderRadius:"5px",fontSize:"10px",padding:"1px 6px",cursor:"pointer",fontWeight:"800"}}>恢復</button>
+                </span>; })}
+            </div>
+          </div>
+        )}
+
+        {(()=>{
+          const seasonItems=[...FOOD_CATS,...DRINK_CATS].flatMap(c=>(MENU[c]?.items||[]).filter(i=>i.season).map(i=>({...i,_catLabel:MENU[c].label})));
+          if(seasonItems.length===0) return null;
+          const applyAll=()=>{
+            if(!sFrom.trim()||!sTo.trim()){ window.alert("上架和下架日期都要填(例如 7/15 和 8/31)"); return; }
+            const nd={...sData};
+            seasonItems.forEach(i=>{ nd[i.id]={from:normDate(sFrom),to:normDate(sTo)}; });
+            setSData(nd); FS.saveDoc("menuSeason",nd);
+          };
+          const clearOne=(id)=>{ const nd={...sData}; delete nd[id]; setSData(nd); FS.saveDoc("menuSeason",nd); };
+          return (
+            <div style={{background:"#fdf6ec",border:"1.5px solid #d8b060",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+              <div style={{fontSize:"13px",fontWeight:"800",color:"#a06a10",marginBottom:"4px"}}>🍈 季節限定品項（自動上下架）</div>
+              <div style={{fontSize:"11px",color:"#8a6a4a",marginBottom:"8px",lineHeight:"1.6"}}>
+                設定上架~下架日期後,<b>用餐日期在檔期內</b>的客人才看得到、點得到;檔期一過自動下架,不用手動關。
+              </div>
+              <div style={{fontSize:"11px",color:"#a04020",marginBottom:"8px",lineHeight:"1.6",background:"#fce8e0",borderRadius:"7px",padding:"6px 9px",fontWeight:"700"}}>
+                🍈 榴槤為國外進口,可能臨時無法供應 —— 缺貨當天請直接在下面「🔍搜尋」找到該品項按「關閉此品項」(選當天日期),客人就點不到了。
+              </div>
+              <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginBottom:"8px"}}>
+                <span style={{fontSize:"12px",fontWeight:"700",color:"#5a3a28"}}>檔期</span>
+                <input value={sFrom} onChange={e=>setSFrom(e.target.value)} placeholder="上架 7/15"
+                  style={{width:"92px",padding:"8px",borderRadius:"9px",border:"1.5px solid #d8b060",background:"#fff",color:"#2e2010",fontSize:"14px",fontWeight:"800",textAlign:"center"}}/>
+                <span style={{color:"#8a6a4a",fontWeight:"800"}}>~</span>
+                <input value={sTo} onChange={e=>setSTo(e.target.value)} placeholder="下架 8/31"
+                  style={{width:"92px",padding:"8px",borderRadius:"9px",border:"1.5px solid #d8b060",background:"#fff",color:"#2e2010",fontSize:"14px",fontWeight:"800",textAlign:"center"}}/>
+                <button onClick={applyAll}
+                  style={{padding:"8px 14px",borderRadius:"9px",border:"none",background:"#c08a20",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>套用到全部季節品項</button>
+              </div>
+              {seasonItems.map(i=>{
+                const w=sData[i.id];
+                return (
+                  <div key={i.id} style={{display:"flex",alignItems:"center",gap:"8px",padding:"7px 4px",borderTop:"1px solid #f0e2c8"}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:"12px",fontWeight:"700",color:"#3a2a1a"}}>{i.name}</div>
+                      <div style={{fontSize:"10px",color:"#8a6a4a"}}>{i._catLabel}</div>
+                    </div>
+                    {w?(
+                      <span style={{fontSize:"11px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",borderRadius:"6px",padding:"3px 8px",whiteSpace:"nowrap"}}>🟢 {w.from}~{w.to}</span>
+                    ):(
+                      <span style={{fontSize:"11px",fontWeight:"800",color:"#a09070",background:"#f0e8d8",borderRadius:"6px",padding:"3px 8px",whiteSpace:"nowrap"}}>未上架</span>
+                    )}
+                    {w&&<button onClick={()=>clearOne(i.id)} style={{border:"none",background:"#c04030",color:"#fff",borderRadius:"6px",fontSize:"10px",padding:"3px 8px",cursor:"pointer",fontWeight:"800"}}>下架</button>}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
+        <div style={{background:"#fdfaf4",border:"1px solid #e0d5c0",borderRadius:"12px",padding:"12px"}}>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 搜尋品項,例如:鮭魚"
+            style={{width:"100%",boxSizing:"border-box",padding:"11px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"15px",fontWeight:"700",marginBottom:"8px"}}/>
+          {q.trim()?(
+            results.length>0
+              ? <>{results.map(it=><ItemRow key={it.id} it={it}/>)}</>
+              : <div style={{fontSize:"12px",color:"#a09070",padding:"10px 0",textAlign:"center"}}>找不到「{q}」,換個關鍵字試試</div>
+          ):(
+            <>
+              <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"4px"}}>
+                {[...FOOD_CATS,...DRINK_CATS].map(c=>(
+                  <button key={c} style={chip(cat===c)} onClick={()=>setCat(c)}>{MENU[c]?.label||c}</button>
+                ))}
+              </div>
+              {(MENU[cat]?.items||[]).map(it=><ItemRow key={it.id} it={{...it,_catLabel:MENU[cat]?.label}}/>)}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 客訴中心:統計 + 清單 + 新增(散客/Google)────────────────────────────
+function CplCenterPage({ onBack, groups, setGroups, walkinCpl, setWalkinCpl }) {
+  const setGroupsCpl=(gid,ci,patch)=>{
+    setGroups(p=>p.map(g=>g.id!==gid?g:{...g,complaints:(g.complaints||[]).map((c,i)=>i===ci?{...c,...patch}:c)}));
+  };
+  const [tab,setTab]=useState("stats");
+  const [fType,setFType]=useState("");
+  const [fSrc,setFSrc]=useState("");
+  const [addOpen,setAddOpen]=useState(false);
+  const [bigPic,setBigPic]=useState(null);
+  const [q,setQ]=useState("");                    // 搜尋:電話或姓名
+  const [openIds,setOpenIds]=useState({});        // 展開的卡片
+  const [editRec,setEditRec]=useState(null);      // 編輯中(walkinCpl 限定)
+  const [f,setF]=useState({name:"",phone:"",source:"現場餐評",type:"",kinds:[],dishes:[],photo:null,attitudes:[],attitude:"",reason:"",adjust:"",treat:""});
+  // 匯總:大訂餐評(訂位上的) + 散客/Google(walkinCpl)
+  const all=[];
+  (groups||[]).forEach(g=>(g.complaints||[]).forEach((c,ci)=>all.push({...c,source:c.source||"大訂餐評",_who:g.name,_phone:g.phone,_when:`${g.date||""} ${g.time||""}`,_key:`g_${g.id}_${ci}`,_gid:g.id,_ci:ci})));
+  (walkinCpl||[]).forEach(c=>all.push({...c,source:c.source||"現場餐評",_who:c.name,_phone:c.phone,_when:"",_key:`w_${c.id}`,_wid:c.id}));
+  const ymOf=(d)=>{const m=(d||"").match(/^(\d{1,2})\//);return m?+m[1]:0;};
+  const nowM=new Date().getMonth()+1;
+  const thisM=all.filter(c=>ymOf(c.date)===nowM), lastM=all.filter(c=>ymOf(c.date)===(nowM===1?12:nowM-1));
+  const byType={}; all.forEach(c=>{ const ts=Array.isArray(c.types)&&c.types.length?c.types:(c.type?[c.type]:[]); ts.forEach(t=>byType[t]=(byType[t]||0)+1); });
+  const bySrc={};  all.forEach(c=>{ bySrc[c.source]=(bySrc[c.source]||0)+1; });
+  const dishCnt={};
+  all.forEach(c=>(c.dishes||[]).forEach(d=>{ const id=typeof d==="object"?d.id:d; const it=findItem(id); const nm=it?it.name:id; dishCnt[nm]=(dishCnt[nm]||0)+1; }));
+  const topDishes=Object.entries(dishCnt).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  // ── 近期要留意:主動抓出值得注意的訊號 ──
+  const alerts=[];
+  if(thisM.length>lastM.length && lastM.length>0)
+    alerts.push({t:`本月客訴 ${thisM.length} 件，比上月(${lastM.length})多 ${thisM.length-lastM.length} 件`, s:"整體在上升，留意是不是哪裡出狀況"});
+  // 同一道菜被客訴 >=3 次
+  Object.entries(dishCnt).filter(([,n])=>n>=3).sort((a,b)=>b[1]-a[1]).forEach(([nm,n])=>
+    alerts.push({t:`「${nm}」被客訴 ${n} 次`, s:"不是偶發，建議跟廚房檢討配方或出餐"}));
+  // 同一類型本月 >=3 件
+  const typeThisM={}; thisM.forEach(c=>{if(c.type)typeThisM[c.type]=(typeThisM[c.type]||0)+1;});
+  Object.entries(typeThisM).filter(([,n])=>n>=3).forEach(([tp,n])=>
+    alerts.push({t:`本月「${tp}」客訴 ${n} 件`, s:tp==="服務"?"可能是人力或訓練，對照排班看看":tp==="環境"?"清潔或設備問題，儘快處理":"集中在同一類，值得追"}));
+  // 同一支電話 >=2 次(慣性客訴戶)
+  const phoneCnt={}; all.forEach(c=>{const p=normPhone(c._phone);if(p)phoneCnt[p]=(phoneCnt[p]||0)+1;});
+  Object.entries(phoneCnt).filter(([,n])=>n>=2).forEach(([p,n])=>{
+    const who=(all.find(c=>normPhone(c._phone)===p)||{})._who||p;
+    alerts.push({t:`${who} 累積 ${n} 次客訴`, s:"同一位客人多次，接電話前先查紀錄、應對升級"});
+  });
+  // 待招待:只顯示「用餐日在今天起 7 天內」有訂位的客訴客人(前1週訂位再顯示)
+  const _tToday=new Date(); _tToday.setHours(0,0,0,0);
+  const _t7=new Date(_tToday); _t7.setDate(_t7.getDate()+7);
+  const upcomingByPhone={};
+  (groups||[]).forEach(g=>{
+    if(g.cancelled||g.archived) return;
+    const p2=normPhone(g.phone); if(!p2||!g.date) return;
+    const mm=g.date.match(/^(\d{1,2})\/(\d{1,2})$/); if(!mm) return;
+    const md=new Date(_tToday.getFullYear(),+mm[1]-1,+mm[2]);
+    if(md>=_tToday&&md<=_t7){ if(!upcomingByPhone[p2]||md<upcomingByPhone[p2]._d) upcomingByPhone[p2]={_d:md,date:g.date,time:g.time||""}; }
+  });
+  const pendingTreats=all
+    .filter(c=>c.treat&&String(c.treat).trim()&&!c.treatDone&&upcomingByPhone[normPhone(c._phone)])
+    .map(c=>({...c,_visit:upcomingByPhone[normPhone(c._phone)]}));
+  const patchCpl=(rec,patch)=>{
+    if(rec._wid!==undefined){
+      const nl=(walkinCpl||[]).map(c=>c.id===rec._wid?{...c,...patch}:c);
+      setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+    } else if(rec._gid!==undefined){
+      setGroupsCpl(rec._gid, rec._ci, patch);
+    }
+  };
+  const markTreatNoted=(rec)=>{
+    const nm=window.prompt("誰備註的?(填名字,例如已寫在訂位單上)"); if(nm===null) return;
+    const now=new Date(); patchCpl(rec,{treatNoted:true,treatNotedBy:nm,treatNotedAt:`${now.getMonth()+1}/${now.getDate()}`});
+  };
+  const markTreatDone=(rec)=>{
+    const nm=window.prompt("誰送的?(填名字)"); if(nm===null) return;
+    const now=new Date(); patchCpl(rec,{treatDone:true,treatBy:nm,treatAt:`${now.getMonth()+1}/${now.getDate()}`});
+  };
+  const [treatOpen,setTreatOpen]=useState(true);
+  const qq=q.trim();
+  const matchQ=(c)=>{
+    if(!qq) return true;
+    const dishBits=[];
+    (c.dishes||[]).forEach(d=>{
+      if(typeof d==="object"){
+        const it=findItem(d.id); dishBits.push(it?it.name:d.id);
+        if(d.custom) dishBits.push(d.custom);
+        if(Array.isArray(d.kinds)) dishBits.push(d.kinds.join(" "));   // 每道菜細項:味道太鹹…
+        if(d.note) dishBits.push(d.note);                             // 每道菜備註
+      } else { const it=findItem(d); dishBits.push(it?it.name:d); }
+    });
+    const hay=[c._phone,c._who,c.type,(c.types||[]).join(" "),(c.kinds||[]).join(" "),dishBits.join(" "),c.reason,c.adjust,c.treat,(c.attitudes||[]).join(" "),c.attitude].filter(Boolean).join(" ");
+    return hay.includes(qq);
+  };
+  const shown=all.filter(c=>(!fType||(Array.isArray(c.types)&&c.types.length?c.types:(c.type?[c.type]:[])).includes(fType))&&(!fSrc||c.source===fSrc)&&matchQ(c))
+    .sort((a,b)=>{const p=x=>{const m=(x.date||"0/0").split("/").map(Number);return (m[0]||0)*100+(m[1]||0);};return p(b)-p(a);});
+  const chip=(on)=>({padding:"7px 12px",borderRadius:"8px",border:`1.5px solid ${on?"#a04020":"#c8b89c"}`,fontSize:"13px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#f0e6d4",color:on?"#fff":"#6a4a2e"});
+  const srcIcon=(k)=>{const s2=CPL_SOURCES.find(x=>x.k===k);return s2?<s2.Icon size={14} color="#8a5a30"/>:null;};
+  const Bar=({label,n,total,color})=>(
+    <div style={{marginBottom:"7px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:"12px",color:"#5a4530",fontWeight:"700",marginBottom:"3px"}}><span>{label}</span><span>{n} 件</span></div>
+      <div style={{height:"9px",background:"#efe6d4",borderRadius:"5px",overflow:"hidden"}}>
+        <div style={{width:`${total?Math.round(n/total*100):0}%`,height:"100%",background:color,borderRadius:"5px"}}/>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{minHeight:"100vh",background:"#f5efe2",display:"flex",flexDirection:"column"}}>
+      <div className="np" style={{padding:"8px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,borderBottom:"2.5px solid #c8b89c"}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
+        <div style={{fontSize:"14px",fontWeight:"800",color:"#a04020",display:"flex",alignItems:"center",gap:"6px"}}><IcoWarn size={17} color="#a04020"/> 客訴中心</div>
+        <button onClick={()=>{const _n=new Date();setF({date:`${_n.getMonth()+1}/${_n.getDate()}`,name:"",phone:"",source:"現場餐評",type:"",kinds:[],dishes:[],photo:null,attitudes:[],attitude:"",reason:"",adjust:"",treat:""});setEditRec(null);setAddOpen(true);}}
+          style={{background:"#c02020",border:"none",borderRadius:"8px",color:"#fff",fontSize:"12px",fontWeight:"800",padding:"7px 11px",cursor:"pointer"}}>＋ 新增客訴</button>
+      </div>
+      <div style={{display:"flex",gap:"8px",padding:"10px 12px 0"}}>
+        <button style={{...chip(tab==="stats"),flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:"5px"}} onClick={()=>setTab("stats")}><IcoChart size={15} color={tab==="stats"?"#fff":"#6a4a2e"}/> 統計</button>
+        <button style={{...chip(tab==="list"),flex:1}} onClick={()=>setTab("list")}>清單（{all.length}）</button>
+      </div>
+
+      <div style={{overflowY:"auto",flex:1,padding:"12px"}}>
+        {tab==="stats"&&(<>
+          {alerts.length>0&&(
+            <div style={{background:"#fff8f0",border:"2px solid #e0a060",borderRadius:"12px",padding:"11px 12px",marginBottom:"10px"}}>
+              <div style={{fontSize:"13px",fontWeight:"800",color:"#a05a10",marginBottom:"7px",display:"flex",alignItems:"center",gap:"5px"}}><IcoWarn size={15} color="#a05a10"/> 近期要留意（{alerts.length}）</div>
+              {alerts.map((a,i)=>(
+                <div key={i} style={{padding:"6px 0",borderTop:i>0?"1px solid #f0e0c8":"none"}}>
+                  <div style={{fontSize:"13px",fontWeight:"800",color:"#8a3010"}}>• {a.t}</div>
+                  <div style={{fontSize:"11px",color:"#a06a30",marginTop:"1px",paddingLeft:"10px"}}>{a.s}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {pendingTreats.length>0&&(
+            <div style={{background:"#eef8f0",border:"2px solid #2a7a4a",borderRadius:"12px",padding:"11px 12px",marginBottom:"10px"}}>
+              <div onClick={()=>setTreatOpen(v=>!v)} style={{fontSize:"13px",fontWeight:"800",color:"#1a6a3a",marginBottom:treatOpen?"6px":"0",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px"}}>
+                <span style={{fontSize:"11px"}}>{treatOpen?"▼":"▶"}</span>
+                🎁 近 7 天回訪要招待（{pendingTreats.length}）
+                {!treatOpen&&pendingTreats.some(c=>!c.treatNoted)&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c06030",borderRadius:"5px",padding:"1px 7px"}}>{pendingTreats.filter(c=>!c.treatNoted).length} 筆未備註</span>}
+              </div>
+              {treatOpen&&(<>
+                {pendingTreats.map(c=>(
+                  <div key={c._key} style={{padding:"7px 0",borderTop:"1px solid #d8ecd8"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
+                      <span style={{fontSize:"12px",fontWeight:"900",color:"#b05a10"}}>📅 {c._visit.date} {c._visit.time}</span>
+                      <span style={{fontSize:"13px",fontWeight:"800",color:"#2a3a2a"}}>{c._who||"—"}</span>
+                      <span style={{fontSize:"11px",color:"#6a8a6a"}}>{c._phone||""}</span>
+                      {c.treatNoted&&<span style={{fontSize:"10px",fontWeight:"700",color:"#1a6a3a",background:"#d8f0dc",borderRadius:"5px",padding:"1px 6px"}}>📝 已備註（{c.treatNotedBy} {c.treatNotedAt}）</span>}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"3px"}}>
+                      <div style={{flex:1,fontSize:"12px",color:"#1a6a3a",fontWeight:"700"}}>→ 招待:{c.treat}<span style={{fontSize:"10px",color:"#8aa08a",fontWeight:"400"}}>　({c.date} 的客訴)</span></div>
+                      {!c.treatNoted&&<button onClick={()=>markTreatNoted(c)}
+                        style={{padding:"6px 10px",borderRadius:"8px",border:"1.5px solid #b07840",background:"#fff",color:"#8a5210",fontSize:"11px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>📝 已備註</button>}
+                      <button onClick={()=>markTreatDone(c)}
+                        style={{padding:"6px 10px",borderRadius:"8px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"11px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已兌現</button>
+                    </div>
+                  </div>
+                ))}
+                <div style={{fontSize:"10px",color:"#6a8a6a",marginTop:"5px"}}>📝已備註=已寫進訂位單/交接;✓已兌現=當天送完。兌現後不再顯示、下次匯入也不再提醒。</div>
+              </>)}
+            </div>
+          )}
+          <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+            <div style={{flex:1,background:"#fff",border:"2px solid #e0a080",borderRadius:"12px",padding:"12px",textAlign:"center"}}>
+              <div style={{fontSize:"11px",color:"#8a6a4a"}}>本月客訴</div>
+              <div style={{fontSize:"30px",fontWeight:"900",color:"#a04020"}}>{thisM.length}</div>
+              <div style={{fontSize:"10px",color:thisM.length>lastM.length?"#c02020":"#2a7a4a",fontWeight:"700"}}>
+                上月 {lastM.length} 件{thisM.length!==lastM.length?(thisM.length>lastM.length?` ▲${thisM.length-lastM.length}`:` ▼${lastM.length-thisM.length}`):""}
+              </div>
+            </div>
+            <div style={{flex:1,background:"#fff",border:"2px solid #c8b89c",borderRadius:"12px",padding:"12px",textAlign:"center"}}>
+              <div style={{fontSize:"11px",color:"#8a6a4a"}}>累計總數</div>
+              <div style={{fontSize:"30px",fontWeight:"900",color:"#6a4a2e"}}>{all.length}</div>
+              <div style={{fontSize:"10px",color:"#a08a70"}}>願意回訪 {all.filter(c=>(c.attitudes||[]).includes("願意回訪")).length} 件</div>
+            </div>
+          </div>
+          <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px"}}>依類型</div>
+            {CPL_TYPES.map(({k,Icon})=>(
+              <Bar key={k} label={<span style={{display:"inline-flex",alignItems:"center",gap:"5px"}}><Icon size={13} color="#8a6a4a"/>{k}</span>} n={byType[k]||0} total={all.length} color={k==="餐點"?"#c06030":k==="服務"?"#8a6ac0":k==="價格"?"#c0a030":"#3a8a5a"}/>
+            ))}
+          </div>
+          <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px",marginBottom:"10px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px"}}>依來源</div>
+            {CPL_SOURCES.map(({k,Icon})=>(
+              <Bar key={k} label={<span style={{display:"inline-flex",alignItems:"center",gap:"5px"}}><Icon size={13} color="#8a6a4a"/>{k}</span>} n={bySrc[k]||0} total={all.length} color="#b07840"/>
+            ))}
+          </div>
+          <div style={{background:"#fdfaf4",border:"1.5px solid #d8c8b0",borderRadius:"12px",padding:"12px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#6a4a2e",marginBottom:"8px",display:"flex",alignItems:"center",gap:"6px"}}><IcoFood size={15} color="#c06030"/> 最常被客訴的餐點</div>
+            {topDishes.length===0?<div style={{fontSize:"12px",color:"#a09070",textAlign:"center",padding:"8px"}}>還沒有餐點客訴紀錄</div>
+              :topDishes.map(([nm,n],i)=>(
+                <div key={nm} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:i>0?"1px solid #f0e8d6":"none"}}>
+                  <span style={{fontSize:"13px",fontWeight:"900",color:"#c06030",minWidth:"18px"}}>{i+1}</span>
+                  <span style={{flex:1,fontSize:"13px",color:"#3a2a1a",fontWeight:"700"}}>{nm}</span>
+                  <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{n} 件</span>
+                </div>
+              ))}
+          </div>
+        </>)}
+
+        {tab==="list"&&(<>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 搜 電話/姓名/餐點/原因（例如:牛排）" inputMode="search"
+            style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:"10px",border:"1.5px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"14px",marginBottom:"8px"}}/>
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"8px"}}>
+            <button style={{...chip(!fType&&!fSrc),padding:"5px 10px",fontSize:"12px"}} onClick={()=>{setFType("");setFSrc("");}}>全部</button>
+            {CPL_TYPES.map(({k,Icon})=><button key={k} style={{...chip(fType===k),padding:"5px 10px",fontSize:"12px",display:"inline-flex",alignItems:"center",gap:"4px"}} onClick={()=>setFType(fType===k?"":k)}><Icon size={13} color={fType===k?"#fff":"#8a6a4a"}/>{k}</button>)}
+            {CPL_SOURCES.map(({k,Icon})=><button key={k} style={{...chip(fSrc===k),padding:"5px 10px",fontSize:"12px",display:"inline-flex",alignItems:"center",gap:"4px"}} onClick={()=>setFSrc(fSrc===k?"":k)}><Icon size={13} color={fSrc===k?"#fff":"#8a6a4a"}/>{k}</button>)}
+          </div>
+          {shown.length===0?<div style={{textAlign:"center",padding:"40px",color:"#a09070",fontSize:"13px"}}>沒有符合的紀錄</div>
+            :shown.map((c)=>{
+              const isOpen=!!openIds[c._key];
+              const pics=[];
+              if(c.gPhoto) pics.push({src:c.gPhoto,cap:"Google 評論截圖"});
+              if(c.photo) pics.push({src:c.photo,cap:c.type||"客訴照片"});
+              (c.dishes||[]).forEach(d=>{ if(typeof d==="object"&&d.photo){ const it=findItem(d.id); pics.push({src:d.photo,cap:it?it.name:d.id}); } });
+              const dishTxt=(c.dishes||[]).map(d=>{const id=typeof d==="object"?d.id:d;const it=findItem(id);const dk=(typeof d==="object"?d.kinds:[])||[];const nt=(typeof d==="object"&&d.note)?`「${d.note}」`:"";return `${it?it.name:id}${dk.length?`（${dk.join("、")}）`:""}${nt}`;}).join("、");
+              const R=({l,v})=>v?(
+                <div style={{display:"flex",gap:"8px",padding:"4px 0",borderTop:"1px solid #f5ede0",fontSize:"12px",lineHeight:"1.65"}}>
+                  <span style={{fontWeight:"800",color:"#8a5a30",flexShrink:0,width:"52px"}}>{l}</span>
+                  <span style={{color:"#4a3520",flex:1}}>{v}</span>
+                </div>
+              ):null;
+              return (
+              <div key={c._key} style={{background:"#fff",border:"1.5px solid #e0c8b8",borderRadius:"11px",marginBottom:"7px",overflow:"hidden"}}>
+                {/* 摘要列(點了展開) */}
+                <div onClick={()=>setOpenIds(p=>({...p,[c._key]:!p[c._key]}))}
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"10px 12px",cursor:"pointer",flexWrap:"wrap"}}>
+                  <span style={{fontSize:"11px",color:"#a08a70"}}>{isOpen?"▾":"▸"}</span>
+                  <span style={{fontSize:"12px",fontWeight:"800",color:"#a04020"}}>{c.date}</span>
+                  <span style={{fontSize:"13px",fontWeight:"800",color:"#3a2a1a"}}>{c._who||"—"}</span>
+                  <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c._phone||""}</span>
+                  {(Array.isArray(c.types)&&c.types.length?c.types:(c.type?[c.type]:[])).map(t=><span key={t} style={{fontSize:"10px",fontWeight:"800",background:"#a04020",color:"#fff",borderRadius:"5px",padding:"1px 6px",marginRight:"3px"}}>{t}</span>)}
+                  <span style={{flex:1}}/>
+                  {pics.length>0&&<span style={{fontSize:"11px"}}>📷</span>}
+                  {c.treat&&!c.treatDone&&upcomingByPhone[normPhone(c._phone)]&&<span style={{fontSize:"10px",fontWeight:"800",background:c.treatNoted?"#d8f0dc":"#dff0e6",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"5px",padding:"1px 6px"}}>{c.treatNoted?"📝 已備註":"🎁 待招待"} {upcomingByPhone[normPhone(c._phone)].date}來</span>}
+                  {c.treatDone&&<span style={{fontSize:"10px",color:"#8aa08a"}}>🎁 已兌現</span>}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:"3px",fontSize:"9px",color:"#8a5a30"}}>{srcIcon(c.source)}</span>
+                </div>
+                {!isOpen&&dishTxt&&(
+                  <div onClick={()=>setOpenIds(p=>({...p,[c._key]:!p[c._key]}))}
+                    style={{padding:"0 12px 9px 30px",marginTop:"-4px",cursor:"pointer"}}>
+                    <span style={{fontSize:"11px",color:"#8a4a10",fontWeight:"700"}}>🍽 {dishTxt}</span>
+                  </div>
+                )}
+                {/* 展開:對齊的欄位列 */}
+                {isOpen&&(
+                  <div style={{padding:"2px 12px 11px"}}>
+                    <R l="來源" v={c.source}/>
+                    <R l="細項" v={(c.kinds||[]).join("、")}/>
+                    <R l="餐點" v={dishTxt}/>
+                    <R l="態度" v={[...(c.attitudes||[]),c.attitude].filter(Boolean).join("、")}/>
+                    <R l="原因" v={c.reason}/>
+                    <R l="調整" v={c.adjust||c.note}/>
+                    <R l="招待" v={c.treat?`${c.treat}${c.treatDone?`　✓已兌現（${c.treatBy||""} ${c.treatAt||""}）`:c.treatNoted?`　📝已備註（${c.treatNotedBy||""} ${c.treatNotedAt||""}）`:""}`:""}/>
+                    {pics.length>0&&(
+                      <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginTop:"7px"}}>
+                        {pics.map((p,pi)=>(
+                          <div key={pi} onClick={()=>setBigPic(p)} style={{cursor:"pointer",textAlign:"center"}}>
+                            <img src={p.src} style={{width:"58px",height:"58px",objectFit:"cover",borderRadius:"7px",border:"1.5px solid #d8c0b0",display:"block"}}/>
+                            <div style={{fontSize:"8px",color:"#a08070",maxWidth:"58px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.cap}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:"6px",marginTop:"9px"}}>
+                      {c.treat&&!c.treatDone&&(
+                        <button onClick={()=>markTreatDone(c)}
+                          style={{flex:1,padding:"8px",borderRadius:"8px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>🎁 已兌現招待</button>
+                      )}
+                      {c._wid!==undefined&&(
+                        <button onClick={()=>{setEditRec(c);setF({name:c.name||"",phone:c.phone||"",source:c.source||"現場餐評",type:c.type||"",kinds:c.kinds||[],dishes:c.dishes||[],photo:c.photo||null,attitudes:c.attitudes||[],attitude:c.attitude||"",reason:c.reason||"",adjust:c.adjust||"",treat:c.treat||""});setAddOpen(true);}}
+                          style={{padding:"8px 14px",borderRadius:"8px",border:"1.5px solid #b07840",background:"#fff",color:"#8a5210",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✏️ 編輯</button>
+                      )}
+                      <button onClick={()=>{
+                          if(!window.confirm(`刪除 ${c.date} ${c._who||""} 的客訴紀錄?`)) return;
+                          if(c._wid!==undefined){ const nl=(walkinCpl||[]).filter(x=>x.id!==c._wid); setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl); }
+                          else { setGroups(p=>p.map(g=>g.id!==c._gid?g:{...g,complaints:(g.complaints||[]).filter((_,i)=>i!==c._ci)})); }
+                        }}
+                        style={{padding:"8px 14px",borderRadius:"8px",border:"1.5px solid #d09090",background:"#fff",color:"#c02020",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>🗑 刪除</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );})}
+        </>)}
+      </div>
+
+      {bigPic&&createPortal(
+        <div onClick={()=>setBigPic(null)} style={{position:"fixed",inset:0,zIndex:9600,background:"rgba(0,0,0,0.9)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px"}}>
+          <img src={bigPic.src} style={{maxWidth:"100%",maxHeight:"82vh",objectFit:"contain",borderRadius:"10px"}}/>
+          <div style={{color:"#fff",fontSize:"13px",fontWeight:"700",marginTop:"10px"}}>{bigPic.cap}</div>
+          <div style={{color:"#bbb",fontSize:"11px",marginTop:"4px"}}>點任意處關閉</div>
+        </div>, document.body
+      )}
+      {addOpen&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={()=>setAddOpen(false)}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"430px",maxHeight:"88vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"10px"}}>{editRec?"✏️ 編輯客訴":"＋ 新增客訴"}</div>
+            <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>發生日期</div>
+            <div style={{display:"flex",gap:"6px",marginBottom:"10px",alignItems:"center"}}>
+              <input value={f.date||""} onChange={e=>setF(p=>({...p,date:e.target.value}))} placeholder="M/D"
+                style={{width:"90px",padding:"9px 11px",borderRadius:"9px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",fontWeight:"700",textAlign:"center"}}/>
+              <button onClick={()=>{const n=new Date();setF(p=>({...p,date:`${n.getMonth()+1}/${n.getDate()}`}));}}
+                style={{fontSize:"11px",padding:"8px 12px",borderRadius:"8px",border:"1.5px solid #b8d0e8",background:"#eaf2fa",color:"#1a4a7a",fontWeight:"700",cursor:"pointer"}}>今天</button>
+              {["1","2","3"].map(d=>(
+                <button key={d} onClick={()=>{const n=new Date();n.setDate(n.getDate()-(+d));setF(p=>({...p,date:`${n.getMonth()+1}/${n.getDate()}`}));}}
+                  style={{fontSize:"11px",padding:"8px 9px",borderRadius:"8px",border:"1px solid #d8c8b0",background:"#fff",color:"#6a4a2e",fontWeight:"700",cursor:"pointer"}}>{d}天前</button>
+              ))}
+            </div>
+            <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"5px",fontWeight:"700"}}>來源</div>
+            <div style={{display:"flex",gap:"6px",marginBottom:"10px"}}>
+              {CPL_SOURCES.filter(x=>x.k!=="大訂餐評").map(({k,Icon,desc})=>(
+                <button key={k} onClick={()=>setF(p=>({...p,source:k}))}
+                  style={{flex:1,padding:"9px 6px",borderRadius:"9px",border:`1.5px solid ${f.source===k?"#a04020":"#d8c8b0"}`,background:f.source===k?"#a04020":"#fff",color:f.source===k?"#fff":"#6a4a2e",cursor:"pointer",fontWeight:"800",fontSize:"12px"}}>
+                  <Icon size={16} color={f.source===k?"#fff":"#8a6a4a"}/><div>{k}</div><div style={{fontSize:"9px",fontWeight:"400",opacity:0.75}}>{desc}</div>
+                </button>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+              <input value={f.phone} onChange={e=>setF(p=>({...p,phone:e.target.value}))} placeholder="電話（選填,填了下次訂位會提醒）" inputMode="tel"
+                style={{flex:1.4,padding:"10px 11px",borderRadius:"9px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",fontWeight:"700"}}/>
+              <input value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder={f.source==="Google"?"Google 暱稱":"姓名"}
+                style={{flex:1,padding:"10px 11px",borderRadius:"9px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"14px"}}/>
+            </div>
+            <CplDetail val={f} onChange={setF}/>
+            {f.source==="Google"&&(
+              <div style={{background:"#f4f8fc",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"10px",marginBottom:"11px"}}>
+                <div style={{fontSize:"12px",fontWeight:"800",color:"#1a4a7a",marginBottom:"6px"}}>📷 Google 評論截圖（存證）</div>
+                {f.gPhoto?(
+                  <div style={{position:"relative",marginBottom:"7px"}}>
+                    <img src={f.gPhoto} style={{width:"100%",borderRadius:"8px",border:"1px solid #c0d0e0"}}/>
+                    <button onClick={()=>setF(p=>({...p,gPhoto:null}))} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
+                  </div>
+                ):(
+                  <label style={{display:"block",textAlign:"center",padding:"11px",borderRadius:"8px",border:"1.5px dashed #6a94c0",background:"#fff",color:"#1a4a7a",fontSize:"12px",fontWeight:"700",cursor:"pointer",marginBottom:"7px"}}>
+                    📷 上傳截圖
+                    <input type="file" accept="image/*" style={{display:"none"}}
+                      onChange={async e=>{const file=e.target.files&&e.target.files[0];if(!file)return;try{const img=await compressImage(file);setF(p=>({...p,gPhoto:img}));}catch(err){window.alert("照片處理失敗");}e.target.value="";}}/>
+                  </label>
+                )}
+                <div style={{fontSize:"11px",color:"#5a7a9a",marginBottom:"5px"}}>看截圖上寫「幾天前」，點一下自動算日期:</div>
+                <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+                  {[["今天",0],["1天前",1],["2天前",2],["3天前",3],["4天前",4],["5天前",5],["6天前",6],["1週前",7],["2週前",14]].map(([l,d])=>(
+                    <button key={l} onClick={()=>{const n=new Date();n.setDate(n.getDate()-d);setF(p=>({...p,date:`${n.getMonth()+1}/${n.getDate()}`}));}}
+                      style={{fontSize:"11px",padding:"6px 9px",borderRadius:"7px",border:"1px solid #b8d0e8",background:"#fff",color:"#1a4a7a",fontWeight:"700",cursor:"pointer"}}>{l}</button>
+                  ))}
+                </div>
+                <div style={{fontSize:"11px",color:"#1a4a7a",fontWeight:"700",marginTop:"6px"}}>目前日期:{f.date||"未設定"}</div>
+              </div>
+            )}
+            {[["原因/經過","reason"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+              <div key={k} style={{marginBottom:"11px"}}>
+                <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
+                <textarea value={f[k]} onChange={e=>setF(p=>({...p,[k]:e.target.value}))} rows={2}
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",lineHeight:"1.5",resize:"vertical",fontFamily:"inherit"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>{setEditRec(null);setAddOpen(false);}} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const has=f.type||(f.kinds||[]).length>0||(f.dishes||[]).length>0||f.reason.trim();
+                  if(!has){ window.alert("至少選一個類型或填原因"); return; }
+                  if(editRec&&editRec._wid!==undefined){
+                    const nl=(walkinCpl||[]).map(c=>c.id===editRec._wid?{...c,...f}:c);
+                    setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+                  } else {
+                    const now=new Date();
+                    const rec={id:`w${Date.now()}`,...f,date:f.date||`${now.getMonth()+1}/${now.getDate()}`};
+                    const nl=[...(walkinCpl||[]),rec];
+                    setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+                  }
+                  setEditRec(null); setAddOpen(false);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#c02020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{editRec?"儲存修改":"儲存客訴"}</button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
+    </div>
+  );
+}
+
+// ─── 櫃檯交接:算錢 / 印訂位表 / 放休接力 ────────────────────────────────
+const CASH_SPOTS = ["金庫","備用金","錢櫃"];
+const OPEN_TASKS = ["開燈/開冷氣","開POS/刷卡機","煮咖啡/備飲料","擺放桌椅","檢查訂位表","備品補齊","門口地墊/招牌"];
+const CLOSE_TASKS = ["關燈/關冷氣","結帳關機","清潔桌面/地板","垃圾清運","確認訂金已收","檢查明日訂位","鎖門/設保全"];
+// 錢幣面額(清點表A用)
+const CASH_DENOM = [1000,500,100,50,10,5,1];
+// 金庫零錢:每袋金額固定（照金庫蓋上貼的），夥伴只填袋數
+const COIN_BAGS = [{d:50,per:1000},{d:10,per:500},{d:5,per:250},{d:1,per:50}];
+const SAFE_TOTAL = 20000;   // 金庫應有總額（紙鈔＋零錢）
+// 清點表(獨立元件,避免每次輸入被重建而失焦)
+// ─── LINE 訊息範本:依那筆狀況自動判斷該給哪一種 ──────────────────────────
+const SITE_URL = "aged-meadow-66bd.tanpeini23.workers.dev";
+function wdOf(dateStr){
+  const m=String(dateStr||"").match(/(\d{1,2})\/(\d{1,2})/); if(!m) return "";
+  const d=new Date(new Date().getFullYear(),+m[1]-1,+m[2]);
+  return `（${["日","一","二","三","四","五","六"][d.getDay()]}）`;
+}
+function deadlineTxt(dateStr){
+  const dl=getOrderDeadline(dateStr); if(!dl) return "";
+  const wd=["日","一","二","三","四","五","六"][dl.getDay()];
+  return `${dl.getMonth()+1}/${dl.getDate()}（${wd}）${String(dl.getHours()).padStart(2,"0")}:${String(dl.getMinutes()).padStart(2,"0")}`;
+}
+function msgDeposit(g){
+  const dep=depDeadlineOf(g);
+  const amt=depositAmountOf(g);
+  const hc=g.headcount||"";
+  const who=g.takeout?`外帶 ${g.takeoutQty} 份主菜`:`${hc}${g.isVip?"（包廂）":""}`;
+  return `今鶴 JINHER
+${g.takeout?"外帶":"訂位"}：${g.date}${wdOf(g.date)} ${g.time}　${g.name}${g.gender||""}　${who}
+
+💰 訂金 $${amt.toLocaleString()}${g.takeout?"（每份主菜 $100）":""}
+匯款期限：${dep?dep.label:"請洽店家"} 前
+（六日與國定假日銀行無法對帳，故提前）
+
+${BANK_INFO.bank}
+戶名：${BANK_INFO.name}
+帳號：${BANK_INFO.acct}
+
+匯款後請回傳末5碼
+※ 逾時未收到訂金，恕不保留座位
+${g.isVip?`\n🍽 包廂低消 $${VIP_MIN_SPEND.toLocaleString()}（不含服務費、開瓶費）\n用餐時間 3 小時\n`:""}
+🍽 點餐連結
+${SITE_URL}
+代碼：${g.code||"（請洽店家）"}
+
+點餐截止：${deadlineTxt(g.date)}
+逾時無法線上點餐，當天需現場點餐、現場排單製作，等候約 40 分鐘以上`;
+}
+function msgOrder(g){
+  return `今鶴 JINHER
+訂位：${g.date}${wdOf(g.date)} ${g.time}　${g.name}${g.gender||""}　${g.headcount||""}${g.isVip?"（包廂）":""}
+
+🍽 線上點餐
+${SITE_URL}
+代碼：${g.code||"（請洽店家）"}
+
+點餐截止：${deadlineTxt(g.date)}
+逾時無法線上點餐，當天需現場點餐、現場排單製作，等候約 40 分鐘以上`;
+}
+function msgChase(g){
+  const need=adultsOfG(g);              // 只算大人
+  const done=(g.orders||[]).length;
+  const dl=getOrderDeadline(g.date);
+  let left="";
+  if(dl){ const ms=dl-new Date(); if(ms>0){ const h=Math.floor(ms/3600000); left=h>=24?`剩 ${Math.floor(h/24)} 天`:`剩 ${h} 小時`; } }
+  return `今鶴 JINHER
+${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}
+
+您好～提醒您線上點餐即將截止 🍽
+還有 ${Math.max(0,need-done)} 位還沒點喔（已點 ${done}/${need}）
+
+⏰ 截止：${deadlineTxt(g.date)}${left?`（${left}）`:""}
+
+點餐連結
+${SITE_URL}
+代碼：${g.code||""}
+
+逾時無法線上點餐，當天需現場點餐、現場排單製作，等候約 40 分鐘以上`;
+}
+// LINE 風格對話泡泡(手繪,非官方 logo)
+const IcoLine=({size=13,color="#06C755"})=>(
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <path d="M12 3.2c-4.9 0-8.9 3.2-8.9 7.2 0 3.6 3.2 6.6 7.5 7.1.3.06.7.2.8.45.1.23.06.58.03.81l-.13.78c-.04.23-.18.9.79.49 .97-.41 5.24-3.09 7.15-5.29 1.32-1.45 1.95-2.92 1.95-4.55 0-4-4-7.2-8.9-7.2z"
+      stroke={color} strokeWidth="1.5" strokeLinejoin="round"/>
+  </svg>
+);
+// 催訂金:逾期 / 今天到期 語氣不同
+function msgDepChase(g){
+  const dep=depDeadlineOf(g);
+  const amt=depositAmountOf(g);
+  const over=dep&&(new Date()>dep.dl);
+  if(over) return `今鶴 JINHER
+${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
+
+您好～訂金匯款期限已過 🙏
+很抱歉，本次訂位已為您取消，座位不再保留
+
+如仍需用餐，歡迎重新訂位
+造成不便敬請見諒 🙇`;
+  const head=`您好～提醒您訂金匯款即將到期 ⏰`;
+  return `今鶴 JINHER
+${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
+
+${head}
+
+💰 訂金 $${amt.toLocaleString()}
+匯款期限：${dep?dep.label:"請洽店家"} 前
+
+${BANK_INFO.bank}
+戶名：${BANK_INFO.name}
+帳號：${BANK_INFO.acct}
+
+匯款後請回傳末5碼
+※ 逾時未收到訂金，訂位將取消、恕不保留座位`;
+}
+function msgEarlyLock(g){
+  return `今鶴 JINHER
+${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}
+
+您好～看到您的餐點已經點滿了 🍽
+如果確定不再修改，我們可以先為您鎖定訂單、提前作業 😊
+
+如需再調整，${deadlineTxt(g.date)} 截止前都可以修改喔～`;
+}
+// ─── LINE 名稱工具:自動組名、20字檢查、一鍵複製 ────────────────────────────
+const LINE_MAX = 20;
+const DEP_RESERVE = 5;                 // 訂金預留:💰+4位數 = 5字
+const clen = (str)=>[...String(str||"")].length;   // 正確算字數(emoji 算 1 個)
+function buildLineName(g, tight){
+  // 取姓氏:先去掉常見尾綴(的/'s/s/家),再取第一個中英文字
+  let raw=String(g.name||"").replace(/['’]s$/i,"").replace(/[的家]$/,"").trim();
+  const m0=raw.match(/[\u4e00-\u9fa5A-Za-z]/);       // 第一個中文或英文字
+  const sur=(m0?m0[0]:(raw.slice(0,1)||"?"))+"s";     // 真的抓不到就用 ? 提醒夥伴
+  const hc=(g.headcount||"").toLowerCase();
+  const p=+((hc.match(/(\d+)p/)||[])[1]||0)||parseInt(hc)||0;
+  const cnt=`${p}${g.isVip?"包":""}`;
+  // 日期正規化:不管 "8/9"、"2026/8/9"、"08/09" 都取成 8/9
+  const dm=String(g.date||"").match(/(\d{1,2})\/(\d{1,2})\s*$/);
+  const d=dm?`${+dm[1]}/${+dm[2]}`:String(g.date||"").trim();
+  const t=String(g.time||"").trim();
+  if(tight===0) return `${d} ${t} ${sur} ${cnt}`;
+  if(tight===1) return `${d} ${t}${sur} ${cnt}`;
+  if(tight===2) return `${d} ${t}${sur}${cnt}`;
+  return `${d}${t.replace(":","")}${sur}${cnt}`;
+}
+function lineNameFor(g){
+  for(let i=0;i<=3;i++){
+    const base=buildLineName(g,i);
+    if(clen(base)+DEP_RESERVE<=LINE_MAX) return {base,tight:i,ok:true};
+  }
+  return {base:buildLineName(g,3),tight:3,ok:false};
+}
+function LineNameModal({ g, onClose }){
+  const r=lineNameFor(g);
+  const base=r.base, ok=r.ok;
+  const dep=g.deposit?String(g.deposit).replace(/[^0-9]/g,""):"";
+  const full=dep?`${base}💰${dep}`:base;
+  const [copied,setCopied]=useState(false);
+  const afterLen=clen(base)+DEP_RESERVE;
+  const hcS=(g.headcount||"").toLowerCase();
+  const needN=(+((hcS.match(/(\d+)p/)||[])[1]||0))+(+((hcS.match(/(\d+)c/)||[])[1]||0))+(+((hcS.match(/(\d+)s/)||[])[1]||0));
+  const doneN2=(g.orders||[]).length;
+  let tagT="無標記", tagWhy="該處理的都完成了";
+  if(needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit){ tagT="需追蹤"; tagWhy="還沒收訂金"; }
+  else if(needN>0&&doneN2<needN){ tagT="需追蹤"; tagWhy=`還沒點完（${doneN2}/${needN}人）`; }
+  const copy=async(txt)=>{ try{ await navigator.clipboard.writeText(txt); setCopied(true); setTimeout(()=>setCopied(false),1500); }catch(e){ window.prompt("複製這串:",txt); } };
+  // 現在最該用哪一個(那個框框會閃)
+  const hot=(()=>{
+    const needDep=needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit;
+    if(needDep) return "dep";
+    const dl2=getOrderDeadline(g.date);
+    const near2=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
+    if(near2&&needN>0&&doneN2<needN&&!lowConsumeOk(g)&&!noChase(g)) return "chase";
+    if(lowConsumeOk(g)&&!g.locked) return "lock";
+    if(g.fromMai) return "name";          // 剛匯入的:先改 LINE 名稱
+    return "";
+  })();
+  return createPortal(
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9400,background:"rgba(30,20,10,0.8)",display:"flex",alignItems:"center",justifyContent:"center",padding:"18px"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fffaf2",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"370px",maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{fontSize:"15px",fontWeight:"900",color:"#5a3a28",marginBottom:"2px"}}>{g.name}　{g.date} {g.time}</div>
+        <div style={{fontSize:"11px",color:"#a08a70",marginBottom:"12px"}}>{g.headcount}{g.isVip?"・包廂":""}　{g.phone||""}</div>
+
+        <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"4px"}}>
+          LINE 名稱（點一下複製）
+          {hot==="name"&&<span style={{fontSize:"10px",color:"#c02020",fontWeight:"900",marginLeft:"5px"}}>← 現在要用這個</span>}
+        </div>
+        <div onClick={()=>copy(full)} className={hot==="name"?"blinkBox":""}
+          style={{background:"#fff",border:`${hot==="name"?"3px":"2px"} solid ${hot==="name"?"#c02020":"#c9a45c"}`,borderRadius:"10px",padding:"12px",cursor:"pointer",marginBottom:"5px"}}>
+          <div style={{fontSize:"16px",fontWeight:"900",color:"#2e2010",wordBreak:"break-all"}}>{full}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+          <button onClick={()=>copy(full)} style={{fontSize:"12px",fontWeight:"800",background:"#8a5210",color:"#fff",border:"none",borderRadius:"7px",padding:"7px 14px",cursor:"pointer"}}>{copied?"✓ 已複製":"📋 複製"}</button>
+          <span style={{fontSize:"11px",fontWeight:"800",color:clen(full)<=LINE_MAX?"#2a7a4a":"#c02020"}}>目前 {clen(full)}/{LINE_MAX} 字</span>
+          {!dep&&<span style={{fontSize:"11px",fontWeight:"700",color:afterLen<=LINE_MAX?"#8a6a48":"#c02020"}}>加訂金後 {afterLen}/{LINE_MAX}</span>}
+        </div>
+        {!ok&&<div style={{fontSize:"11px",color:"#c02020",background:"#fbe4e4",borderRadius:"7px",padding:"7px 9px",marginBottom:"10px",lineHeight:"1.6",fontWeight:"700"}}>⚠ 加訂金後會超過 20 字，建議姓氏改用簡稱或縮短。</div>}
+
+        <div style={{marginBottom:"12px"}}>
+          <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"5px"}}>要傳給客人的訊息（點一下複製）</div>
+          {(()=>{
+            const list=[];
+            if(needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit) list.push(["💰 訂金 + 點餐資訊", msgDeposit(g), "#8a5210", "dep"]);
+            else list.push(["🍽 點餐資訊", msgOrder(g), "#8a5210", "order"]);
+            const need=adultsOfG(g);
+            const done=(g.orders||[]).length;
+            const dl=getOrderDeadline(g.date); const near=dl&&(dl-new Date())>0&&(dl-new Date())<=48*3600000;
+            if(need>0&&done<need&&near&&!noChase(g)) list.push(["⏰ 催點餐", msgChase(g), "#c06030", "chase"]);
+            // 低消達標判定:包廂看金額、一般看份數(跟客人端同一套)
+            if(lowConsumeOk(g)&&!g.locked) list.push(["🔒 問可否提前鎖單", msgEarlyLock(g), "#2a7a4a", "lock"]);
+            return list.map(([label,txt,color,key])=>{
+              const isHot = hot===key;
+              return (
+                <button key={label} onClick={()=>copy(txt)} className={isHot?"blinkBox":""}
+                  style={{display:"block",width:"100%",textAlign:"left",marginBottom:"5px",padding:"10px 11px",borderRadius:"9px",
+                    border:`${isHot?"3px":"1.5px"} solid ${isHot?"#c02020":color}`,background:isHot?"#fff6f6":"#fff",color:isHot?"#c02020":color,fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>
+                  {label}{isHot&&<span style={{fontSize:"10px",fontWeight:"900",marginLeft:"5px"}}>← 現在要用這個</span>}
+                  <div style={{fontSize:"10px",fontWeight:"600",color:"#a09080",marginTop:"2px"}}>點一下複製整段，貼到 LINE</div>
+                </button>
+              );
+            });
+          })()}
+        </div>
+        <div style={{background:"#f4f8fc",borderRadius:"9px",padding:"9px 11px",marginBottom:"12px"}}>
+          <div style={{fontSize:"11px",fontWeight:"800",color:"#1a4a7a",marginBottom:"3px"}}>現在該做什麼</div>
+          <div style={{fontSize:"12px",color:"#3a5a7a",lineHeight:"1.7"}}>
+            ・{g.deposit?`已收訂金 $${g.deposit} → 名稱要有 💰`:"還沒收訂金 → 名稱先不加 💰"}<br/>
+            ・標籤：<b style={{color:tagT==="需追蹤"?"#c06020":"#2a7a4a"}}>{tagT}</b>（{tagWhy}）
+          </div>
+        </div>
+
+        <details style={{marginBottom:"12px"}}>
+          <summary style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",cursor:"pointer",padding:"6px 0"}}>📖 完整 LINE 處理教學</summary>
+          <div style={{fontSize:"11px",color:"#5a4030",lineHeight:"1.85",background:"#faf6ee",borderRadius:"8px",padding:"10px",marginTop:"5px"}}>
+            <b>1. 確認資料並改 LINE 名稱</b><br/>
+            格式：日期 時間 姓氏 人數 訂金<br/>
+            例：8/9 11:30 楊s 10包 💰1000<br/>
+            <span style={{color:"#c02020",fontWeight:"700"}}>⚠ 只能 20 字（含空格標點）— 最常出錯</span><br/>
+            付訂金後才寫 💰<br/><br/>
+            <b>2. 用標籤分類待回覆</b><br/>
+            優先處理：已讀未回、未核單<br/>
+            需追蹤：未提供訂位資訊、未付訂金、未點餐、提醒點餐<br/><br/>
+            <b>3. 無標記的客人</b><br/>
+            離用餐一週以上，暫時不用提醒<br/>
+            自己回最後訊息（貼圖），避免罐頭訊息留在末端<br/><br/>
+            <b>4. 處理完畢（用餐後）</b><br/>
+            ① 確認最後訊息是否完整<br/>
+            ② 確認是否有退訂金<br/>
+            ③ 關心滿意度並截圖餐評至大群<br/>
+            ④ 按下「處理完畢」完成流程
+          </div>
+        </details>
+
+        <button onClick={onClose} style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #ddd0bc",background:"transparent",color:"#5a3a28",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>關閉</button>
+      </div>
+    </div>, document.body
+  );
+}
+
+// 滑鼠停 0.5 秒 / 手機長按 → 浮出白話說明(不用主動找,幫助自己出現)
+function Tip({ text, children, w=210 }){
+  const [show,setShow]=useState(false);
+  const t=useRef(null);
+  const start=()=>{ clearTimeout(t.current); t.current=setTimeout(()=>setShow(true),500); };
+  const stop=()=>{ clearTimeout(t.current); setShow(false); };
+  if(!text) return children;
+  return (
+    <span style={{position:"relative",display:"inline-flex"}}
+      onMouseEnter={start} onMouseLeave={stop}
+      onTouchStart={start} onTouchEnd={stop} onTouchCancel={stop}>
+      {children}
+      {show&&(
+        <span style={{position:"absolute",bottom:"115%",left:"50%",transform:"translateX(-50%)",zIndex:9800,
+          background:"#3a2a1a",color:"#fff",fontSize:"12px",fontWeight:"600",lineHeight:"1.7",borderRadius:"8px",
+          padding:"8px 11px",width:`${w}px`,boxShadow:"0 4px 14px rgba(0,0,0,0.3)",whiteSpace:"normal",textAlign:"left",pointerEvents:"none"}}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+// 行話的白話解釋
+const TIP_TXT = {
+  mai:"從大麥匯入、還沒確認的訂位。確認過後按「轉入追蹤表」移到大訂表正式追蹤。",
+  toNormal:"這筆確認過了 → 移到大訂表。\n轉了才會開始追訂金、催點餐、算低消；留在麥訂這些都不會動。",
+  past:"用餐日已經過了、但還沒處理完的訂單。過 2 天以上才會閃紅燈催你。",
+  cpl:"記錄客人反應的問題。記完可以看統計，也會在客人下次訂位時提醒要招待什麼。",
+  addBig:"手動新增一筆大訂（大麥沒進來、或電話臨時訂的）。",
+  items:"按日期關閉賣完的餐點，客人那天就點不到。記得隔天開回來。",
+  dingwe:"看每個時段訂了多少人、哪些時段要關訂位。",
+  archive:"把客人點好的餐拍照存證。只保留 7 天，第 6 天要重新封存，不然餐點訂單會消失。",
+  lock:"過了點餐截止時間，客人就不能再改。夥伴可以開始 KEY 單。",
+  closeSlot:"該時段訂滿了，去大麥把訂位關掉，不再接。",
+  vip:"包廂：低消 $6,000（不含服務費、開瓶費）、用餐 3 小時、最多 10 位、訂金最低 $1,000。",
+  lineBtn:"產生要傳給客人的 LINE 訊息（訂金、點餐代碼、催點餐），還有 LINE 名稱怎麼改。",
+};
+// 狀態小圖示:不提前鎖單 / 改人數 / 封存天數。原本在代碼欄,搬到備註欄
+function StatusIcons({ g, setGroups }){
+  const tags=[];
+  if(g.noEarlyLock&&!g.locked&&!g.archived&&!isPastMeal(g))
+    tags.push({k:"nl",ico:"🔓",t:`${g.noEarlyLockAt||""} 問過，客人不提前鎖單`,c:"#8a7a6a",bg:"#f0ece4",
+      click:()=>{ if(window.confirm("取消「客人不提前鎖單」的標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:false,noEarlyLockAt:""})); }});
+  if(g.depositFrom)
+    tags.push({k:"df",ico:"📢",t:`${g.depositFrom} 改${g.depositFromNote||"人數"}，訂金從此日算`,c:"#fff",bg:"#c06020"});
+  const age=archiveAgeDays(g);
+  const isToday=(()=>{                       // 今天就要來的,封存到期提醒沒意義
+    const t=new Date();
+    return String(g.date||"")===`${t.getMonth()+1}/${t.getDate()}`;
+  })();
+  if(age!==null&&!isToday){
+    if(isPastMeal(g)) tags.push({k:"ar",ico:"📦",t:`已封存（第 ${age} 天）`,c:"#8a7a6a",bg:"#f0ece4"});
+    else if(age>=7)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，已超過 7 天要重新封存`,c:"#fff",bg:"#c02020",blink:true});
+    else if(age>=6)   tags.push({k:"ar",ico:"📦",t:`封存 ${age} 天，明天過期要重封`,c:"#fff",bg:"#e08030",blink:true});
+    else if(age>=5)   tags.push({k:"ar",ico:"📦",t:`封存第 ${age} 天（保留 7 天）`,c:"#5a7a5a",bg:"#eef4ea"});
+  }
+  if(tags.length===0) return null;
+  return (
+    <div style={{display:"flex",gap:"3px",marginBottom:"3px",flexWrap:"wrap"}}>
+      {tags.map(t=>(
+        <span key={t.k} title={t.t} onClick={t.click} className={t.blink?"blinkTag":""}
+          style={{fontSize:"12px",lineHeight:1,background:t.bg,color:t.c,borderRadius:"4px",padding:"3px 6px",
+            cursor:t.click?"pointer":"help",whiteSpace:"nowrap"}}>{t.ico}</span>
+      ))}
+    </div>
+  );
+}
+// 備註欄:系統標籤 + 大麥備註 + 夥伴手寫(記名字)
+function NoteCell({ g, setGroups, staffList }){
+  const [open,setOpen]=useState(false);
+  const [txt,setTxt]=useState("");
+  const auto=autoTagsFrom(g.maiNote);
+  const manual=g.noteTags||[];
+  const all=[...new Set([...auto,...manual])];
+  const logs=g.noteLogs||[];
+  const toggleTag=(k)=>{
+    const cur=g.noteTags||[];
+    if(cur.includes(k)){ setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noteTags:cur.filter(t=>t!==k)})); return; }
+    if(k==="客製畫盤"){
+      const d=window.prompt("客製畫盤要寫什麼內容?"); if(!d||!d.trim()) return;
+      setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noteTags:[...cur,k],customPlate:d.trim()}));
+      return;
+    }
+    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noteTags:[...cur,k]}));
+  };
+  const addLog=(who)=>{
+    if(!txt.trim()) return;
+    const d=new Date();
+    setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noteLogs:[...(x.noteLogs||[]),{by:who,txt:txt.trim(),at:`${d.getMonth()+1}/${d.getDate()}`}]}));
+    setTxt(""); setOpen(false);
+  };
+  return (
+    <div style={{textAlign:"left",minWidth:0}}>
+      <StatusIcons g={g} setGroups={setGroups}/>
+      {all.length>0&&(
+        <div style={{display:"flex",gap:"3px",flexWrap:"wrap",marginBottom:"3px"}}>
+          {all.map(k=>{
+            const d=NOTE_TAGS.find(t=>t.k===k)||{c:"#6a4a2e",bg:"#f0eadf"};
+            const isAuto=auto.includes(k)&&!manual.includes(k);
+            return (
+              <span key={k} title={isAuto?"從大麥備註自動偵測":"點一下移除"}
+                onClick={()=>!isAuto&&toggleTag(k)}
+                style={{fontSize:"11px",fontWeight:"800",color:d.c,background:d.bg,border:`1px solid ${d.c}44`,
+                  borderRadius:"5px",padding:"2px 7px",cursor:isAuto?"help":"pointer",whiteSpace:"nowrap"}}>
+                {k}{k==="客製畫盤"&&g.customPlate?`：${g.customPlate}`:""}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {g.maiNote&&<div title={g.maiNote} style={{fontSize:"11px",color:"#7a6a58",lineHeight:"1.5",marginBottom:"3px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>📋 {g.maiNote}</div>}
+      {logs.map((l,i)=>(
+        <div key={i} style={{fontSize:"11px",color:"#3a2a1a",lineHeight:"1.5",marginBottom:"2px"}}>
+          <b style={{color:"#8a5210"}}>{l.by}：</b>{l.txt}
+          <span onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noteLogs:(x.noteLogs||[]).filter((_,j)=>j!==i)}))}
+            style={{color:"#c0a0a0",cursor:"pointer",marginLeft:"4px",fontSize:"10px"}}>✕</span>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginTop:"2px"}}>
+        <button onClick={()=>setOpen(v=>!v)}
+          style={{fontSize:"10px",color:"#8a6a4a",background:"#f4efe4",border:"1px solid #ddd0bc",borderRadius:"5px",padding:"3px 8px",cursor:"pointer",fontWeight:"700"}}>
+          {open?"收起":"＋ 標籤 / 備註"}
+        </button>
+      </div>
+      {open&&(
+        <div style={{marginTop:"5px",background:"#faf7f0",borderRadius:"8px",padding:"7px",border:"1px solid #e0d5c0"}}>
+          <div style={{display:"flex",gap:"4px",flexWrap:"wrap",marginBottom:"6px"}}>
+            {NOTE_TAGS.map(t=>{
+              const on=(g.noteTags||[]).includes(t.k);
+              return (
+                <button key={t.k} onClick={()=>toggleTag(t.k)}
+                  style={{fontSize:"11px",fontWeight:"800",borderRadius:"5px",padding:"4px 8px",cursor:"pointer",
+                    border:`1px solid ${on?t.c:"#d8ccb8"}`,background:on?t.bg:"#fff",color:on?t.c:"#9a8a76"}}>
+                  {on?"✓ ":""}{t.k}
+                </button>
+              );
+            })}
+          </div>
+          <input value={txt} onChange={e=>setTxt(e.target.value)} placeholder="要留意的事…"
+            style={{width:"100%",boxSizing:"border-box",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8b89c",fontSize:"12px",color:"#3a2a1a",marginBottom:"5px"}}/>
+          <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
+            {(staffList&&staffList.length?staffList:DEFAULT_STAFF).map(nm=>(
+              <button key={nm} onClick={()=>addLog(nm)} disabled={!txt.trim()}
+                style={{fontSize:"11px",fontWeight:"700",borderRadius:"6px",padding:"5px 9px",cursor:txt.trim()?"pointer":"not-allowed",
+                  border:"1px solid #c9a45c",background:txt.trim()?"#fff":"#f0ece4",color:txt.trim()?"#8a5210":"#b0a290"}}>{nm}</button>
+            ))}
+          </div>
+          <div style={{fontSize:"10px",color:"#a09070",marginTop:"4px"}}>點夥伴名字送出（會顯示「名字：內容」）</div>
+        </div>
+      )}
+    </div>
+  );
+}
+// v222:備用金(現金＋收據＝$20,000)。晚結和開早共用同一個元件,不要兩份。
+function ReserveCount({ rv, onChange }){
+  const r=rv||{};
+  const cash=+(r.cash||0), rcpt=+(r.rcpt||0);
+  const tot=cash+rcpt, df=tot-SAFE_TOTAL, ok=df===0;
+  const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
+  const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px",marginTop:"5px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
+          <input value={r.cash||""} inputMode="numeric" placeholder="0"
+            onChange={e=>onChange({...r,cash:num(e.target.value)})} style={ipt}/>
+        </div>
+        <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
+          <input value={r.rcpt||""} inputMode="numeric" placeholder="0"
+            onChange={e=>onChange({...r,rcpt:num(e.target.value)})} style={ipt}/>
+        </div>
+        <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
+          <div style={{fontSize:"16px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
+        </div>
+      </div>
+      {tot>0&&(
+        <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",
+          color:"#fff",background:ok?"#2a8a5a":"#c02020",borderRadius:"6px",padding:"5px"}}>
+          {ok?"✓ 備用金正確":(df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`)}
+        </div>
+      )}
+    </div>
+  );
+}
+// v222:跟昨晚晚結逐格對照。pairs=[[標籤,昨晚,今早],...]
+function NightRef({ pairs, at }){
+  const same=(l,n)=>String(+(l||0))===String(+(n||0));
+  const entered=pairs.some(([,,n])=>String(n||"")!=="");
+  const bad=pairs.filter(([,l,n])=>!same(l,n));
+  return (
+    <div style={{fontSize:"11px",color:"#8a7a5a",background:"#fdfaf3",border:"1px solid #e8dcc4",
+      borderRadius:"7px",padding:"6px 9px",marginTop:"5px",display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
+      <span style={{fontWeight:"800",color:"#a08050",whiteSpace:"nowrap"}}>上次清點{at?`（${at}）`:""}</span>
+      {pairs.map(([k,l,n],i)=>(
+        <span key={i} style={{whiteSpace:"nowrap",fontWeight:entered&&!same(l,n)?"900":"700",
+          color:entered&&!same(l,n)?"#c06030":"#8a9aaa"}}>{k}×{+(l||0)}</span>
+      ))}
+      <span style={{flex:1}}/>
+      {entered&&(bad.length===0
+        ? <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>✓ 跟上次一致</span>
+        : <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#c06030",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>⚠ {bad.length} 格不一樣</span>)}
+    </div>
+  );
+}
+// 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
+// v226:金庫「上次清點」= 往回找最近一次真的有數字的紀錄,不分階段。
+// 一天內的先後是 開早 → 中間結算 → 晚結;只往回看,不會拿還沒發生的來比。
+// v227:交接資料的日期鍵一律「西元/月/日」。原本這規則散在 4 處(todayStr 含年份,
+// 兩處 yStr 和 lastSafeCount 卻寫成「月/日」)→ 永遠查不到,抽出來共用。
+function dayKey(d){ return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`; }
+function dayAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d; }
+const SAFE_STAGES=["open","mid","close"];
+function safeOfStage(day,st){
+  if(!day) return null;
+  if(st==="open") return day.openSafe||null;
+  if(st==="mid")  return day.midSafe||null;
+  return (day.close||{}).safe||null;
+}
+function safeHasData(sf){
+  if(!sf) return false;
+  return ["notes","bags","loose"].some(k=>Object.values(sf[k]||{}).some(v=>String(v??"")!==""));
+}
+function lastSafeCount(data,stage){
+  const mine=SAFE_STAGES.indexOf(stage);
+  const t=new Date();
+  for(let i=0;i<60;i++){
+    const d=dayAgo(i);
+    const k=dayKey(d);
+    const day=(data||{})[k]||(data||{})[`${d.getMonth()+1}/${d.getDate()}`]; if(!day) continue;
+    for(let j=SAFE_STAGES.length-1;j>=0;j--){
+      if(i===0&&j>=mine) continue;               // 今天:只看比自己早的階段
+      const sf=safeOfStage(day,SAFE_STAGES[j]);
+      if(safeHasData(sf)){
+        const lbl={open:"開早",mid:"中間結算",close:"晚結"}[SAFE_STAGES[j]];
+        const at=SAFE_STAGES[j]==="close"?((day.close||{}).s3||""):"";
+        return {safe:sf,label:`${d.getMonth()+1}/${d.getDate()} ${lbl}${at?` ${at}`:""}`};
+      }
+    }
+  }
+  return null;
+}
+// v229:金庫總額。sf=這次填的、prev=上次的(沒填的格子沿用上次)。
+// 這算式原本散在 4 個地方各寫一次(坑#1),抽出來共用,畫面和「數對自動劃掉」永遠一致。
+function safeVal(sf,prev,grp,d){
+  const a=((sf||{})[grp]||{})[d], b=((prev||{})[grp]||{})[d];
+  return String(a??"")!=="" ? (+a||0) : (+b||0);
+}
+function safeTotal(sf,prev){
+  return [1000,500,100].reduce((s,d)=>s+d*safeVal(sf,prev,"notes",d),0)
+       + COIN_BAGS.reduce((s,b)=>s+b.per*safeVal(sf,prev,"bags",b.d),0)
+       + COIN_BAGS.reduce((s,b)=>s+b.d*safeVal(sf,prev,"loose",b.d),0);
+}
+function SafeCount({ notes, bags, loose, prev, prevLabel, onChange }){
+  // v229:上次清點的數字直接帶進格子裡(金庫的錢不常動,只改動到的那格就好)。
+  // 淡棕斜體=沿用上次還沒動過;橘色=今天改過且跟上次不同;黑色=今天填的且跟上次一樣。
+  // 純顯示推導,不在畫面繪製期間寫入 state。
+  const has=(v)=>String(v??"")!=="";
+  const own={notes:notes||{}, bags:bags||{}, loose:loose||{}};
+  const pv  ={notes:(prev||{}).notes||{}, bags:(prev||{}).bags||{}, loose:(prev||{}).loose||{}};
+  const val =(g,d)=> has(own[g][d]) ? own[g][d] : (has(pv[g][d]) ? pv[g][d] : "");
+  const carried=(g,d)=> !has(own[g][d]) && has(pv[g][d]);
+  const changed=(g,d)=> has(own[g][d]) && has(pv[g][d]) && (+own[g][d]||0)!==(+pv[g][d]||0);
+  const anyCarried=[["notes",[1000,500,100]],["bags",COIN_BAGS.map(b=>b.d)],["loose",[50]]]
+    .some(([g,ds])=>ds.some(d=>carried(g,d)));
+  const sfNow={notes,bags,loose};
+  const noteSum=[1000,500,100].reduce((s,d)=>s+d*safeVal(sfNow,prev,"notes",d),0);
+  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*safeVal(sfNow,prev,"bags",b.d),0);
+  const looseSum=COIN_BAGS.reduce((s,b)=>s+b.d*safeVal(sfNow,prev,"loose",b.d),0);
+  const total=safeTotal(sfNow,prev), diff=total-SAFE_TOTAL, ok=diff===0;
+  const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
+  const useLast=()=>onChange({
+    notes:{...pv.notes,...own.notes}, bags:{...pv.bags,...own.bags}, loose:{...pv.loose,...own.loose} });
+  const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",marginBottom:"5px"}}>
+        <span style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</span>
+        {anyCarried&&(<>
+          <span style={{fontSize:"10.5px",color:"#a89070",fontStyle:"italic"}}>淡字＝沿用{prevLabel?`（${prevLabel}）`:"上次"}，數對就按右邊</span>
+          <span style={{flex:1}}/>
+          <button onClick={useLast} style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#8a7050",border:"none",borderRadius:"6px",padding:"4px 10px",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 跟上次一樣</button>
+        </>)}
+      </div>
+
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        <div style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          {[1000,500,100].map(d=>(
+            <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={val("notes",d)} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags,loose})} inputMode="numeric" placeholder="0"
+                style={{...ipt,...(carried("notes",d)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("notes",d)?{color:"#c06030",fontWeight:"900"}:{})}}/>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+val("notes",d)||0)>0?`$${(d*(+val("notes",d)||0)).toLocaleString()}`:""}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{flex:"1 1 0",minWidth:"152px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          {COIN_BAGS.map(b=>(
+            <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={val("bags",b.d)} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)},loose})} inputMode="numeric" placeholder="0"
+                style={{...ipt,...(carried("bags",b.d)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("bags",b.d)?{color:"#c06030",fontWeight:"900"}:{})}}/>
+              <span style={{fontSize:"10px",color:"#a08a70",width:"22px"}}>袋</span>
+              {b.d===50&&(<>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>＋</span>
+                <input value={val("loose",50)} inputMode="numeric" placeholder="0"
+                  onChange={e=>onChange({notes,bags,loose:{...(loose||{}),50:num(e.target.value)}})}
+                  style={{...ipt,width:"40px",...(carried("loose",50)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("loose",50)?{color:"#c06030",fontWeight:"900"}:{})}}/>
+                <span style={{fontSize:"10px",color:"#a08a70",whiteSpace:"nowrap"}}>個$50</span>
+              </>)}
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1,textAlign:"right"}}>{(() => {
+                const v=b.per*(+val("bags",b.d)||0)+b.d*(+val("loose",b.d)||0);
+                return v>0?`$${v.toLocaleString()}`:`1袋$${b.per}`;
+              })()}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700"}}>紙鈔 ${noteSum.toLocaleString()} ＋ 零錢 ${bagSum.toLocaleString()}</span>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>＝ 合計 ${total.toLocaleString()}</span>
+        {total>0&&(ok
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
+function CountTable({ counts, onChange, baseAmt, label }){
+  const setCount=(d,v)=>onChange({...counts,[d]:v.replace(/[^0-9]/g,"")});
+  const total=CASH_DENOM.reduce((s,d)=>s+d*(+counts[d]||0),0);
+  const diff=total-(+baseAmt||0);
+  const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（應有 ${(+baseAmt).toLocaleString()}）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+            {col.map(d=>(
+              <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0" style={ipt}/>
+                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>合計 ${total.toLocaleString()}</span>
+        {total>0&&(diff===0
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
+function _CountTableBag({ counts, onChange, baseAmt, label }){
+  const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        <div style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>紙鈔（張）</div>
+          {[1000,500,100].map(d=>(
+            <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{flex:"1 1 0",minWidth:"152px",display:"flex",flexDirection:"column",gap:"5px"}}>
+          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>零錢（袋）</div>
+          {COIN_BAGS.map(b=>(
+            <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
+              <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+              <input value={counts[`bag${b.d}`]||""} onChange={e=>setCount(`bag${b.d}`,e.target.value)} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"10px",color:"#a08a70"}}>袋</span>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[`bag${b.d}`]||0)>0?`$${(b.per*(+counts[`bag${b.d}`]||0)).toLocaleString()}`:`1袋$${b.per}`}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px",flexWrap:"wrap"}}>
+        <span style={{fontSize:"11px",color:"#5a7a9a",fontWeight:"700"}}>紙鈔 ${noteSum.toLocaleString()} ＋ 零錢 ${bagSum.toLocaleString()}</span>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>＝ 合計 ${total.toLocaleString()}</span>
+        {total>0&&(diff===0
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
+function _CountTableOld({ counts, onChange, baseAmt, label }){
+  const setCount=(d,v)=>onChange({...counts,[d]:v.replace(/[^0-9]/g,"")});
+  const total=CASH_DENOM.reduce((s,d)=>s+d*(+counts[d]||0),0);
+  const diff=total-(+baseAmt||0);
+  return (
+    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>{label}（基準 ${(+baseAmt).toLocaleString()}）</div>
+      <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+        {[[1000,500,100],[50,10,5,1]].map((col,ci)=>(
+          <div key={ci} style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
+            {col.map(d=>(
+              <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
+                <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
+                <input value={counts[d]||""} onChange={e=>setCount(d,e.target.value)} inputMode="numeric" placeholder="0"
+                  style={{width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"}}/>
+                <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+counts[d]||0)>0?`$${(d*(+counts[d]||0)).toLocaleString()}`:""}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:"6px",display:"flex",alignItems:"center",gap:"8px",borderTop:"1px solid #e0e8f0",paddingTop:"6px"}}>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#2a3a4a"}}>合計 ${total.toLocaleString()}</span>
+        {total>0&&(diff===0
+          ? <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+          : <span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 9px"}}>{diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</span>)}
+      </div>
+    </div>
+  );
+}
+function CloseHint({ show, children }){ return show?<div style={{fontSize:"12px",color:"#8a6a48",lineHeight:"1.75",marginTop:"6px",background:"#faf7f0",borderRadius:"7px",padding:"7px 9px"}}>💡 {children}</div>:null; }
+// 晚結步驟標題:新手版(含動作說明) / 老手版(確認式)
+const CLOSE_TITLES = {
+  s1 :{nov:"Key 支出在【POS機】和【報表】",      pro:"POS 支出輸入完成",        hand:false,cam:false},
+  s2 :{nov:"對信用卡機跟 POS 的金額是否一致",     pro:"信用卡機總額對過了",      hand:false,cam:false},
+  s3 :{nov:"算錢：【金庫、備用金】導正",          pro:"金庫、備用金導正完成",    hand:true, cam:false},
+  s4 :{nov:"桌位清空",                          pro:"桌位已清空",              hand:false,cam:false},
+  s5 :{nov:"拿出【應包金額】，攤開拍照後放入錢袋", pro:"應包金額已拍照入袋",      hand:true, cam:true },
+  s6 :{nov:"錢櫃算錢（算完截圖）",                pro:"錢櫃算好並截圖了",        hand:true, cam:true },
+  s7 :{nov:"合計金額",                          pro:"合計金額算好了",          hand:false,cam:false},
+  s7b:{nov:"POS 關班 → 一直按下一步 → 關班並清賬", pro:"POS 已關班清賬",         hand:false,cam:false},
+  s8 :{nov:"印出清帳單",                        pro:"清帳單印出來了",          hand:true, cam:false},
+  s9 :{nov:"把應包金額 + 刷卡單 + 清帳單釘在一起", pro:"單據釘在一起了",          hand:true, cam:false},
+  s9b:{nov:"把應包金額跟備用金放進金庫",           pro:"應包金額與備用金放進金庫了",hand:true, cam:false},
+  s10:{nov:"填大麥會員跟折扣數據（9:00 後填）",    pro:"大麥會員數據填好了",      hand:false,cam:false},
+  s11:{nov:"金庫跟錢櫃確定鎖上",                  pro:"金庫與錢櫃都鎖好了",      hand:true, cam:false},
+  s12:{nov:"傳結帳報告到 LINE 群組",              pro:"結帳報告發到 LINE 了",    hand:false,cam:false},
+  s13:{nov:"明天的預約大訂單",                    pro:"明天大訂單確認了",        hand:false,cam:false},
+};
+const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s7b","s8","s9","s9b","s10","s11","s12","s13"];
+// v219:老手版只完整顯示這 4 步(3 金庫備用金 / 6 錢櫃 / 7 合計 / 15 明天大訂),
+// 其餘壓成小勾勾橫排,點一下才展開(步驟2/5/9/14 裡的按鈕和拍照還要用,不能真的拿掉)。
+const CLOSE_PRO_MAIN = ["s3","s6","s7","s13"];
+// 老手版打一個勾 = keys 裡那幾步一起打勾,所以進度照樣是 x/15,切回新手版也對得起來
+const CLOSE_PRO_GROUPS = {
+  s3 :{n:1, label:"支出、信用卡對完，金庫備用金導正", keys:["s1","s2","s3"]},
+  s6 :{n:2, label:"桌位清空、應包金額入袋，錢櫃算好截圖", keys:["s4","s5","s6"]},
+  s7 :{n:3, label:"合計金額、POS關班、印單釘好放金庫", keys:["s7","s7b","s8","s9","s9b"]},
+  s13:{n:4, label:"大麥數據、上鎖、傳LINE，明天大訂", keys:["s10","s11","s12","s13"]},
+};
+const CLOSE_HELP = {
+  s1 :"【為什麼要做】\n支出沒 key，帳就對不起來，會計也查不到憑證。\n\n【記得備註】\n收據 / 發票號碼 / 蝦皮\n\n【多 key 了怎麼辦】\n到【現金支出】-【收入 A05 支出誤key】更正",
+  s2 :"【怎麼算】\n信用卡 ＋ AMEX ＝ 總金額\n\n【查看方式】\nF1 管理 → 4. 總帳查詢\n\n【對不起來的話】\n先看兩邊筆數對不對，再一筆筆比金額",
+  s3 :"【為什麼要做】\n備用金付出去的錢要補回來，不然明天不夠用。\n\n【怎麼做】\n備用金支出收據放進夾鏈袋\n用錢櫃的現金營業額，把備用金補回原本金額",
+  s4 :"【為什麼要做】\nPOS 機桌位沒清空會無法清帳。\n\n【怎麼查】\n看有沒有還沒結帳或掛著的桌",
+  s5 :"【怎麼算】\n應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出（含退訂金）\n\n【為什麼要拍照】\n之後金額有疑問時可以回頭對照\n攤開拍清楚，再放進錢袋",
+  s6 :"【為什麼要截圖】\n之後發現錢不對，可以翻回來對照當天的樣子。\n\n【提醒】\n照片都會留著，不會被覆蓋",
+  s7 :"【怎麼算】\n錢櫃 $10,000 ＋ 應包金額 ＋ 訂金 ＝ 合計金額\n\n【用途】\n這個數字要輸入到 POS 關班流程",
+  s7b:"【怎麼做】\n輸入支出後，POS 會顯示實收和應收金額\n兩個要一樣、差異金額是 0 才正確\n\n確認沒問題後，一直按「下一步」，直到最後按【關班並清賬】\n\n【差異不是 0 怎麼辦】\n先回頭檢查支出有沒有 key 錯、漏 key",
+  s8 :"【印之前先確認】\nPOS 機桌子都是空白\n\n【有訂金的話】\n單上要寫「訂金」和「應包金額」",
+  s9 :"【為什麼要做】\n單據分開放很容易掉，釘一起才不會缺件",
+  s9b:"【為什麼要做】\n現金放金庫才安全\n\n【放什麼】\n應包金額 ＋ 備用金，一起放進去",
+  s10:"【什麼時候填】\n9:00 後 POS 機才會更新，太早填抓不到資料\n\n【資料在哪】\n看上面三個區塊，各自對應大麥的報表位置",
+  s11:"【為什麼要做】\n沒鎖等於沒關店。\n\n【怎麼確認】\n金庫、錢櫃兩個都拉一下確認鎖上",
+  s12:"【為什麼要做】\n讓大家知道今天結完、金額有沒有問題。\n\n【怎麼傳】\n按分享鈕會叫出 LINE，選群組送出",
+  s13:"【為什麼要做】\n明天早班才知道有哪些大訂要準備。\n\n【提醒】\n只列已經封存餐點的，現場點餐的不會出現",
+};
+const CLOSE_WARN = {
+  s1:"【現金營業額】要足夠支付【支出】",
+  s3:"先數錢確認金額，再導正備用金 —— 順序反了就分不清是備用金還是錢櫃的錢不對",
+};
+// 三個階段
+const CLOSE_PHASES = [
+  {k:"a", title:"先對帳",        steps:["s1","s2","s3"]},
+  {k:"b", title:"數錢、收好",     steps:["s4","s5","s6","s7","s7b","s8","s9","s9b"]},
+  {k:"c", title:"收尾 & 明天準備", steps:["s10","s11","s12","s13"]},
+];
+// 手繪小圖示:動手做 / 電腦操作
+const IcoHand=({size=13,color="#8a6a48"})=>(
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M8 12V5.5a1.5 1.5 0 013 0V11M11 11V4.5a1.5 1.5 0 013 0V11M14 11V6.5a1.5 1.5 0 013 0V13M8 12v-1a1.5 1.5 0 00-3 0v4c0 3.3 2.7 6 6 6h1a6 6 0 006-6v-3"/>
+  </svg>
+);
+const IcoScreen=({size=13,color="#8a6a48"})=>(
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2.5" y="4" width="19" height="12.5" rx="1.5"/><path d="M9 20h6M12 16.5V20"/>
+  </svg>
+);
+function PhaseHead({ title, steps, cl }){
+  const done=steps.every(k=>cl[k]);
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:"8px",margin:"12px 0 6px"}}>
+      <span style={{fontSize:"12px",fontWeight:"900",color:done?"#2a8a5a":"#4a5a8a",whiteSpace:"nowrap"}}>{done?"✓ ":""}{title}</span>
+      <span style={{flex:1,height:"1.5px",background:done?"#b8dcc4":"#d8e0ea"}}/>
+      <span style={{fontSize:"10px",color:"#9aaabc",fontWeight:"700"}}>{steps.filter(k=>cl[k]).length}/{steps.length}</span>
+    </div>
+  );
+}
+const hhmm=()=>{const d=new Date();return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;};
+// 晚結的一個步驟(頂層元件:避免每次 render 重建,導致裡面輸入框失焦)
+function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
+  const done=cl[doneKey];
+  const meta=CLOSE_TITLES[doneKey]||{};
+  const pg = pro ? CLOSE_PRO_GROUPS[doneKey] : null;
+  const title = pg ? pg.label : (pro?(meta.pro||""):(meta.nov||""));
+  const num = pg ? pg.n : n;
+  const warn=CLOSE_WARN[doneKey];
+  const cam=meta.cam;
+  const [helpOpen,setHelpOpen]=useState(false);
+  // v220:老手版只留 4 大步,不是主步的整個不顯示(內容已搬進主步)
+  if(pro && !CLOSE_PRO_MAIN.includes(doneKey)) return null;
+  const grp = pg ? pg.keys : [doneKey];      // 老手版打一個勾 = 底下那幾步一起打
+  // 老手版:一律展開(只有勾勾);新手版:只展開目前這步
+  const show = pro ? true : open;
+  const Icon = meta.hand?IcoHand:IcoScreen;
+  return (
+    <div style={{background:"#fff",border:`${show&&!pro?"2px":"1.5px"} solid ${done?"#a8d0b8":(cam?"#e0a060":(show&&!pro?"#7a9ac0":"#dde4ec"))}`,borderRadius:"10px",padding:pro?"7px 10px":(show?"11px 12px":"8px 10px"),marginBottom:"6px"}}>
+      <div onClick={()=>{
+          if(!pro&&!show){ onOpen&&onOpen(doneKey); return; }
+          const nowDone=!done;
+          const t=done?null:hhmm();
+          saveCl(Object.fromEntries(grp.map(k=>[k,t])));   // 老手版:整組一起
+          if(!pro&&nowDone&&onOpen){                       // 新手版:打勾後自動跳下一步
+            const i=CLOSE_ORDER.indexOf(doneKey);
+            if(i>=0&&i<CLOSE_ORDER.length-1) onOpen(CLOSE_ORDER[i+1]);
+          }
+        }}
+        style={{display:"flex",alignItems:"center",gap:"7px",cursor:"pointer"}}>
+        <span style={{fontSize:"15px"}}>{done?"✅":"⬜"}</span>
+        <span style={{width:"18px",height:"18px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"10px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{num}</span>
+        {!pro&&<Icon size={13} color={done?"#8aaa9a":(meta.hand?"#b07840":"#5a7a9a")}/>}
+        {cam&&<span title="要拍照/截圖" style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>📷</span>}
+        <span style={{fontSize:show&&!pro?"14px":"13px",fontWeight:"800",color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none",flex:1,lineHeight:"1.4"}}>{title}</span>
+        {done&&<span style={{fontSize:"9px",color:"#9aaa9a"}}>{done}</span>}
+      </div>
+      {show&&(<>
+        {children&&<div style={{marginTop:"7px"}}>{children}</div>}
+        {!pro&&warn&&<div style={{fontSize:"13px",color:"#a03020",background:"#fdeeea",border:"1.5px solid #f0b8a4",borderRadius:"8px",padding:"9px 11px",marginTop:"9px",lineHeight:"1.7",fontWeight:"800"}}><div style={{fontSize:"11px",opacity:0.8,marginBottom:"2px"}}>⚠ 最常出錯</div>{warn}</div>}
+        {!pro&&(
+          <div style={{marginTop:"9px",display:"flex",gap:"7px",alignItems:"center"}}>
+            <button onClick={(e)=>{e.stopPropagation();
+                const t=hhmm(); saveCl(Object.fromEntries(grp.map(k=>[k,t])));
+                const i=CLOSE_ORDER.indexOf(doneKey);
+                if(i>=0&&i<CLOSE_ORDER.length-1&&onOpen) onOpen(CLOSE_ORDER[i+1]);
+              }}
+              style={{flex:1,fontSize:"13px",color:"#fff",background:done?"#8aaa9a":"#2a7a4a",border:"none",borderRadius:"8px",padding:"9px",cursor:"pointer",fontWeight:"800"}}>
+              {done?"已完成 ✓":"完成，下一步 →"}
+            </button>
+            <button onClick={(e)=>{e.stopPropagation();setHelpOpen(v=>!v);}}
+              style={{fontSize:"11px",color:"#5a7a9a",background:"#f0f4f8",border:"1px solid #c8d8e8",borderRadius:"6px",padding:"9px 11px",cursor:"pointer",fontWeight:"700",whiteSpace:"nowrap"}}>{helpOpen?"收起":"? 卡住了"}</button>
+          </div>
+        )}
+        {!pro&&helpOpen&&(
+          <div style={{fontSize:"12.5px",color:"#3a4a5a",background:"#f6f9fc",border:"1px solid #dce6f0",borderRadius:"8px",padding:"11px 12px",marginTop:"6px",lineHeight:"2",whiteSpace:"pre-line"}}>{CLOSE_HELP[doneKey]||""}</div>
+        )}
+      </>)}
+    </div>
+  );
+}
+function CloseMiniChecks({ items, cl, saveCl }){
+  return (
+    <div style={{background:"#fff",border:"1.5px solid #c8d0e0",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+      <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+        {items.map(([k,label,n])=>{
+          const done=cl[k];
+          return (
+            <button key={k} onClick={()=>saveCl({[k]:done?null:hhmm()})}
+              style={{fontSize:"12px",fontWeight:"800",borderRadius:"7px",padding:"7px 11px",cursor:"pointer",
+                border:`1.5px solid ${done?"#3a8a5a":"#c8d8e8"}`, background:done?"#eaf7ee":"#fff", color:done?"#2a7a4a":"#5a6a8a",
+                textDecoration:done?"line-through":"none"}}>{done?"✓":n} {label}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+// 晚結流程:每天獨立存檔,可回看;分新手/老手版
+function CloseFlow({ day, save, bases, todayStr, groups, data }){
+  const pro = !!(day.close&&day.close._pro);    // 老手版(存在資料裡,跨裝置同步)
+  const hint=!pro;                              // 老手版不顯示提示
+  const cl = day.close||{};                     // 晚結資料存 day.close
+  const saveCl=(patch)=>save({close:{...cl,...patch}});
+  const firstUndone = CLOSE_ORDER.find(k=>!cl[k]) || CLOSE_ORDER[CLOSE_ORDER.length-1];
+  const [curStepRaw,setCurStep]=useState(null);
+  const curStep = curStepRaw || firstUndone;    // 新手版:只展開這一步
+  const doneN = CLOSE_ORDER.filter(k=>cl[k]).length;
+  const now=()=>{const d=new Date();return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;};
+  // 一個「打勾步驟」的殼
+
+  // 老手版:把「純打勾」的步驟併成一排小勾勾
+
+  // 清點表A:填張數自動加總,跟基準比
+  const countTable=(spotKey, baseAmt, label)=>(
+    <CountTable counts={(cl.counts&&cl.counts[spotKey])||{}} baseAmt={baseAmt} label={label}
+      onChange={(nc)=>saveCl({counts:{...(cl.counts||{}),[spotKey]:nc}})}/>
+  );
+  // 拍照上傳(保留歷史:存陣列)
+  const photoBlock=(key,label)=>{
+    const arr=(cl.photos&&cl.photos[key])||[];
+    return (
+      <div style={{marginTop:"5px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
+          <span style={{fontSize:"11px",fontWeight:"700",color:"#5a6a8a"}}>{label}</span>
+          <label style={{fontSize:"10px",color:"#1a4a7a",background:"#eaf2fa",border:"1px solid #b8d0e8",borderRadius:"6px",padding:"3px 9px",cursor:"pointer",fontWeight:"700"}}>
+            📷 上傳
+            <input type="file" accept="image/*" style={{display:"none"}}
+              onChange={async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{const img=await compressImage(f);saveCl({photos:{...(cl.photos||{}),[key]:[...arr,{src:img,at:`${new Date().getMonth()+1}/${new Date().getDate()} ${now()}`}]}});}catch(err){window.alert("照片處理失敗");}e.target.value="";}}/>
+          </label>
+          {arr.length>0&&<span style={{fontSize:"9px",color:"#8a9aaa"}}>已存 {arr.length} 張（保留歷史）</span>}
+        </div>
+        {arr.length>0&&(
+          <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginTop:"5px"}}>
+            {arr.map((p,i)=>(
+              <div key={i} style={{position:"relative"}}>
+                <img src={p.src} onClick={()=>{const w=window.open("","_blank");if(w)w.document.write(`<img src="${p.src}" style="max-width:100%">`);}} style={{width:"100px",height:"100px",objectFit:"cover",borderRadius:"8px",border:"1.5px solid #b8d0e8",cursor:"pointer"}}/>
+                <div style={{fontSize:"10px",color:"#8a9aaa",textAlign:"center",maxWidth:"100px",fontWeight:"700"}}>{p.at}</div>
+                <button onClick={()=>saveCl({photos:{...(cl.photos||{}),[key]:arr.filter((_,j)=>j!==i)}})}
+                  style={{position:"absolute",top:"-4px",right:"-4px",background:"#c02020",color:"#fff",border:"none",borderRadius:"50%",width:"15px",height:"15px",fontSize:"9px",cursor:"pointer",lineHeight:"1",padding:0}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+  // 明天大訂(已封存餐點的)
+  const tmrBig=(()=>{
+    const d=new Date(); d.setDate(d.getDate()+1); const tmr=`${d.getMonth()+1}/${d.getDate()}`;
+    return (groups||[]).filter(g=>g.date===tmr && g.archiveType==="menu" && !g.cancelled);
+  })();
+  // v220:這四塊在老手版要搬進 4 大步裡,所以抽成變數,兩邊共用(不要複製兩份)
+  const blkCardEq = (<>
+        <div style={{display:"flex",gap:"6px",marginTop:"3px"}}>
+          <button onClick={()=>saveCl({cardEqPos:true})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos?"#2a8a5a":"#c8d8e8"}`,background:cl.cardEqPos?"#2a8a5a":"#fff",color:cl.cardEqPos?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✓ 一致</button>
+          <button onClick={()=>saveCl({cardEqPos:false})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos===false?"#c02020":"#c8d8e8"}`,background:cl.cardEqPos===false?"#c02020":"#fff",color:cl.cardEqPos===false?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
+        </div>
+  </>);
+  const blkPack = (<>
+        <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",background:"#fdf6ea",borderRadius:"7px",padding:"7px 9px",marginBottom:"6px",lineHeight:"1.7"}}>
+          應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+          <span style={{fontSize:"12px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
+          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="算出來的金額"
+            style={{width:"130px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+        </div>
+  </>);
+  const blkBill = (<>
+        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.75"}}>
+          ⚠ 有收訂金的話，<b>單上要手寫「訂金」和「應包金額」</b>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"2px"}}>存錢對帳要用，沒寫之後對不出來</div>
+        </div>
+  </>);
+  // 分享文字
+  const shareTxt=()=>{
+    const d=new Date();const wd=["日","一","二","三","四","五","六"][d.getDay()];
+    const cel=cl.cardEqPos?"✓ 一致":"⚠ 未確認";
+    let t=`今鶴 晚結結算 ${d.getMonth()+1}/${d.getDate()}（${wd}）\n━━━━━━━━━━\n`;
+    bases.forEach(b=>{ const cnt=(cl.counts&&cl.counts[b.id])||{}; const tot=CASH_DENOM.reduce((s,x)=>s+x*(+cnt[x]||0),0); const df=tot-(+b.amt||0);
+      t+=`${b.label} $${(+b.amt).toLocaleString()} ${tot>0?(df===0?"✓":df>0?`多$${df}`:`少$${-df}`):""}\n`; });
+    t+=`應包金額 $${cl.shouldPack||"__"}\n信用卡=POS ${cel}\n━━━━━━━━━━\n結班：${cl.doneBy||"__"} ${cl.doneAt||""}`;
+    return t;
+  };
+  const blkShare = (<>
+        <button onClick={async()=>{
+            const txt=shareTxt();
+            if(navigator.share){ try{ await navigator.share({text:txt}); }catch(e){} }
+            else { try{ await navigator.clipboard.writeText(txt); window.alert("已複製結算內容,請貼到 LINE 群組"); }catch(e){ window.prompt("複製以下內容貼到 LINE:",txt); } }
+            saveCl({s12:hhmm()});
+          }}
+          style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:"#06c755",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>📤 分享結算到 LINE</button>
+  </>);
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",marginBottom:"8px"}}>
+        <span style={{fontSize:"12px",fontWeight:"800",color:"#4a5a8a"}}>🌙 晚結流程</span>
+        <span style={{flex:1}}/>
+        <div style={{display:"flex",border:"1.5px solid #c8d8e8",borderRadius:"8px",overflow:"hidden"}}>
+          <button onClick={()=>saveCl({_pro:false})} style={{fontSize:"11px",fontWeight:"800",padding:"5px 11px",border:"none",cursor:"pointer",background:!pro?"#c06020":"#fff",color:!pro?"#fff":"#8a6a4a"}}>🐣 新手</button>
+          <button onClick={()=>saveCl({_pro:true})} style={{fontSize:"11px",fontWeight:"800",padding:"5px 11px",border:"none",cursor:"pointer",background:pro?"#1a4a7a":"#fff",color:pro?"#fff":"#5a7a9a"}}>⚡ 老手</button>
+        </div>
+      </div>
+      {/* 進度條 */}
+      <div style={{marginBottom:"9px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"4px"}}>
+          <span style={{fontSize:"11px",fontWeight:"800",color:"#4a5a8a"}}>晚結進度</span>
+          <span style={{fontSize:"13px",fontWeight:"900",color:doneN===CLOSE_ORDER.length?"#2a8a5a":"#c06020"}}>{doneN} / {CLOSE_ORDER.length}</span>
+          {doneN===CLOSE_ORDER.length&&<span style={{fontSize:"11px",fontWeight:"800",color:"#2a8a5a"}}>全部完成 🎉</span>}
+        </div>
+        <div style={{height:"7px",background:"#e0e8f0",borderRadius:"4px",overflow:"hidden"}}>
+          <div style={{width:`${doneN/CLOSE_ORDER.length*100}%`,height:"100%",background:doneN===CLOSE_ORDER.length?"#2a8a5a":"#5a8ac0",borderRadius:"4px",transition:"width .3s"}}/>
+        </div>
+      </div>
+
+      {!pro&&<PhaseHead title="先對帳" steps={["s1","s2","s3"]} cl={cl}/>}
+      <CloseStep n={1} doneKey="s1" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s1"} onOpen={setCurStep}/>
+      <CloseStep n={2} doneKey="s2" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s2"} onOpen={setCurStep}>
+        {blkCardEq}
+      </CloseStep>
+      <CloseStep n={3} doneKey="s3" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s3"} onOpen={setCurStep}>
+        {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
+          const st=(cl.spotOk||{})[b.id];   // v230:清點表移除,改成人工確認,不再自動推導
+          return (
+            <div key={b.id} style={{background:st==="ok"?"#eef8f0":"#f8fafc",borderRadius:"8px",padding:"9px 10px",marginTop:"5px",opacity:st==="ok"?0.75:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
+                <span style={{fontSize:"12px",fontWeight:"800",color:st==="ok"?"#5a8a6a":"#3a5a7a",textDecoration:st==="ok"?"line-through":"none"}}>{b.label}</span>
+                <span style={{fontSize:"12px",color:st==="ok"?"#8aaa8a":"#5a7a9a",fontWeight:"700",textDecoration:st==="ok"?"line-through":"none"}}>基準 ${(+b.amt).toLocaleString()}</span>
+                <span style={{flex:1}}/>
+                <button onClick={()=>saveCl({spotOk:{...(cl.spotOk||{}),[b.id]:"ok"}})}
+                  style={{fontSize:"12px",padding:"6px 12px",borderRadius:"7px",border:`1.5px solid ${st==="ok"?"#2a8a5a":"#c8d8e8"}`,background:st==="ok"?"#2a8a5a":"#fff",color:st==="ok"?"#fff":"#5a7a9a",fontWeight:"800",cursor:"pointer"}}>✓ 正確</button>
+                <button onClick={()=>{const amt=window.prompt(`${b.label} 實際金額?`);if(amt===null)return;saveCl({spotOk:{...(cl.spotOk||{}),[b.id]:`bad:${amt.replace(/[^0-9]/g,"")}`}});}}
+                  style={{fontSize:"12px",padding:"6px 12px",borderRadius:"7px",border:`1.5px solid ${String(st).startsWith("bad")?"#c02020":"#c8d8e8"}`,background:String(st).startsWith("bad")?"#c02020":"#fff",color:String(st).startsWith("bad")?"#fff":"#5a7a9a",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
+              </div>
+              {String(st).startsWith("bad")&&(()=>{const actual=+st.slice(4);const diff=actual-(+b.amt||0);return(
+                <div style={{fontSize:"12px",fontWeight:"800",color:"#c02020",marginTop:"5px"}}>實際 ${actual.toLocaleString()} —— {diff>0?`多 $${diff.toLocaleString()}`:`少 $${(-diff).toLocaleString()}`}</div>
+              );})()}
+            </div>
+          );
+        })}
+        {pro&&blkCardEq}
+      </CloseStep>
+
+      {!pro&&<PhaseHead title="數錢、收好" steps={["s4","s5","s6","s7","s7b","s8","s9","s9b"]} cl={cl}/>}
+      <CloseStep n={4} doneKey="s4" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s4"} onOpen={setCurStep}/>
+      <CloseStep n={5} doneKey="s5" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s5"} onOpen={setCurStep}>
+        {blkPack}
+      </CloseStep>
+      <CloseStep n={6} doneKey="s6" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s6"} onOpen={setCurStep}>
+        {pro&&blkPack}
+      </CloseStep>
+      <CloseStep n={7} doneKey="s7" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7"} onOpen={setCurStep}>
+        {(()=>{
+          const drawer=+((bases.filter(x=>x.label.includes("錢櫃"))[0]||{}).amt||10000);
+          const pack=+(cl.shouldPack||0), dep=+(cl.depTotal||0);
+          const total=drawer+pack+dep;
+          const box={padding:"7px 9px",borderRadius:"8px",background:"#fff",border:"1px solid #d8c8b0",textAlign:"center",minWidth:"88px"};
+          return (
+            <div style={{background:"#f8f4ec",borderRadius:"9px",padding:"10px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap",justifyContent:"center"}}>
+                <div style={box}><div style={{fontSize:"10px",color:"#8a7a5a",fontWeight:"700"}}>錢櫃</div><div style={{fontSize:"15px",fontWeight:"900",color:"#5a4020"}}>${drawer.toLocaleString()}</div></div>
+                <span style={{fontSize:"17px",fontWeight:"900",color:"#a08060"}}>＋</span>
+                <div style={{...box,background:"#fffdf6"}}><div style={{fontSize:"10px",color:"#8a7a5a",fontWeight:"700"}}>應包金額</div>
+                  <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="0"
+                    style={{width:"80px",padding:"2px 4px",borderRadius:"5px",border:"1px solid #c8b89c",fontSize:"15px",fontWeight:"900",textAlign:"center",color:"#5a4020"}}/>
+                </div>
+                <span style={{fontSize:"17px",fontWeight:"900",color:"#a08060"}}>＋</span>
+                <div style={{...box,background:"#fffdf6"}}><div style={{fontSize:"10px",color:"#8a7a5a",fontWeight:"700"}}>訂金</div>
+                  <input value={cl.depTotal||""} onChange={e=>saveCl({depTotal:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="0"
+                    style={{width:"74px",padding:"2px 4px",borderRadius:"5px",border:"1px solid #c8b89c",fontSize:"15px",fontWeight:"900",textAlign:"center",color:"#5a4020"}}/>
+                </div>
+                <span style={{fontSize:"17px",fontWeight:"900",color:"#a08060"}}>＝</span>
+                <div style={{...box,background:"#8a5210",border:"none"}}><div style={{fontSize:"10px",color:"#f0e0c0",fontWeight:"700"}}>合計</div><div style={{fontSize:"17px",fontWeight:"900",color:"#fff"}}>${total.toLocaleString()}</div></div>
+              </div>
+              <div style={{fontSize:"15px",color:"#c02020",textAlign:"center",marginTop:"9px",fontWeight:"900",background:"#fff",borderRadius:"8px",padding:"8px",border:"2px solid #e0a0a0"}}>⬆ 這個合計金額要輸入到 POS 關班流程</div>
+            </div>
+          );
+        })()}
+        {pro&&blkBill}
+      </CloseStep>
+      <CloseStep n={8} doneKey="s7b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7b"} onOpen={setCurStep}>
+        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",lineHeight:"1.8"}}>
+          ⚠ 輸入支出後，<b>POS 機上會顯示實收和應收金額</b><br/>
+          <span style={{fontSize:"15px"}}>兩個要一樣、<b>差異金額 0</b> 才正確</span>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"3px"}}>差異不是 0 → 先檢查支出有沒有 key 錯或漏 key，不要直接關班</div>
+        </div>
+      </CloseStep>
+      <CloseStep n={9} doneKey="s8" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8"} onOpen={setCurStep}>
+        {blkBill}
+      </CloseStep>
+      {pro
+        ? null                                   // v220:已併進 4 大步
+        : <><CloseStep n={10} doneKey="s9" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9"} onOpen={setCurStep}/>
+          <CloseStep n={11} doneKey="s9b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9b"} onOpen={setCurStep}/></>}
+
+      {!pro&&<PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>}
+      <CloseStep n={12} doneKey="s10" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s10"} onOpen={setCurStep}>
+        <div style={{display:"flex",flexDirection:"column",gap:"7px"}}>
+          {[["店家報表－營業銷售","桌數（新會員／舊會員）"],
+            ["折扣報表－結帳活動","前菜折抵 100、前菜折抵 30"],
+            ["折扣報表－優惠券","回訪折抵 100"]].map(([src,what])=>(
+            <div key={src} style={{background:"#f8f4ec",borderRadius:"8px",padding:"8px 10px",borderLeft:"3px solid #c9a45c"}}>
+              <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"2px"}}>大麥「{src}」</div>
+              <div style={{fontSize:"13px",fontWeight:"700",color:"#4a3520"}}>{what}</div>
+            </div>
+          ))}
+        </div>
+      </CloseStep>
+      {pro
+        ? null                                   // v220:已併進 4 大步
+        : <CloseStep n={13} doneKey="s11" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s11"} onOpen={setCurStep}/>}
+
+      <CloseStep n={14} doneKey="s12" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s12"} onOpen={setCurStep}>
+        {blkShare}
+      </CloseStep>
+
+      <CloseStep n={15} doneKey="s13" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s13"} onOpen={setCurStep}>
+        {!pro&&<div style={{fontSize:"12px",fontWeight:"800",color:"#2a3a5a",marginBottom:"5px"}}>明天大訂（已封存 {tmrBig.length} 組）</div>}
+        {!pro&&(   /* v221:印的時候/暫時桌號 是教學,老手版不顯示 */
+        <div style={{fontSize:"12px",color:"#3a4a5a",background:"#f6f9fc",border:"1.5px solid #b8d0e8",borderRadius:"8px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.85"}}>
+          <div style={{fontWeight:"900",color:"#1a4a7a",marginBottom:"3px"}}>📋 印的時候</div>
+          ・<b>11:30 以前</b> → 照訂位表上的桌號印<br/>
+          ・<b>12:00 以後</b> → 印暫時桌號，等 12:00 再移桌<br/>
+          ・<b>包廂</b> → 直接印「包廂」
+          <div style={{marginTop:"6px",paddingTop:"6px",borderTop:"1px solid #dce6f0"}}>
+            <b style={{color:"#a04010"}}>暫時桌號不要連著用</b>，要跳開字頭，例如：<br/>
+            <span style={{fontWeight:"800",color:"#1a4a7a"}}>大訂A → 特殊B → 預訂C</span>
+            <span style={{color:"#8a9aaa"}}>（發 mic 叫號才不會聽錯）</span>
+            <div style={{fontSize:"11px",color:"#5a7a9a",marginTop:"3px"}}>可用：特殊A/B/C　大訂A/B/C　預訂A/B/C</div>
+          </div>
+        </div>)}
+        {(()=>{
+          // 13:30 以後訂包廂 → 要先確認前面時段有沒有大訂被放進包廂(散包)
+          const lateVip=tmrBig.filter(g=>{
+            if(!g.isVip) return false;
+            const m=(g.time||"").match(/^(\d{1,2}):(\d{2})$/); if(!m) return false;
+            return (+m[1]*60 + +m[2]) >= 13*60+30;
+          });
+          if(lateVip.length===0) return null;
+          return (
+            <div style={{fontSize:"12px",color:"#a04010",background:"#fdf0e4",border:"2px solid #e0a060",borderRadius:"8px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.8"}}>
+              <div style={{fontWeight:"900",marginBottom:"3px"}}>⚠ 13:30 以後有訂包廂 {lateVip.length} 組</div>
+              {lateVip.map(g=>(<div key={g.id} style={{fontWeight:"800",color:"#8a3010"}}>・{g.time} {g.name}{g.gender||""} {g.headcount}</div>))}
+              <div style={{marginTop:"5px",paddingTop:"5px",borderTop:"1px solid #f0d8c0"}}>
+                先確認訂位表：<b>10:00~11:30</b> 有沒有大訂被放進包廂（散包）<br/>
+                <span style={{color:"#8a5a30"}}>用餐 2 小時，前面時段佔著的話這組就不能印「包廂」，要改印其他可用桌</span>
+              </div>
+            </div>
+          );
+        })()}
+        {tmrBig.length===0
+          ? <div style={{fontSize:"12px",color:"#a0b0c0",padding:"8px",textAlign:"center"}}>明天沒有已封存的大訂（現場點餐的不列入）</div>
+          : <div style={{background:"#f8fafc",borderRadius:"8px",overflow:"hidden"}}>
+              <div style={{display:"flex",background:"#e8eef4",fontSize:"11px",fontWeight:"800",color:"#3a5a7a",padding:"6px 8px"}}>
+                <span style={{width:"52px"}}>時間</span><span style={{flex:1}}>姓名</span><span style={{width:"58px"}}>人數</span><span style={{width:"96px",textAlign:"right"}}>封存時間</span>
+              </div>
+              {tmrBig.map(g=>{
+                const snaps=g.archiveSnaps||[];
+                const at=(snaps.length?snaps[snaps.length-1].time:g.archiveTime)||"—";
+                return (
+                  <div key={g.id} style={{display:"flex",fontSize:"12px",color:"#2a3a4a",padding:"7px 8px",borderTop:"1px solid #e4eaf0",fontWeight:"600"}}>
+                    <span style={{width:"52px",fontWeight:"800"}}>{g.time||"—"}</span>
+                    <span style={{flex:1}}>{g.name||"—"}{g.gender||""}{g.isVip?<b style={{color:"#a85ab4"}}> 包廂</b>:""}</span>
+                    <span style={{width:"58px"}}>{g.headcount||"—"}</span>
+                    <span style={{width:"96px",textAlign:"right",fontSize:"11px",color:"#5a7a9a"}}>{String(at).replace(/^\d{4}\//,"")}</span>
+                  </div>
+                );
+              })}
+            </div>}
+        <button onClick={()=>{
+            const d=new Date(); d.setDate(d.getDate()+1); const wd=["日","一","二","三","四","五","六"][d.getDay()];
+            const rr=tmrBig.map(g=>{const sn=g.archiveSnaps||[];const at=String((sn.length?sn[sn.length-1].time:g.archiveTime)||"").replace(/^\d{4}\//,"");
+              return `<tr><td style="padding:8px;border:1px solid #999">${g.time||""}</td><td style="padding:8px;border:1px solid #999">${g.name||""}${g.gender||""}${g.isVip?" <b>包廂</b>":""}</td><td style="padding:8px;border:1px solid #999">${g.headcount||""}</td><td style="padding:8px;border:1px solid #999">${at}</td></tr>`;}).join("");
+            const html=`<html><head><meta charset="utf-8"><title>明天大訂</title></head><body style="font-family:sans-serif;padding:20px"><h2>明天大訂 ${d.getMonth()+1}/${d.getDate()}（${wd}）</h2><table style="width:100%;border-collapse:collapse;font-size:15px"><tr style="background:#eee"><th style="padding:8px;border:1px solid #999;text-align:left">時間</th><th style="padding:8px;border:1px solid #999;text-align:left">姓名</th><th style="padding:8px;border:1px solid #999;text-align:left">人數</th><th style="padding:8px;border:1px solid #999;text-align:left">封存時間</th></tr>${rr}</table></body></html>`;
+            const w=window.open("","_blank"); if(w){ w.document.write(html); w.document.close(); setTimeout(()=>w.print(),300); }
+          }}
+          disabled={tmrBig.length===0}
+          style={{width:"100%",marginTop:"7px",padding:"9px",borderRadius:"8px",border:"1.5px solid #8aa0c0",background:"#fff",color:"#3a5a8a",fontSize:"12px",fontWeight:"800",cursor:tmrBig.length?"pointer":"not-allowed",opacity:tmrBig.length?1:0.5}}>🖨 需要列印的話按這裡</button>
+        {pro&&blkShare}
+      </CloseStep>
+
+      {/* 結束晚結:記夥伴 */}
+      <div style={{background:cl.doneBy?"#eef8f0":"#fff8f0",border:`2px solid ${cl.doneBy?"#2a8a5a":"#e0a060"}`,borderRadius:"10px",padding:"11px"}}>
+        {cl.doneBy
+          ? <div style={{fontSize:"13px",fontWeight:"800",color:"#1a6a3a",textAlign:"center"}}>✓ 晚結已結束　{cl.doneBy}　{cl.doneAt}
+              <button onClick={()=>saveCl({doneBy:null,doneAt:null})} style={{marginLeft:"8px",fontSize:"10px",color:"#8a9a8a",background:"none",border:"none",textDecoration:"underline",cursor:"pointer"}}>取消</button>
+            </div>
+          : <button onClick={()=>{const nm=window.prompt("結束晚結 —— 哪位夥伴?(填名字)");if(!nm||!nm.trim())return;const d=new Date();saveCl({doneBy:nm.trim(),doneAt:`${d.getMonth()+1}/${d.getDate()} ${now()}`});}}
+              style={{width:"100%",padding:"12px",borderRadius:"9px",border:"none",background:"#c06020",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>🔒 結束晚結（記錄夥伴）</button>}
+      </div>
+    </div>
+  );
+}
+
+// ─── 印訂位表:上傳大麥 Excel → 自動整理 → 每格可改 → A4 列印 ────────────────
+const PD_A4_W   = 794;    // A4 寬 210mm @96dpi
+const PD_A4_H   = 1122;   // A4 高 297mm @96dpi
+const PD_WKEY   = "pdColW_v2";
+const PD_SKEY   = "pdSize_v2";
+// 日期欄只放「包廂」所以很窄;人數欄要塞「大人 3 / 小孩 0」所以最寬
+const PD_DEF_W  = { date:48, time:52, name:80, sex:46, tel:80, pax:92 };   // 合計 398 → 備註拿到 396
+const PD_DEF_SZ = { font:12, row:27 };   // 27px ≒ Excel 20pt
+const PD_COLS   = [
+  { k:"date", label:"日期" }, { k:"time", label:"時間" }, { k:"name", label:"姓名" },
+  { k:"sex",  label:"性別" }, { k:"tel",  label:"電話" }, { k:"pax",  label:"人數" },
+  { k:"note", label:"備註" },
+];
+
+// ── Excel 值 → 想要的格式(獨立出來才能單獨測試)────────────────────────────
+// Excel 序號 → 日期各部位。純算式,不依賴 XLSX.SSF(不同版本不一定有)
+function pdSfx(v) {
+  if (typeof v !== "number" || !isFinite(v) || v <= 0) return null;
+  const d = new Date(Math.round((v - 25569) * 86400000));   // 25569 = 1970-01-01 的序號
+  if (isNaN(d.getTime())) return null;
+  return { m:d.getUTCMonth() + 1, d:d.getUTCDate(), H:d.getUTCHours(), M:d.getUTCMinutes() };
+}
+function pdFmtDate(v) {
+  if (v instanceof Date) return `${v.getMonth() + 1}/${v.getDate()}`;
+  const o = (typeof v === "number" && v >= 1) ? pdSfx(v) : null;   // <1 是純時間值,不是日期
+  if (o && o.m) return `${o.m}/${o.d}`;
+  const s = String(v ?? "").trim();
+  const a = s.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);   // 2026-03-14
+  if (a) return `${+a[2]}/${+a[3]}`;
+  const b = s.match(/(\d{1,2})[\/\-.](\d{1,2})(?!\d)/);           // 3/14
+  if (b) return `${+b[1]}/${+b[2]}`;
+  return s;
+}
+function pdFmtTime(v) {
+  if (v instanceof Date) return `${String(v.getHours()).padStart(2,"0")}:${String(v.getMinutes()).padStart(2,"0")}`;
+  const o = pdSfx(v); if (o && o.H !== undefined) return `${String(o.H).padStart(2,"0")}:${String(o.M).padStart(2,"0")}`;
+  const s = String(v ?? "").trim();
+  const m = s.match(/(\d{1,2}):(\d{2})/);
+  return m ? `${m[1].padStart(2,"0")}:${m[2]}` : s;
+}
+function pdFmtTel(v) {
+  let s = String(v ?? "").trim();
+  if (/^\d+(\.0+)?$/.test(s)) s = s.replace(/\.0+$/, "");
+  if (/^9\d{8}$/.test(s)) s = "0" + s;              // Excel 把開頭的 0 吃掉了
+  return s;
+}
+function pdFmtPax(v) {
+  // 保留大麥原格式「大人 3 / 小孩 0」,只把多餘空白壓掉
+  return String(v ?? "").replace(/\s+/g, " ").trim();
+}
+
+// 把大麥匯出的原始二維陣列整理成要印的列。回傳 {err} 或 {rows,count,skipped}
+function pdParse(raw, opts) {
+  const withShop = !!(opts && opts.withShop);
+  const gapN = (opts && Number.isFinite(opts.gap)) ? Math.max(0, opts.gap) : 3;
+  let hi = -1, H = [];
+  for (let r = 0; r < Math.min(raw.length, 8); r++) {
+    const row = (raw[r] || []).map(x => String(x ?? ""));
+    if (row.some(x => x.includes("訂位日期") || x.includes("日期"))) { hi = r; H = row; break; }
+  }
+  if (hi < 0) return { err:"❌ 找不到標題列(要有「訂位日期」這一欄)。確認匯出的是訂位記錄,不是別張表。" };
+
+  const F = (...ks) => H.findIndex(x => ks.some(k => x.includes(k)));
+  const di  = F("訂位日期", "日期");
+  const ti  = H.findIndex(x => x.includes("時間") && !x.includes("下訂") && !x.includes("更新"));
+  const nmi = H.findIndex(x => x.includes("訂位人名稱") || (x.includes("訂位人") && !x.includes("人數")) || x === "姓名");
+  const gi  = F("性別");
+  const pi  = H.findIndex(x => x.includes("人數") && !x.includes("開桌"));
+  const phi = F("聯絡電話", "電話", "手機");
+  const sti = F("預訂桌位", "桌位");
+  const sui = F("狀態");
+  const x1  = F("用餐目的"), x2 = F("特殊需求"), x3 = F("顧客備註"), x4 = F("店家備註");
+
+  const miss = [];
+  if (di < 0) miss.push("日期"); if (nmi < 0) miss.push("姓名"); if (phi < 0) miss.push("電話");
+  if (miss.length) return { err:`❌ 這幾欄找不到:${miss.join("、")}。可能匯出時漏勾欄位。` };
+
+  let skipped = 0;
+  const out = [];
+  const clean = (x) => String(x ?? "").replace(/\s+/g, " ").trim();   // 顧客備註裡有換行,會撐爆列高
+  for (let r = hi + 1; r < raw.length; r++) {
+    const row = raw[r] || [];
+    const at = (i) => (i >= 0 ? row[i] : "");
+    const date = pdFmtDate(at(di));
+    const name = String(at(nmi) ?? "").trim();
+    if (!date && !name) continue;                                   // 整列空白
+    const st = String(at(sui) ?? "");
+    if (st.includes("取消") || st.includes("未到") || st.includes("no show")) { skipped++; continue; }
+
+    // 備註 = 特殊需求 + 顧客備註 + 店家備註（用餐目的整欄丟掉）
+    const src = [x2, x3, x4];
+    out.push({
+      id: `r${r}_${Math.random().toString(36).slice(2, 7)}`,
+      date,
+      time: pdFmtTime(ti >= 0 ? at(ti) : at(di)),
+      name,
+      sex:  String(at(gi) ?? "").trim(),
+      tel:  pdFmtTel(at(phi)),
+      pax:  pdFmtPax(at(pi)),
+      note: src.map(i => clean(at(i))).filter(Boolean).join(" "),
+      room: String(at(sti) ?? "").includes("包廂"),
+    });
+  }
+  if (!out.length) return { err:"❌ 讀到 0 筆。檢查匯出時的「訂位時間」和「狀態」篩選條件。" };
+
+  // 依日期→時間排序,換時段自動空 3 行
+  const key = (x) => {
+    const d = (x.date.match(/(\d+)\/(\d+)/) || [0, 0, 0]);
+    const t = (x.time.match(/(\d+):(\d+)/) || [0, 0, 0]);
+    return (+d[1]) * 100000 + (+d[2]) * 1000 + (+t[1]) * 60 + (+t[2]);
+  };
+  out.sort((a, b) => key(a) - key(b));
+
+  const rows = [];
+  let prev = null;
+  out.forEach(x => {
+    const slot = `${x.date} ${x.time}`;
+    if (prev !== null && slot !== prev) {
+      for (let i = 0; i < gapN; i++) rows.push({ id:`g${rows.length}_${i}`, date:"", time:"", name:"", sex:"", tel:"", pax:"", note:"", room:false });
+    }
+    rows.push(x);
+    prev = slot;
+  });
+  return { rows, count:out.length, skipped };
+}
+
+// 可直接編輯的格子:用 contentEditable,只在外部值真的變動時才回寫,游標不會亂跳
+function PdCell({ value, onCommit, style }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && ref.current.innerText !== (value || "")) ref.current.innerText = value || "";
+  }, [value]);
+  return (
+    <div ref={ref} contentEditable suppressContentEditableWarning
+      onBlur={e => onCommit(e.currentTarget.innerText.replace(/\n+$/, ""))}
+      style={{ outline:"none", whiteSpace:"pre-wrap", wordBreak:"break-word", ...style }} />
+  );
+}
+
+function PrintDingwePage({ onClose, groups, onImported }) {
+  const [preview, setPreview] = useState(false);     // 預覽:把控制欄和工具列藏起來,看到就是印出來的樣子
+  const [rows, setRows]   = useState([]);
+  const [busy, setBusy]   = useState(false);
+  const [msg, setMsg]     = useState("");
+  const [howOpen, setHow] = useState(false);
+  const [withShop, setWithShop] = useState(false);   // 備註要不要含「店家備註」
+  const [gapN, setGapN]         = useState(3);       // 換時段空幾行
+  const rawRef = useRef(null);                       // 留著原始表格,切換選項時重整用
+  const [colW, setColW]   = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem(PD_WKEY) || "null"); return s && s.date ? s : { ...PD_DEF_W }; }
+    catch { return { ...PD_DEF_W }; }
+  });
+  const [sz, setSz] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem(PD_SKEY) || "null"); return s && s.font ? s : { ...PD_DEF_SZ }; }
+    catch { return { ...PD_DEF_SZ }; }
+  });
+
+  useEffect(() => { try { localStorage.setItem(PD_WKEY, JSON.stringify(colW)); } catch {} }, [colW]);
+  useEffect(() => { try { localStorage.setItem(PD_SKEY, JSON.stringify(sz)); } catch {} }, [sz]);
+
+  // ── 讀檔 ────────────────────────────────────────────────────────────────
+  const handleFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true); setMsg("");
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type:"array", cellDates:true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, { header:1 });
+
+      const res = pdParse(raw, { withShop, gap:gapN });
+      if (res.err) { setMsg(res.err); setBusy(false); return; }
+
+      rawRef.current = raw;
+      setRows(res.rows);
+      setMsg(`✅ 讀進 ${res.count} 筆${res.skipped ? `,略過 ${res.skipped} 筆已取消/未到` : ""}。每一格都可以直接點下去改字。`);
+      if (onImported) onImported();   // v225:匯入成功 → 交接的「印訂位表」自動劃掉
+    } catch (err) {
+      setMsg("❌ 讀檔失敗:" + (err && err.message ? err.message : String(err)));
+    }
+    setBusy(false);
+  };
+
+  // ── 切換選項:從原始表格重新整理一次 ──────────────────────────────────────
+  const reparse = (nextShop, nextGap) => {
+    if (!rawRef.current) { setWithShop(nextShop); setGapN(nextGap); return; }
+    if (!window.confirm("重新整理會把手動改過的字還原成原始資料，確定嗎？")) return;
+    const res = pdParse(rawRef.current, { withShop:nextShop, gap:nextGap });
+    if (res.err) { setMsg(res.err); return; }
+    setWithShop(nextShop); setGapN(nextGap);
+    setRows(res.rows);
+    setMsg(`✅ 已重新整理 ${res.count} 筆。`);
+  };
+
+  // ── 列的增刪改 ──────────────────────────────────────────────────────────
+  const setCell = (id, k, v) => setRows(p => p.map(x => (x.id === id ? { ...x, [k]:v } : x)));
+  const delRow  = (id)       => setRows(p => p.filter(x => x.id !== id));
+  const addAfter = (idx) => setRows(p => {
+    const n = [...p];
+    n.splice(idx + 1, 0, { id:`n${Date.now()}_${Math.random().toString(36).slice(2,6)}`, date:"", time:"", name:"", sex:"", tel:"", pax:"", note:"", room:false });
+    return n;
+  });
+
+  // ── 拖曳調整欄寬 ────────────────────────────────────────────────────────
+  const startDrag = (e, k) => {
+    e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, sw = colW[k];
+    const mv = (ev) => setColW(p => ({ ...p, [k]:Math.max(34, Math.round(sw + (ev.clientX - sx))) }));
+    const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+  };
+
+  const fixedW  = PD_COLS.slice(0, 6).reduce((s, c) => s + (colW[c.k] || 0), 0);
+  const noteW   = PD_A4_W - fixedW;
+  const tooWide = noteW < 90;
+  const perPage = Math.max(1, Math.floor((PD_A4_H - (sz.row + 6)) / sz.row));
+  const pages   = Math.max(1, Math.ceil(rows.length / perPage));
+
+  // 這份檔案是不是只有一天?只有一天就把日期收到表頭,每列留白
+  const dateSet = [...new Set(rows.filter(r => r.name && r.date).map(r => r.date))];
+  const oneDay  = dateSet.length === 1;
+  const dayHdr  = oneDay ? dateSet[0] : "日期";
+
+  // 大訂追蹤表裡有這筆(同電話同日期)且不是現場點餐 → 整列標起來
+  const bigSet = (() => {
+    const s = new Set();
+    (groups || []).forEach(g => {
+      if (g.cancelled || g.onsiteOrder) return;          // 現點不標
+      const d = String(g.phone || "").replace(/\D/g, "");
+      if (d) s.add(`${d}|${String(g.date || "").trim()}`);
+    });
+    return s;
+  })();
+  const isBig = (r) => {
+    const d = String(r.tel || "").replace(/\D/g, "");
+    return !!d && bigSet.has(`${d}|${String(r.date || "").trim()}`);
+  };
+
+  // 客訴中心:同電話的客人有客訴 → 原因＋招待自動貼到備註前面
+  const cplMap = (() => {
+    const m = {};
+    (groups || []).forEach(g => {
+      const d = String(g.phone || "").replace(/\D/g, "");
+      const cs = (g.complaints || []).filter(c => c && (c.reason || c.treat || c.type));
+      if (!d || !cs.length) return;
+      const c = cs[cs.length - 1];                       // 只看最近一筆
+      const bits = [];
+      if (c.type) bits.push(String(c.type).replace(/\s+/g, " ").trim());
+      if (c.reason) bits.push(String(c.reason).replace(/\s+/g, " ").trim());
+      const t = (c.treat && !c.treatDone) ? String(c.treat).replace(/\s+/g, " ").trim() : "";
+      const txt = `⚠客訴${bits.length ? "・" + bits.join("・") : ""}${t ? `｜這次招待：${t}` : ""}`;
+      if (!m[d] || txt.length > m[d].length) m[d] = txt;
+      });
+    return m;
+  })();
+  const noteOf = (r) => {
+    const d = String(r.tel || "").replace(/\D/g, "");
+    const c = d ? cplMap[d] : "";
+    return c ? `${c}${r.note ? "　" + r.note : ""}` : (r.note || "");
+  };
+
+  // ── 匯出 Excel:格式比照你手工整理的那份，欄寬列高先設好 ──────────────────
+  const exportXlsx = async () => {
+    if (!rows.length) return;
+    // v227:社群版 SheetJS 寫不進儲存格樣式(對齊/框線都會被丟掉)。
+    // 只有「匯出」這一支改用 xlsx-js-style;讀大麥檔仍用原本的 XLSX,不受影響。
+    // 載不到就自動退回原本的匯出(只是沒有對齊),不會讓匯出整個壞掉。
+    let X = XLSX, styled = false;
+    try {
+      const m = await import("https://esm.sh/xlsx-js-style@1.2.0");
+      const cand = m.utils ? m : (m.default && m.default.utils ? m.default : null);
+      if (cand) { X = cand; styled = true; }
+    } catch (err) { X = XLSX; styled = false; }
+    const head = [oneDay ? dayHdr : "日期", "時間", "姓名", "性別", "聯絡電話", "訂位人數", "店家備註"];
+    const body = rows.map(r => [
+      r.room ? "包廂" : (oneDay ? "" : r.date),
+      r.name ? r.time : "", r.name || "", r.name ? r.sex : "",
+      r.name ? r.tel : "", r.name ? r.pax : "", noteOf(r),
+    ]);
+    const ws = X.utils.aoa_to_sheet([head, ...body]);
+    // 尺寸照你手工整理那份的實際數值（用像素，Excel 打開就是一樣的寬度）
+    // v224:依內容自動算寬度。中日文字算 2 個字寬,備註可能換行 → 取最長那一行
+    const wOf = (v) => String(v??"").split("\n").reduce((mx,line)=>Math.max(mx,
+      line.split("").reduce((n,ch)=>n+(/[\u2e80-\u9fff\uff00-\uffef]/.test(ch)?2:1),0)),0);
+    ws["!cols"] = head.map((h,i)=>{
+      const w = Math.max(wOf(h), ...[head,...body].map(r=>wOf(r[i])));
+      return { wpx: Math.min(460, Math.max(56, w*9+18)) };   // 下限56上限460,避免太窄或撐爆一頁
+    });
+    ws["!rows"] = [head, ...body].map(() => ({ hpt:20 }));
+    // v227:姓名(第3欄)靠左,其餘置中。載不到樣式版就跳過,不影響資料本身
+    if (styled) {
+      const NAME_COL = 2;
+      for (let r = 0; r <= body.length; r++) {
+        for (let c = 0; c < head.length; c++) {
+          const ref = X.utils.encode_cell({ r, c });
+          if (!ws[ref]) ws[ref] = { t:"s", v:"" };
+          ws[ref].s = {
+            alignment: { horizontal: c===NAME_COL ? "left" : "center", vertical:"center", wrapText:false },
+          };
+        }
+      }
+    }
+    // 邊界＋頁首頁尾全部 0（框線仍要在 Excel 按 Ctrl+A → 所有框線）
+    ws["!margins"] = { left:0, right:0, top:0, bottom:0, header:0, footer:0 };
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, "訂位表");
+    X.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
+    if (!styled) setMsg("⚠ 已匯出，但樣式函式庫載入失敗，這次沒有套用對齊");
+  };
+
+  const BD   = "1px solid #000";
+  const btn  = { padding:"9px 13px", borderRadius:"8px", border:"1.5px solid #c8b89c", background:"#fdf9f0", color:"#6a4a2e", fontSize:"13px", fontWeight:"800", cursor:"pointer", whiteSpace:"nowrap" };
+  const cell = { fontSize:`${sz.font}px`, minHeight:`${sz.row - 8}px`, lineHeight:1.35, padding:"0 4px", display:"flex", alignItems:"center" };
+
+  return createPortal(
+    <div className="pdWrap" style={{ position:"fixed", inset:0, zIndex:900, background:"#e8e0d0", overflow:"auto", padding:"14px 0 60px" }}>
+      <style>{`
+        @media print{
+          @page{ size:A4 portrait; margin:0; }
+          html,body{ margin:0!important; padding:0!important; background:#fff!important; width:210mm!important; max-width:210mm!important; overflow:hidden!important; }
+          body > *:not(.pdWrap){ display:none!important; }   /* 用 display 不用 visibility,否則舊版面還佔寬度會把整頁縮小 */
+          .pdWrap{ position:static!important; inset:auto!important; overflow:visible!important; background:#fff!important; padding:0!important; }
+          .pdSheet{ position:static!important; margin:0!important; box-shadow:none!important; width:210mm!important; }
+          .pdNP{ display:none!important; }
+          .pdGut{ width:0!important; padding:0!important; border:none!important; }
+          .pdGut *{ display:none!important; }
+          .pdSheet table{ border:2px solid #000!important; }
+          .pdSheet td, .pdSheet th{ border:1px solid #000!important; }
+          .pdSheet td.pdGut{ border:none!important; }
+          .pdRow{ break-inside:avoid; page-break-inside:avoid; }
+          .pdPageTop td{ box-shadow:none!important; }
+          thead{ display:table-header-group; }
+        }
+        .pdPageTop td{ box-shadow:inset 0 3px 0 #c02020; }
+      `}</style>
+      {preview&&<style>{`
+        .pdWrap .pdPrevHide{ display:none!important; }
+        .pdWrap .pdGut{ width:0!important; padding:0!important; border:none!important; overflow:hidden; }
+        .pdWrap .pdGut *{ display:none!important; }
+      `}</style>}
+
+      {/* 工具列 */}
+      <div className="pdNP" style={{ maxWidth:`${PD_A4_W + 60}px`, margin:"0 auto 12px", background:"#fdf9f0", border:"1.5px solid #c8b89c", borderRadius:"12px", padding:"12px 14px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap" }}>
+          <b style={{ fontSize:"15px", color:"#6a4a2e" }}>🖨 印訂位表</b>
+          <label style={{ ...btn, background:"#8a5210", color:"#fff", border:"1.5px solid #8a5210" }}>
+            {busy ? "讀取中…" : "📂 上傳大麥 Excel"}
+            <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ display:"none" }} />
+          </label>
+          <button style={btn} onClick={() => setHow(v => !v)}>❓ 大麥怎麼匯出</button>
+          <span style={{ flex:1 }} />
+          {rows.length > 0 && <span style={{ fontSize:"13px", color:"#6a4a2e", fontWeight:"800" }}>共 {rows.length} 行 · 預估 {pages} 頁</span>}
+          <button style={{ ...btn, background:preview ? "#5a6a8a" : "#fdf9f0", color:preview ? "#fff" : "#6a4a2e", border:`1.5px solid ${preview ? "#5a6a8a" : "#c8b89c"}`, opacity:rows.length ? 1 : 0.4 }}
+            disabled={!rows.length} onClick={() => setPreview(v => !v)}>{preview ? "✎ 回編輯" : "👁 預覽"}</button>
+          <button style={{ ...btn, background:"#1a6a3a", color:"#fff", border:"1.5px solid #1a6a3a", opacity:rows.length ? 1 : 0.4 }}
+            disabled={!rows.length} onClick={exportXlsx}
+            title="匯出成 Excel，欄寬列高已設好，可自己再調整後從 Excel 列印">📊 匯出 Excel</button>
+        </div>
+
+        {rows.length > 0 && !preview && (
+          <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>字級</span>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, font:Math.max(9, p.font - 1) }))}>−</button>
+            <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"22px", textAlign:"center" }}>{sz.font}</b>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, font:Math.min(28, p.font + 1) }))}>＋</button>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700", marginLeft:"6px" }}>列高</span>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, row:Math.max(20, p.row - 2) }))}>−</button>
+            <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"28px", textAlign:"center" }}>{sz.row}</b>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => setSz(p => ({ ...p, row:Math.min(80, p.row + 2) }))}>＋</button>
+            <button style={{ ...btn, marginLeft:"6px" }} onClick={() => { setColW({ ...PD_DEF_W }); setSz({ ...PD_DEF_SZ }); }}>↺ 欄寬字級復原</button>
+            <button style={btn} onClick={() => setRows(p => [{ id:`n${Date.now()}_top`, date:"", time:"", name:"", sex:"", tel:"", pax:"", note:"", room:false }, ...p])}>⬆ 最前面加一行</button>
+            <button style={btn} onClick={() => addAfter(rows.length - 1)}>⬇ 最後加一行</button>
+            <span style={{ flex:1 }} />
+            <button style={{ ...btn, borderColor:"#e0a0a0", color:"#a03020" }}
+              onClick={() => { if (window.confirm("清空目前整份表格?")) { setRows([]); rawRef.current = null; setMsg(""); } }}>清空</button>
+          </div>
+        )}
+
+        {rows.length > 0 && !preview && (
+          <div style={{ display:"flex", alignItems:"center", gap:"9px", flexWrap:"wrap", marginTop:"9px", paddingTop:"9px", borderTop:"1px dashed #d8c8a8" }}>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>換時段空</span>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => reparse(withShop, Math.max(0, gapN - 1))}>−</button>
+            <b style={{ fontSize:"13px", color:"#6a4a2e", minWidth:"18px", textAlign:"center" }}>{gapN}</b>
+            <button style={{ ...btn, padding:"5px 10px" }} onClick={() => reparse(withShop, Math.min(8, gapN + 1))}>＋</button>
+            <span style={{ fontSize:"12px", color:"#8a7a60", fontWeight:"700" }}>行</span>
+          </div>
+        )}
+
+        {msg && <div style={{ fontSize:"13px", fontWeight:"700", marginTop:"9px", color:msg.startsWith("✅") ? "#1a6a3a" : "#a03020" }}>{msg}</div>}
+        {tooWide && <div style={{ fontSize:"13px", fontWeight:"800", marginTop:"8px", color:"#fff", background:"#c02020", borderRadius:"7px", padding:"7px 10px" }}>⚠ 欄寬總和超過 A4,備註會被擠掉。把某一欄拉窄一點。</div>}
+        {rows.length > 0 && <div style={{ fontSize:"11px", color:"#8a7a60", marginTop:"7px" }}>拖曳標題列中間的直線調欄寬 · 每一格點下去直接改字 · 左邊〔廂〕鈕切換包廂(變黑色就是包廂)</div>}
+
+        {howOpen && (
+          <div style={{ fontSize:"13px", color:"#3a4a5a", background:"#f6f9fc", border:"1px solid #dce6f0", borderRadius:"9px", padding:"11px 13px", marginTop:"9px", lineHeight:"2" }}>
+            <b style={{ color:"#1a4a7a" }}>大麥匯出路徑</b><br />
+            餐廳控位 → 訂位記錄 → 訂位時間選「<b>隔天</b>」→ 狀態勾「<b>已預約</b>」「<b>已保留</b>」→ 篩選 → 匯出<br />
+            <span style={{ color:"#6a7a8a", fontSize:"12px" }}>匯出的檔案直接丟上來就好,欄位刪除、備註合併、日期格式、框線、包廂標記,系統全部自己做。</span>
+          </div>
+        )}
+      </div>
+
+      {/* A4 紙面 */}
+      <div className="pdSheet" style={{ width:`${PD_A4_W}px`, margin:"0 auto", background:"#fff", boxShadow:"0 6px 24px rgba(0,0,0,0.22)" }}>
+        {rows.length === 0 ? (
+          <div className="pdNP" style={{ padding:"70px 24px", textAlign:"center", color:"#9a8a70", fontSize:"14px", lineHeight:2 }}>
+            還沒有資料<br /><b style={{ color:"#8a5210" }}>按上面的〔📂 上傳大麥 Excel〕</b><br />
+            <span style={{ fontSize:"12px" }}>系統會自動刪掉用不到的欄位、合併備註、轉日期格式、標包廂、換時段空行</span>
+          </div>
+        ) : (
+          <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed", border:"2px solid #000" }}>
+            <colgroup>
+              <col className="pdGut" style={{ width:"78px" }} />
+              {PD_COLS.map(c => <col key={c.k} style={c.k === "note" ? undefined : { width:`${colW[c.k]}px` }} />)}
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="pdGut pdNP" style={{ border:BD, background:"#f0e8d8" }} />
+                {PD_COLS.map(c => (
+                  <th key={c.k} style={{ border:BD, background:"#f0e8d8", fontSize:`${Math.max(11, sz.font - 2)}px`, fontWeight:"800", color:"#3a2a1a", padding:"5px 4px", position:"relative" }}>
+                    {c.k === "date" ? dayHdr : c.label}
+                    {c.k !== "note" && (
+                      <span className="pdNP" onPointerDown={e => startDrag(e, c.k)} title="拖曳調整欄寬"
+                        style={{ position:"absolute", top:0, right:"-3px", width:"7px", height:"100%", cursor:"col-resize", background:"transparent", zIndex:2 }} />
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => (
+                <tr key={r.id} className={`pdRow${(idx > 0 && idx % perPage === 0) ? " pdPageTop" : ""}`} style={{ height:`${sz.row}px`, background:(r.name && isBig(r)) ? "#fdf3d8" : "transparent" }}>
+                  <td className="pdGut pdNP" style={{ border:BD, background:"#faf6ee", textAlign:"center", verticalAlign:"middle", whiteSpace:"nowrap" }}>
+                    <button onClick={() => addAfter(idx)} title="下面插一行"
+                      style={{ background:"none", border:"none", color:"#2a7a4a", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 2px" }}>＋</button>
+                    <button onClick={() => delRow(r.id)} title="刪掉這一行"
+                      style={{ background:"none", border:"none", color:"#c04030", fontWeight:"900", fontSize:"14px", cursor:"pointer", padding:"0 2px" }}>✕</button>
+                    <button onClick={() => setCell(r.id, "room", !r.room)} title="切換包廂"
+                      style={{ border:`1px solid ${r.room ? "#000" : "#d0c0a8"}`, borderRadius:"4px", padding:"1px 4px", marginLeft:"2px", cursor:"pointer",
+                        background:r.room ? "#000" : "transparent", color:r.room ? "#fff" : "#c0b0a0", fontSize:"10px", fontWeight:"800" }}>廂</button>
+                  </td>
+
+                  <td style={{ border:BD, verticalAlign:"middle", padding:"2px 0", textAlign:"center", position:"relative" }}>
+                    {idx > 0 && idx % perPage === 0 && (
+                      <span className="pdNP" style={{ position:"absolute", left:0, top:"-9px", background:"#c02020", color:"#fff", fontSize:"9px", fontWeight:"900", borderRadius:"3px", padding:"1px 6px", whiteSpace:"nowrap", zIndex:3 }}>
+                        第 {Math.floor(idx / perPage) + 1} 頁
+                      </span>
+                    )}
+                    {r.room
+                      ? <span style={{ fontSize:`${sz.font}px`, fontWeight:"900", color:"#000" }}>包廂</span>
+                      : (oneDay ? null : <PdCell value={r.date} onCommit={v => setCell(r.id, "date", v)} style={{ ...cell, justifyContent:"center" }} />)}
+                  </td>
+
+                  {PD_COLS.slice(1).map(c => (
+                    <td key={c.k} style={{ border:BD, verticalAlign:"middle", padding:"2px 0", textAlign:(c.k === "sex" || c.k === "pax") ? "center" : "left" }}>
+                      {c.k === "note" && r.name && noteOf(r) !== r.note ? (
+                        <div style={{ ...cell, display:"block", padding:"2px 4px" }}>
+                          <div style={{ color:"#c02020", fontWeight:"900", fontSize:`${Math.max(10, sz.font - 1)}px`, lineHeight:1.3 }}>{noteOf(r).split("　")[0]}</div>
+                          {r.note && <PdCell value={r.note} onCommit={v => setCell(r.id, "note", v)} style={{ ...cell, padding:0, minHeight:"auto" }} />}
+                        </div>
+                      ) : (
+                        <PdCell value={r[c.k]} onCommit={v => setCell(r.id, c.k, v)}
+                          style={{ ...cell,
+                            fontWeight:(r.name && isBig(r) && (c.k === "name" || c.k === "pax")) ? "900" : "400",
+                            justifyContent:(c.k === "sex" || c.k === "pax") ? "center" : "flex-start" }} />
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="pdNP" style={{ maxWidth:`${PD_A4_W + 60}px`, margin:"14px auto 0", textAlign:"center" }}>
+        <button style={{ ...btn, padding:"11px 28px" }} onClick={onClose}>← 關閉,回櫃檯交接</button>
+      </div>
+    </div>,
+    document.body
+  );
+}
+function HandoverBox({ todayStr, open, setOpen, groups }) {
+  const [data,setData]=useState({});                 // {"7/16":{cash:{},printed:false,notes:[],openChk:{},closeChk:{}}}
+  const [cashEdit,setCashEdit]=useState(null);       // 正在填不符的位置
+  const [cashForm,setCashForm]=useState({diff:"少",amt:"",note:""});
+  const [noteAdd,setNoteAdd]=useState(false);
+  const [noteTxt,setNoteTxt]=useState("");
+  const [phase,setPhase]=useState("mid");            // open / mid / close
+  const [baseEdit,setBaseEdit]=useState(false);
+  const [pdOpen,setPdOpen]=useState(false);          // 印訂位表:上傳 Excel 直接印
+  const day = data[todayStr]||{cash:{},printed:false,notes:[],openChk:{},closeChk:{}};
+  const bases = data._bases || [{id:"b1",label:"錢櫃",amt:"10000"},{id:"b2",label:"金庫・備用金",amt:"20000"}];
+  const saveBases=(bs)=>{ const nd={...data,_bases:bs}; setData(nd); FS.saveDoc("handover",nd); };
+  const yStr=dayKey(dayAgo(1));   // v227:要跟 todayStr 同格式,否則查不到昨天
+  const yUndone=((data[yStr]||{}).notes||[]).filter(n=>!n.done);   // 昨天沒做完的交接事項
+  useEffect(()=>{
+    FS.loadDoc("handover").then(v=>{ if(v) setData(v); });
+    const u=FS.subscribeDoc("handover", v=>{ if(v) setData(v); });
+    return ()=>u&&u();
+  },[]);
+  const save=(patch)=>{ const nd={...data,[todayStr]:{...day,...patch}}; setData(nd); FS.saveDoc("handover",nd); };
+  const now=()=>{ const d=new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+  const cashDone = CASH_SPOTS.every(k=>day.cash&&day.cash[k]);
+  const notes = day.notes||[];
+  const notesLeft = notes.filter(n=>!n.done).length;
+  const left = (cashDone?0:1) + (day.printed?0:1) + notesLeft;
+  const allDone = cashDone && day.printed && notesLeft===0;
+  const setNotes=(ns)=>save({notes:ns});
+  return (
+    <div style={{marginTop:"8px",background:"#eaf2fa",borderRadius:"12px",border:"2.5px solid #6a94c0",padding:"11px 13px"}}>
+      <div style={{fontSize:"13px",color:"#1a4a7a",fontWeight:"800",marginBottom:open?"9px":"0",display:"flex",alignItems:"center",gap:"6px"}}>
+        <span onClick={()=>setOpen(v=>!v)} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"6px"}}>
+          <span style={{fontSize:"11px"}}>{open?"▼":"▶"}</span>🤝 櫃檯交接
+        </span>
+        {allDone
+          ? <span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>
+          : !open&&left>0&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 8px"}}>還有 {left} 項</span>}
+        <span style={{flex:1}}/>
+        {bases.map(b=>(
+          <span key={b.id} style={{fontSize:"13px",color:"#1a4a7a",fontWeight:"800",background:"#dceaf6",borderRadius:"7px",padding:"4px 11px",whiteSpace:"nowrap"}}>{b.label} ${(+b.amt).toLocaleString()}</span>
+        ))}
+      </div>
+      {open&&(
+        <div style={{marginBottom:"9px"}}>
+          {!baseEdit
+            ? <button onClick={()=>setBaseEdit(true)} style={{fontSize:"10px",color:"#5a7a9a",background:"none",border:"none",cursor:"pointer",textDecoration:"underline",padding:"0"}}>編輯基準金額</button>
+            : (
+              <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"9px",padding:"9px"}}>
+                <div style={{fontSize:"11px",fontWeight:"800",color:"#1a4a7a",marginBottom:"6px"}}>基準金額（給對帳參考）</div>
+                {bases.map((b,i)=>(
+                  <div key={b.id} style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"5px"}}>
+                    <input value={b.label} onChange={e=>saveBases(bases.map((x,j)=>j===i?{...x,label:e.target.value}:x))} placeholder="名稱"
+                      style={{flex:1,padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"12px",fontWeight:"700",color:"#2a3a4a"}}/>
+                    <span style={{fontSize:"13px",color:"#5a7a9a",fontWeight:"800"}}>$</span>
+                    <input value={b.amt} onChange={e=>saveBases(bases.map((x,j)=>j===i?{...x,amt:e.target.value.replace(/[^0-9]/g,"")}:x))} placeholder="金額" inputMode="numeric"
+                      style={{width:"90px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"12px",fontWeight:"700",color:"#2a3a4a",textAlign:"right"}}/>
+                    <button onClick={()=>saveBases(bases.filter((_,j)=>j!==i))} style={{fontSize:"11px",border:"none",background:"none",color:"#c08080",cursor:"pointer",padding:"0 3px"}}>✕</button>
+                  </div>
+                ))}
+                <div style={{display:"flex",gap:"6px",marginTop:"7px"}}>
+                  <button onClick={()=>saveBases([...bases,{id:`b${Date.now()}`,label:"",amt:""}])}
+                    style={{fontSize:"11px",padding:"6px 11px",borderRadius:"7px",border:"1.5px solid #6a94c0",background:"#fff",color:"#1a4a7a",fontWeight:"800",cursor:"pointer"}}>＋ 新增一項</button>
+                  <button onClick={()=>setBaseEdit(false)}
+                    style={{fontSize:"11px",padding:"6px 14px",borderRadius:"7px",border:"none",background:"#1a4a7a",color:"#fff",fontWeight:"800",cursor:"pointer"}}>完成</button>
+                </div>
+              </div>
+            )}
+        </div>
+      )}
+
+      {open&&(<>
+        {/* 三個時段分頁 */}
+        <div style={{display:"flex",gap:"6px",marginBottom:"9px"}}>
+          {/* v230:清掉已移除功能留下的舊資料。先下載備份,再清,不可逆所以要二次確認 */}
+        {(()=>{
+          const DROP_DAY=["midSafe","midReserve","midCounts","openSafe","openReserve","openCounts"];
+          const DROP_CLOSE=["photos","safe","reserve","counts"];
+          const sizeOf=(o)=>new Blob([JSON.stringify(o)]).size;
+          let hit=0;
+          Object.values(data||{}).forEach(d=>{
+            if(!d||typeof d!=="object") return;
+            DROP_DAY.forEach(k=>{ if(d[k]!==undefined) hit++; });
+            if(d.close) DROP_CLOSE.forEach(k=>{ if(d.close[k]!==undefined) hit++; });
+          });
+          if(hit===0) return null;
+          const before=sizeOf(data);
+          return (
+            <div style={{background:"#fff8f0",border:"1.5px solid #e0b890",borderRadius:"9px",padding:"8px 10px",marginBottom:"8px",display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
+              <span style={{fontSize:"11.5px",color:"#8a5210",fontWeight:"800"}}>舊的清點／相簿紀錄還在（{hit} 筆，目前交接資料 {(before/1024).toFixed(0)} KB）</span>
+              <span style={{flex:1}}/>
+              <button onClick={()=>{
+                if(!window.confirm("會先下載一份備份檔，然後永久刪除所有清點與相簿紀錄。\n刪掉之後無法復原，確定嗎?")) return;
+                try{
+                  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+                  const a=document.createElement("a");
+                  a.href=URL.createObjectURL(blob);
+                  a.download=`交接備份_${new Date().toISOString().slice(0,10)}.json`;
+                  a.click(); URL.revokeObjectURL(a.href);
+                }catch(err){ window.alert("備份下載失敗，為安全起見沒有刪除任何資料"); return; }
+                if(!window.confirm("備份已下載。確認檔案有存好之後再按確定，就會開始刪除。")) return;
+                const nd={};
+                Object.entries(data||{}).forEach(([k,d])=>{
+                  if(!d||typeof d!=="object"){ nd[k]=d; return; }
+                  const c={...d};
+                  DROP_DAY.forEach(x=>delete c[x]);
+                  if(c.close){ const cc={...c.close}; DROP_CLOSE.forEach(x=>delete cc[x]); c.close=cc; }
+                  nd[k]=c;
+                });
+                const after=sizeOf(nd);
+                setData(nd); FS.saveDoc("handover",nd);
+                window.alert(`已刪除。交接資料從 ${(before/1024).toFixed(0)} KB 降到 ${(after/1024).toFixed(0)} KB`);
+              }}
+                style={{fontSize:"11.5px",fontWeight:"900",color:"#fff",background:"#b04010",border:"none",borderRadius:"7px",padding:"6px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>⬇ 備份後清除</button>
+            </div>
+          );
+        })()}
+        {[["open","☀️ 開早"],["mid","💰 中間結算"],["close","🌙 晚結"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setPhase(k)}
+              style={{flex:1,padding:"9px 4px",borderRadius:"9px",fontSize:"12px",fontWeight:"800",cursor:"pointer",
+                border:`1.5px solid ${phase===k?"#1a4a7a":"#c8d8e8"}`, background:phase===k?"#1a4a7a":"#f4f8fc", color:phase===k?"#fff":"#5a7a9a"}}>{l}</button>
+          ))}
+        </div>
+
+        {/* ☀️ 開早:開店準備清單 */}
+        {phase==="open"&&(<>
+          {yUndone.length>0&&(
+            <div style={{background:"#fff",border:"2px solid #e0a060",borderRadius:"10px",padding:"10px 11px",marginBottom:"8px"}}>
+              <div style={{fontSize:"12px",fontWeight:"800",color:"#a05a10",marginBottom:"6px"}}>📌 昨天沒做完的交接事項（{yUndone.length}）</div>
+              {yUndone.map((n,i)=>(
+                <div key={n.id} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:i>0?"1px solid #f4e4d0":"none"}}>
+                  <span onClick={()=>{ const yd=data[yStr]||{}; const nn=(yd.notes||[]).map(x=>x.id===n.id?{...x,done:true,doneAt:now()}:x); const ndd={...data,[yStr]:{...yd,notes:nn}}; setData(ndd); FS.saveDoc("handover",ndd); }}
+                    style={{fontSize:"14px",cursor:"pointer"}}>🔴</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"13px",fontWeight:"700",color:"#5a3a20",wordBreak:"break-word"}}>{n.text}</div>
+                    <div style={{fontSize:"9px",color:"#b09070"}}>昨天 {n.by?`${n.by} 寫`:""}</div>
+                  </div>
+                </div>
+              ))}
+              <div style={{fontSize:"9px",color:"#b09070",marginTop:"4px"}}>做完點紅點打勾。若今天也沒做完,明天不會再自動帶過來(避免累積)。</div>
+            </div>
+          )}
+          <div style={{background:"#fff",border:"1.5px solid #e8d0a0",borderRadius:"10px",padding:"10px 11px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+              <span style={{fontSize:"12px",fontWeight:"800",color:"#a06a10"}}>☀️ 開店準備</span>
+              <span style={{flex:1}}/>
+              <button onClick={()=>{const t=window.prompt("新增開店準備項目");if(!t||!t.trim())return;const list=data._openTasks||OPEN_TASKS;const nd={...data,_openTasks:[...list,t.trim()]};setData(nd);FS.saveDoc("handover",nd);}}
+                style={{width:"22px",height:"22px",lineHeight:"1",borderRadius:"6px",border:"1.5px solid #d0a850",background:"#fff",color:"#a06a10",fontSize:"14px",fontWeight:"900",cursor:"pointer",padding:0}}>＋</button>
+            </div>
+            {(data._openTasks||OPEN_TASKS).map((t,i)=>{
+              const done=(day.openChk||{})[t];
+              return (
+                <div key={t+i} style={{display:"flex",alignItems:"center",gap:"8px",padding:"7px 0",borderTop:i>0?"1px solid #f4ecd8":"none",opacity:done?0.55:1}}>
+                  <span onClick={()=>save({openChk:{...(day.openChk||{}),[t]:!done}})} style={{fontSize:"14px",cursor:"pointer"}}>{done?"✅":"⬜"}</span>
+                  <span onClick={()=>save({openChk:{...(day.openChk||{}),[t]:!done}})} style={{fontSize:"13px",fontWeight:"700",color:done?"#9a9a8a":"#5a4020",textDecoration:done?"line-through":"none",cursor:"pointer",flex:1}}>{t}</span>
+                  <button onClick={()=>{const list=data._openTasks||OPEN_TASKS;const nd={...data,_openTasks:list.filter((_,j)=>j!==i)};setData(nd);FS.saveDoc("handover",nd);}}
+                    style={{fontSize:"11px",border:"none",background:"none",color:"#c0a080",cursor:"pointer",padding:"0 3px"}}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        </>)}
+
+        {/* 🌙 晚結:打烊結算清單 */}
+        {phase==="close"&&<CloseFlow day={day} save={save} bases={bases} todayStr={todayStr} groups={groups} data={data}/>}
+
+        {phase==="mid"&&(<>
+        {/* 中間結算:做成步驟,跟晚結一樣的操作習慣 */}
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"7px",marginBottom:"6px"}}>
+            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:CASH_SPOTS.every(k=>day.cash&&day.cash[k])?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>1</span>
+            <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>金庫清點</span>
+            {(()=>{
+              const sf=day.midSafe||{};
+              const tot=safeTotal(sf,(lastSafeCount(data,"mid")||{}).safe);
+              if(tot!==SAFE_TOTAL) return null;
+              return <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px"}}>🔐 金庫正確</span>;
+            })()}
+            {(()=>{
+              const bad=CASH_SPOTS.filter(k=>day.cash&&day.cash[k]&&!day.cash[k].ok);
+              const anyDone=CASH_SPOTS.some(k=>day.cash&&day.cash[k]);
+              if(!anyDone) return (<>
+                <span style={{fontSize:"10px",color:"#8aa0b8"}}>金庫・備用金・錢櫃　（一次確認三項）</span>
+                <span style={{flex:1}}/>
+                <button onClick={()=>{const t=now();const nc={};CASH_SPOTS.forEach(k=>nc[k]={ok:true,at:t});save({cash:nc});}}
+                  style={{fontSize:"12px",fontWeight:"800",border:"none",background:"#2a7a4a",color:"#fff",borderRadius:"8px",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",minHeight:"34px"}}>✓ 正確</button>
+                <button onClick={()=>{setCashForm({spot:"錢櫃",diff:"少",amt:"",note:""});setCashEdit("pick");}}
+                  style={{fontSize:"12px",fontWeight:"800",border:"1.5px solid #d09090",background:"#fff",color:"#c02020",borderRadius:"8px",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",minHeight:"34px"}}>✗ 有不符</button>
+              </>);
+              return (<>
+                {bad.length===0
+                  ? <span style={{fontSize:"12px",fontWeight:"800",color:"#1a6a3a",background:"#dff0e6",borderRadius:"5px",padding:"2px 9px"}}>✓ 正確</span>
+                  : bad.map(k=>{const c=day.cash[k];return <span key={k} style={{fontSize:"12px",fontWeight:"800",color:"#c02020",background:"#fbe0e0",borderRadius:"5px",padding:"2px 9px"}}>✗ {k} {c.diff} ${c.amt}{c.note?`・${c.note}`:""}</span>;})}
+                <span style={{fontSize:"9px",color:"#8aa0b8"}}>{(day.cash[CASH_SPOTS[0]]||{}).at||""}</span>
+                <span style={{flex:1}}/>
+                <button onClick={()=>save({cash:{}})}
+                  style={{fontSize:"10px",border:"1px solid #c8d8e8",background:"#fff",color:"#5a7a9a",borderRadius:"5px",padding:"4px 9px",cursor:"pointer",whiteSpace:"nowrap"}}>重來</button>
+              </>);
+            })()}
+          </div>
+        </div>
+
+
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"7px",marginBottom:"5px"}}>
+            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>3</span>
+            <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>錢櫃應有金額</span>
+            <span style={{flex:1}}/>
+            <button onClick={()=>save({midOpen:!day.midOpen})}
+              style={{fontSize:"11px",color:"#5a7a9a",background:"#f0f4f8",border:"1px solid #c8d8e8",borderRadius:"6px",padding:"6px 11px",cursor:"pointer",fontWeight:"700",minHeight:"30px"}}>{day.midOpen?"收起":"展開"}</button>
+          </div>
+          {day.midOpen&&(<>
+            {(()=>{
+              const b0=(bases.filter(x=>x.label.includes("錢櫃"))[0]||bases[0]||{});
+              const drawer=+(b0.amt||10000);
+              const sales=+(day.midSales||0), exp=+(day.midExp||0);
+              const pack=drawer+sales-exp;
+              const cnt=((day.midCounts||{})[b0.id])||{};
+              const counted=CASH_DENOM.reduce((s,d)=>s+d*(+cnt[d]||0),0);   // 上面清點表數出來的錢
+              const box={padding:"7px 9px",borderRadius:"8px",background:"#fff",border:"1px solid #d8c8b0",textAlign:"center",minWidth:"92px"};
+              return (
+                <div style={{background:"#f8f4ec",borderRadius:"9px",padding:"10px",marginTop:"8px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap",justifyContent:"center"}}>
+                    <div style={box}><div style={{fontSize:"10px",color:"#8a7a5a",fontWeight:"700"}}>錢櫃</div><div style={{fontSize:"15px",fontWeight:"900",color:"#5a4020"}}>${drawer.toLocaleString()}</div></div>
+                    <span style={{fontSize:"17px",fontWeight:"900",color:"#a08060"}}>＋</span>
+                    <div style={{...box,background:"#fffdf6"}}><div style={{fontSize:"10px",color:"#8a7a5a",fontWeight:"700"}}>現金營業額</div>
+                      <input value={day.midSales||""} onChange={e=>save({midSales:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="0"
+                        style={{width:"80px",padding:"2px 4px",borderRadius:"5px",border:"1px solid #c8b89c",fontSize:"15px",fontWeight:"900",textAlign:"center",color:"#5a4020"}}/>
+                    </div>
+                    <span style={{fontSize:"17px",fontWeight:"900",color:"#a08060"}}>－</span>
+                    <div style={{...box,background:"#fffdf6"}}><div style={{fontSize:"10px",color:"#8a7a5a",fontWeight:"700"}}>支出（含退訂金）</div>
+                      <input value={day.midExp||""} onChange={e=>save({midExp:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="0"
+                        style={{width:"80px",padding:"2px 4px",borderRadius:"5px",border:"1px solid #c8b89c",fontSize:"15px",fontWeight:"900",textAlign:"center",color:"#5a4020"}}/>
+                    </div>
+                    <span style={{fontSize:"17px",fontWeight:"900",color:"#a08060"}}>＝</span>
+                    <div style={{...box,background:"#5a7a9a",border:"none"}}><div style={{fontSize:"10px",color:"#dce8f4",fontWeight:"700"}}>錢櫃應有</div><div style={{fontSize:"17px",fontWeight:"900",color:"#fff"}}>${pack.toLocaleString()}</div></div>
+                  </div>
+                  {sales>0&&exp>sales&&<div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",marginTop:"7px",textAlign:"center"}}>⚠ 支出比現金營業額多，錢不夠補支出</div>}
+
+
+                  {/* 白話解釋:新人最常搞混這三個 */}
+                  <div style={{fontSize:"11px",color:"#7a6a50",marginTop:"8px",lineHeight:"1.9",background:"#fffdf6",border:"1px dashed #d8c8a8",borderRadius:"8px",padding:"8px 10px",textAlign:"left"}}>
+                    <b style={{color:"#8a5210"}}>白話講：</b><br/>
+                    <b>現金營業額</b>＝今天收進來、<b>現在手上的錢</b><br/>
+                    <b>支出</b>＝拿錢出去<b>買的東西</b>（收據要留著）<br/>
+                    <b>備用金</b>＝現在手上的<b>現金</b> ＋ 買東西<b>花掉的錢</b>（收據金額），兩個加起來要剛好 <b>$20,000</b>
+                  </div>
+                </div>
+              );
+            })()}
+          </>)}
+        </div>
+
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px",marginBottom:"7px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+            <span style={{width:"20px",height:"20px",borderRadius:"50%",background:day.printed?"#3a8a5a":"#5a7a9a",color:"#fff",fontSize:"11px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>4</span>
+            <span onClick={()=>save({printed:!day.printed,printedAt:day.printed?"":now()})} style={{fontSize:"15px",cursor:"pointer"}}>{day.printed?"✅":"⬜"}</span>
+            <span onClick={()=>save({printed:!day.printed,printedAt:day.printed?"":now()})}
+              style={{fontSize:"13px",fontWeight:"800",color:day.printed?"#7a9a8a":"#1a3a5a",textDecoration:day.printed?"line-through":"none",cursor:"pointer"}}>🖨 印訂位表</span>
+            {day.printed&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>{day.printedAt}</span>}
+            <span style={{flex:1}}/>
+            <button onClick={()=>save({howPrint:!day.howPrint})}
+              style={{fontSize:"11px",color:"#5a7a9a",background:"#f0f4f8",border:"1px solid #c8d8e8",borderRadius:"6px",padding:"6px 10px",cursor:"pointer",fontWeight:"700",minHeight:"30px"}}>怎麼印?</button>
+            <button onClick={()=>save({fmtPrint:!day.fmtPrint})}
+              style={{fontSize:"11px",color:"#8a5210",background:"#fdf6ea",border:"1px solid #d8b870",borderRadius:"6px",padding:"6px 10px",cursor:"pointer",fontWeight:"700",minHeight:"30px"}}>📐 列印格式</button>
+          </div>
+          <button onClick={()=>setPdOpen(true)}
+            title="上傳大麥匯出的 Excel,系統自動整理好格式,畫面可以直接改字,再按列印"
+            style={{width:"100%",marginTop:"8px",fontSize:"13px",color:"#fff",background:"#2a7a4a",border:"none",borderRadius:"8px",padding:"11px 10px",cursor:"pointer",fontWeight:"900",minHeight:"42px"}}>
+            🖨 上傳 Excel 直接印<span style={{fontSize:"11px",fontWeight:"700",opacity:0.85}}>　(不用自己整理格式)</span>
+          </button>
+          {pdOpen&&<PrintDingwePage groups={groups} onClose={()=>setPdOpen(false)}
+            onImported={()=>{ if(!day.printed) save({printed:true,printedAt:now()}); }}/>}
+          <div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",background:"#fbe4e4",border:"1.5px solid #e0a0a0",borderRadius:"8px",padding:"8px 10px",marginTop:"7px",lineHeight:"1.7"}}>
+            ⚠ 印出來看到有時段 <b>20 位以上</b> → 一定要去確認<b>訂位關了沒</b>
+            <div style={{fontSize:"11px",fontWeight:"600",color:"#a05040",marginTop:"2px"}}>這個最常忘記，忘了訂位就會爆掉</div>
+          </div>
+          {day.howPrint&&(
+            <div style={{fontSize:"12px",color:"#3a4a5a",background:"#f6f9fc",border:"1px solid #dce6f0",borderRadius:"8px",padding:"10px 12px",marginTop:"7px",lineHeight:"2"}}>
+              <b style={{color:"#1a4a7a"}}>在大麥怎麼找</b><br/>
+              餐廳控位 → 訂位記錄<br/>
+              → 訂位時間選「<b>隔天</b>」<br/>
+              → 狀態勾「<b>已預約</b>」「<b>已保留</b>」<br/>
+              → 篩選 → 匯出
+            </div>
+          )}
+          {day.fmtPrint&&(
+            <div style={{fontSize:"12px",color:"#4a3520",background:"#fdf9f0",border:"1px solid #e0cfa8",borderRadius:"8px",padding:"11px 12px",marginTop:"7px",lineHeight:"1.95"}}>
+              <div style={{fontSize:"12px",fontWeight:"900",color:"#8a5210",marginBottom:"5px"}}>匯出後要這樣整理</div>
+              <b>1. 刪掉用不到的欄位</b><br/>
+              <span style={{color:"#6a5a48"}}>用餐目的、狀態、訂位來源、下訂時間、開桌人數、最後更新時間 —— 整欄刪掉</span><br/><br/>
+              <b>2. 備註合成一欄</b><br/>
+              <span style={{color:"#6a5a48"}}>「特殊需求」和「顧客備註」自己看過留重點，合併寫在同一欄。太長的不用全抄。</span><br/><br/>
+              <b>3. 處理包廂</b><br/>
+              <span style={{color:"#6a5a48"}}>「預訂桌位」欄有寫<b>包廂</b> → 把「包廂」兩個字移到<b>訂位日期</b>那格 → 再把「預訂桌位」整欄刪掉</span><br/><br/>
+              <b>4. 日期改成好看的格式</b><br/>
+              <span style={{color:"#c02020",fontWeight:"700"}}>⚠ 要先點欄位上方的字母（A、B、C…）把整欄選起來，右鍵才有用</span><br/>
+              <span style={{color:"#6a5a48"}}>選整欄 → 右鍵 → 儲存格格式 → 日期 → 選 <b>3/14</b></span><br/><br/>
+              <b>5. 加上框線</b><br/>
+              <span style={{color:"#6a5a48"}}>全選（Ctrl+A）→ 加「所有框線」，印出來每格才看得清楚</span><br/><br/>
+              <b>6. 字放大、格子加高</b><br/>
+              <span style={{color:"#6a5a48"}}>字型大小 <b>12</b>、列高 <b>38 像素以上</b></span><br/><br/>
+              <b>7. 確認這三欄沒被切掉</b><br/>
+              <span style={{color:"#c02020",fontWeight:"700"}}>訂位人名稱、聯絡電話、訂位人數</span><br/>
+              <span style={{color:"#6a5a48"}}>這三欄最容易印出來被切掉，印之前一定要檢查看得完整（欄位太窄就把欄寬拉開）</span><br/><br/>
+              <b>8. 時段之間留空</b><br/>
+              <span style={{color:"#6a5a48"}}>每個時段之間空 <b>2~5 行</b>；那個時段沒訂位 → 空 <b>7 行左右</b></span><br/><br/>
+              <b>9. 只印要的部分</b><br/>
+              <span style={{color:"#6a5a48"}}>先把要印的範圍選起來，不然後面空白的也會一起印出來</span><br/><br/>
+              <b>10. 邊界設成 0</b><br/>
+              <span style={{color:"#6a5a48"}}>版面配置 → 邊界 → 自訂邊界 → 上下左右<b>全部填 0</b></span>
+            </div>
+          )}
+        </div>
+        {/* 4. 額外交接內容:自己寫,做完劃掉 */}
+        <div style={{background:"#fff",border:"1.5px solid #b8d0e8",borderRadius:"10px",padding:"9px 11px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+            <span style={{fontSize:"12px",fontWeight:"800",color:"#1a4a7a"}}>📝 交接事項</span>
+            <span style={{fontSize:"9px",color:"#8aa0b8"}}>要交代的事寫這裡,做完打勾</span>
+            <span style={{flex:1}}/>
+            <button onClick={()=>{setNoteTxt("");setNoteAdd(true);}}
+              style={{width:"24px",height:"24px",lineHeight:"1",borderRadius:"6px",border:"1.5px solid #6a94c0",background:"#fff",color:"#1a4a7a",fontSize:"15px",fontWeight:"900",cursor:"pointer",padding:0}}>＋</button>
+          </div>
+          {notes.length===0
+            ? <div style={{fontSize:"11px",color:"#8aa0b8",textAlign:"center",padding:"8px"}}>按 ＋ 新增要交接的事項</div>
+            : notes.map((n,i)=>(
+                <div key={n.id} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0",borderTop:i>0?"1px solid #eaf0f6":"none",opacity:n.done?0.55:1}}>
+                  <span onClick={()=>setNotes(notes.map((x,j)=>j===i?{...x,done:!x.done,doneAt:x.done?"":now()}:x))}
+                    style={{fontSize:"14px",cursor:"pointer"}}>{n.done?"✅":"🔴"}</span>
+                  <div onClick={()=>setNotes(notes.map((x,j)=>j===i?{...x,done:!x.done,doneAt:x.done?"":now()}:x))} style={{flex:1,minWidth:0,cursor:"pointer"}}>
+                    <div style={{fontSize:"13px",fontWeight:"700",color:n.done?"#8a9a8a":"#1a3a5a",textDecoration:n.done?"line-through":"none",wordBreak:"break-word"}}>{n.text}</div>
+                    <div style={{fontSize:"9px",color:"#a0b0c0"}}>{n.by?`${n.by} ${n.at} 寫`:n.at}{n.done&&n.doneAt?`　✓ ${n.doneAt} 完成`:""}</div>
+                  </div>
+                  <button onClick={()=>{if(window.confirm(`刪除「${n.text}」?`))setNotes(notes.filter((_,j)=>j!==i));}}
+                    style={{fontSize:"10px",border:"none",background:"none",color:"#c0a0a0",cursor:"pointer",padding:"0 2px"}}>✕</button>
+                </div>
+              ))}
+          {notes.length>0&&notes.some(n=>!n.done)&&(
+            <div style={{fontSize:"10px",color:"#b05a10",fontWeight:"700",marginTop:"5px"}}>還有 {notes.filter(n=>!n.done).length} 項沒做</div>
+          )}
+        </div>
+        </>)}
+      </>)}
+
+      {/* 不符金額視窗 */}
+      {cashEdit&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setCashEdit(null)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"340px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#c02020",marginBottom:"10px"}}>✗ 錢不符</div>
+            <div style={{fontSize:"12px",color:"#3a5a7a",fontWeight:"700",marginBottom:"5px"}}>哪一個?</div>
+            <div style={{display:"flex",gap:"6px",marginBottom:"12px"}}>
+              {CASH_SPOTS.map(k=>(
+                <button key={k} onClick={()=>setCashForm(p=>({...p,spot:k}))}
+                  style={{flex:1,padding:"10px 4px",borderRadius:"9px",border:`1.5px solid ${cashForm.spot===k?"#1a4a7a":"#d0d8e0"}`,background:cashForm.spot===k?"#1a4a7a":"#f4f8fc",color:cashForm.spot===k?"#fff":"#3a5a7a",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>{k}</button>
+              ))}
+            </div>
+            <div style={{fontSize:"12px",color:"#3a5a7a",fontWeight:"700",marginBottom:"5px"}}>多還是少?</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+              {["多","少"].map(d=>(
+                <button key={d} onClick={()=>setCashForm(p=>({...p,diff:d}))}
+                  style={{flex:1,padding:"11px",borderRadius:"9px",border:`1.5px solid ${cashForm.diff===d?"#c02020":"#d0d8e0"}`,background:cashForm.diff===d?"#c02020":"#fff",color:cashForm.diff===d?"#fff":"#5a6a7a",fontSize:"15px",fontWeight:"800",cursor:"pointer"}}>{d}</button>
+              ))}
+            </div>
+            <input value={cashForm.amt} onChange={e=>setCashForm(p=>({...p,amt:e.target.value.replace(/\D/g,"")}))} placeholder="金額" inputMode="numeric" autoFocus
+              style={{width:"100%",boxSizing:"border-box",padding:"11px",borderRadius:"9px",border:"1.5px solid #c9a45c",fontSize:"16px",fontWeight:"800",textAlign:"center",marginBottom:"8px",color:"#2e2010"}}/>
+            <input value={cashForm.note} onChange={e=>setCashForm(p=>({...p,note:e.target.value}))} placeholder="備註（選填,例如:找錯錢）"
+              style={{width:"100%",boxSizing:"border-box",padding:"10px",borderRadius:"9px",border:"1px solid #d0d8e0",fontSize:"13px",marginBottom:"14px",color:"#2e2010"}}/>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setCashEdit(null)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #d0d8e0",color:"#5a6a7a",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{ if(!cashForm.amt){window.alert("請填金額");return;}
+                  const t=now(); const spot=cashForm.spot||cashEdit;
+                  const nc={...(day.cash||{})};
+                  CASH_SPOTS.forEach(k=>{ if(k!==spot && !nc[k]) nc[k]={ok:true,at:t}; });   // 其他兩個視為正確
+                  nc[spot]={ok:false,diff:cashForm.diff,amt:cashForm.amt,note:cashForm.note,at:t};
+                  save({cash:nc}); setCashEdit(null); }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#c02020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>記錄</button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
+
+      {/* 新增交接事項 */}
+      {noteAdd&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setNoteAdd(false)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"370px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#1a4a7a",marginBottom:"4px"}}>📝 新增交接事項</div>
+            <div style={{fontSize:"11px",color:"#8aa0b8",marginBottom:"10px"}}>要交代給下一班的事,例如:冰箱第二層有備料、三號桌客人說要加位</div>
+            <textarea value={noteTxt} autoFocus onChange={e=>setNoteTxt(e.target.value)} rows={3} placeholder="要交接什麼?"
+              style={{width:"100%",boxSizing:"border-box",padding:"11px 12px",borderRadius:"10px",border:"1.5px solid #6a94c0",background:"#fff",color:"#1a3a5a",fontSize:"14px",fontWeight:"600",lineHeight:"1.6",resize:"vertical",fontFamily:"inherit",marginBottom:"12px"}}/>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setNoteAdd(false)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #c0d0e0",color:"#3a5a7a",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const t=noteTxt.trim(); if(!t){ window.alert("請先寫內容"); return; }
+                  const nm=window.prompt("誰寫的?(填名字,可略過)")||"";
+                  setNotes([...notes,{id:`n${Date.now()}`,text:t,by:nm,at:now(),done:false}]);
+                  setNoteTxt(""); setNoteAdd(false);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#1a4a7a",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>加入交接</button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
+    </div>
+  );
+}
+
+// 連線狀態:正常=綠色;有錯誤=紅色並顯示原因(以前錯誤都被吞掉,看不到)
+function FsStatus(){
+  const [,tick]=useState(0);
+  useEffect(()=>{ const fn=()=>tick(t=>t+1); FSTAT.listeners.add(fn); return ()=>FSTAT.listeners.delete(fn); },[]);
+  // 紅 = 真的讀寫失敗(資料有危險);黃 = 沒登入但讀寫正常(規則開放中);綠 = 一切正常
+  const err = !!FSTAT.err;
+  const noAuth = FSTAT.auth.includes("失敗") || FSTAT.auth.includes("逾時");
+  const c = err ? {bg:"#c02020",fg:"#fff",bd:"1px solid #8a1010",t:`⚠ ${FSTAT.err}`}
+          : noAuth ? {bg:"#fdf0d0",fg:"#8a5210",bd:"1px solid #d8b860",t:"⚠ 未登入模式"}
+          : {bg:"#e2f2e8",fg:"#2a7a4a",bd:"none",t:"🔥 即時同步"};
+  return (
+    <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
+      color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
+  );
+}
+
+function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
+  const [filter,setFilter]=useState("");
+  const [showMaiOnly,setShowMaiOnly]=useState(false);
+  const [showPast,setShowPast]=useState(false);
+  const [weekView,setWeekView]=useState(0);   // 0=本週 1=下週
+  const [gearOpen,setGearOpen]=useState(false);   // ⚙ 低頻功能收納
+  const [copiedId,setCopiedId]=useState("");     // 剛複製的那筆(顯示已複製)
+  const [depPick,setDepPick]=useState(null);     // 收訂/對帳:選夥伴小窗口
+  const copyMsg=async(id,txt)=>{
+    try{ await navigator.clipboard.writeText(txt); }
+    catch(e){ window.prompt("複製這段貼到 LINE:",txt); return; }
+    setCopiedId(id); setTimeout(()=>setCopiedId(""),1800);
+  };
+  const [hoData,setHoData]=useState({});         // 交接資料(給首頁判斷這時段做完沒)
+  useEffect(()=>{
+    FS.loadDoc("handover").then(v=>{ if(v) setHoData(v); });
+    const u=FS.subscribeDoc("handover", v=>{ if(v) setHoData(v); });
+    return ()=>u&&u();
+  },[]);
+  const [secOpen,setSecOpen]=useState({});       // 分區收合 {todo,done,rest}
+  const [menuOffAll,setMenuOffAll]=useState({});   // 品項關閉表(給待辦提醒用)
+  useEffect(()=>{
+    FS.loadDoc("menuOff").then(v=>{ if(v) setMenuOffAll(v); });
+    const u=FS.subscribeDoc("menuOff", v=>{ if(v) setMenuOffAll(v); });
+    return ()=>u&&u();
+  },[]);
+  const [lastResvImport,setLastResvImport]=useState("");
+  const [todoChecks,setTodoChecks]=useState({}); // 手動待辦打勾(關訂位、打電話)，跨裝置同步
+  const [newTodo,setNewTodo]=useState("");
+  const [todoAdd,setTodoAdd]=useState(false);
+  const [todoOpen,setTodoOpen]=useState(false);   // 預設收合,要看再打開
+  const [hoOpen,setHoOpen]=useState(false);
+  const [lineG,setLineG]=useState(null);            // LINE 名稱工具
+  const [timeIssueG,setTimeIssueG]=useState(null);  // 時間疑義處理小窗口
+  const [todoFreq,setTodoFreq]=useState("once");   // once=只有今天 daily=每天 weekly=每週
+  const [todoDays,setTodoDays]=useState([1,3,5]);
+  const todoLoaded=useRef(false);   // todo 讀到了才准寫(避免用空的蓋掉整份待辦清單)
+  const saveTodo=(nn)=>{
+    if(!todoLoaded.current){ window.alert("⚠ 待辦還沒從雲端讀到,請先重新整理再操作(這次沒有存,以免蓋掉資料)"); return false; }
+    setTodoChecks(nn); FS.saveDoc("todo",nn); return true;
+  };
+  const toggleTodo=(key)=>{ saveTodo({...todoChecks,[key]:!todoChecks[key]}); };
+  const todayStr=dayKey(new Date());
+  useEffect(()=>{
+    const unsub=FS.subscribeDoc("dingwe",d=>{ if(d&&d.lastImport!==undefined) setLastResvImport(d.lastImport); });
+    FS.loadDoc("todo").then(d=>{ if(d!==undefined){ if(d) setTodoChecks(d); todoLoaded.current=true; } });
+    const unsub2=FS.subscribeDoc("todo",d=>{ if(d){ setTodoChecks(d); todoLoaded.current=true; } });
+    // 設定逾期基準日:第一次使用當天,之後才會提醒「昨天沒做完」
+    // ⚠ 只有「確認這份文件不存在(null)」才初始化;讀取失敗(undefined)絕不寫入,否則會清空整份待辦
+    FS.loadDoc("todo").then(d=>{
+      if(d===undefined) return;                                  // 讀取失敗 → 什麼都不做
+      if(d===null || d._since===undefined) FS.saveDoc("todo",{...(d||{}),_since:todayStr});
+    });
+    return ()=>{ unsub&&unsub(); unsub2&&unsub2(); };
+  },[]);
+  const [showAdd,setShowAdd]=useState(false);
+  const [newG,setNewG]=useState({...BLANK_G});
+  const [expanded,setExpanded]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const [showDingwe,setShowDingwe]=useState(false);
+  const [showStats,setShowStats]=useState(false);
+  const [showItemsOff,setShowItemsOff]=useState(false);
+  const [showHelp,setShowHelp]=useState(false);
+  const [showCplCenter,setShowCplCenter]=useState(false);
+  const compactMode=false;   // 統一電腦版
+  const [wOpen,setWOpen]=useState(false);   // 散客客訴視窗
+  const [gCpl,setGCpl]=useState(null);      // {group} 任一訂位新增客訴(含已封存)
+  const [gForm,setGForm]=useState({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
+  const [wForm,setWForm]=useState({name:"",phone:"",type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
+  const [walkinCpl,setWalkinCpl]=useState([]); // 散客客訴清單(綁電話)
+  useEffect(()=>{
+    FS.loadDoc("walkinCpl").then(v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
+    const u=FS.subscribeDoc("walkinCpl", v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
+    return ()=>u&&u();
+  },[]);
+  const [staffList,setStaffList]=useState(DEFAULT_STAFF);
+  const [showStaff,setShowStaff]=useState(false);
+  const [newStaff,setNewStaff]=useState("");
+
+  useEffect(()=>{
+    FS.loadDoc("staff").then(v=>{ if(Array.isArray(v)&&v.length>0) setStaffList(v); });
+    const unsub = FS.subscribeDoc("staff", v=>{ if(Array.isArray(v)&&v.length>0) setStaffList(v); });
+    return ()=>unsub&&unsub();
+  },[]);
+  const saveStaff=(list)=>{ setStaffList(list); FS.saveDoc("staff", list); };
+  const [customHolidays,setCustomHolidays]=useState([]);
+  const [showHoliday,setShowHoliday]=useState(false);
+  const [newHoliday,setNewHoliday]=useState("");
+  useEffect(()=>{
+    FS.loadDoc("holidays").then(v=>{ if(Array.isArray(v)){ setCustomHolidays(v); if(typeof window!=="undefined") window.__customHolidays=v; } });
+    const unsub=FS.subscribeDoc("holidays",v=>{ if(Array.isArray(v)){ setCustomHolidays(v); if(typeof window!=="undefined") window.__customHolidays=v; } });
+    return ()=>unsub&&unsub();
+  },[]);
+  const saveHolidays=(list)=>{ setCustomHolidays(list); if(typeof window!=="undefined") window.__customHolidays=list; FS.saveDoc("holidays",list); };
+
+  const showToast=(msg,dur=2000)=>{setToast(msg);setTimeout(()=>setToast(null),dur);};
+
+  const toggle=(id,f)=>setGroups(p=>p.map(g=>{
+    if(g.id!==id) return g;
+    const nv=!g[f];
+    if(f==="cancelled"){ // 取消 → 直接封存收起來;取消勾掉 → 還原
+      return nv ? {...g,cancelled:true,archived:true,archiveType:"cancelled"}
+                : {...g,cancelled:false,archived:false,archiveType:g.archiveType==="cancelled"?"":g.archiveType};
+    }
+    return {...g,[f]:nv};
+  }));
+  const save=(id,f,v)=>setGroups(p=>p.map(g=>g.id===id?{...g,[f]:v}:g));
+  const del=(id)=>{if(window.confirm("確定刪除？"))setGroups(p=>p.filter(g=>g.id!==id));};
+  const copyCode=(code)=>{navigator.clipboard?.writeText(code).catch(()=>{});showToast(`代碼 ${code} 已複製`);};
+
+  // 電話 → 客訴總數(跨所有訂位,含已封存 + 散客客訴),姓名欄顯示 ⚠客訴 用
+  const phoneCplMap={};
+  groups.forEach(gg=>{ const p2=normPhone(gg.phone); if(p2&&(gg.complaints||[]).length>0) phoneCplMap[p2]=(phoneCplMap[p2]||0)+(gg.complaints||[]).length; });
+  walkinCpl.forEach(c=>{ const p2=normPhone(c.phone); if(p2) phoneCplMap[p2]=(phoneCplMap[p2]||0)+1; });
+
+  const filtered=showMaiOnly
+    ? groups.filter(g=>g.fromMai&&!(g.archived&&g.archiveType!=="menu"))
+    : filter.trim()
+    ? groups.filter(g=>{
+        const kw=filter.trim().toLowerCase();
+        if(g.fromMai) return false;
+        // 標籤:把 key 轉成看得到的中文字(畫盤、過敏…),不然搜中文搜不到
+        const tagTxt=[...(g.noteTags||[]),...autoTagsFrom(g.maiNote)]
+          .map(k=>(NOTE_TAGS.find(t=>t.k===k)||{}).label||k).join(" ");
+        const noteTxt=(g.noteLogs||[]).map(n=>`${n.txt||""} ${n.by||""}`).join(" ");
+        return [
+          g.date, g.phone, g.name, g.time, g.code,          // 原本就有的 + 代碼/時間
+          g.headcount, g.collector,                          // 人數、收訂人
+          tagTxt, noteTxt, g.maiNote, g.customPlate,         // 第10項:標籤、備註、大麥備註
+        ].some(v=>String(v||"").toLowerCase().includes(kw));
+      })
+    : groups.filter(g=>!g.fromMai&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&(showPast?isPastMeal(g):!isPastMeal(g)));
+  const parseDT=(g)=>{const[m,d]=(g.date||"0/0").split("/").map(Number);const[h,mi]=(g.time||"0:0").split(":").map(Number);return (m||0)*1000000+(d||0)*10000+(h||0)*100+(mi||0);};
+  filtered.sort((a,b)=>parseDT(a)-parseDT(b));
+
+  // ── 本週/下週:週一~週日;用切換鈕手動切(週日晚上要處理下週)──────────────
+  const weekRange=(offset)=>{
+    const t=new Date(); t.setHours(0,0,0,0);
+    const dow=t.getDay();                       // 0=日
+    const mon=new Date(t); mon.setDate(t.getDate()-((dow+6)%7)+offset*7);   // 該週週一
+    const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+    return {mon,sun};
+  };
+  const wr=weekRange(weekView);
+  const inWeek=(g)=>{
+    const m2=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/); if(!m2) return false;
+    const d=new Date(wr.mon.getFullYear(),+m2[1]-1,+m2[2]); d.setHours(0,0,0,0);
+    return d>=wr.mon && d<=wr.sun;
+  };
+  // 待處理:需訂金但沒收 / 還沒點完(用截止日判斷)
+  // 處理完 = 現場點餐 或 已封存餐點;其他都算待處理
+  // 待處理判斷:未付訂金一律待處理;只有「現場點餐」或「已封存餐點」才算處理完
+  const isTodo=(g)=>{
+    if(needsDeposit(g.headcount,g.isVip,g.takeout) && !g.deposit) return true;   // 未付訂金 → 一定待處理
+    const st=(g.statusLog&&g.statusLog.status)||"";
+    if(g.onsiteOrder) return false;                          // 現場點餐 → 處理完
+    if(st==="餐點封存"||g.archiveType==="menu") return false; // 已封存餐點 → 處理完
+    return true;                                             // 其他(含已鎖、未KEY)都是待處理
+  };
+  // 麥訂區:全部都要處理,不分類
+  const noGroup = showMaiOnly || !!filter.trim() || showPast;
+  // 訂金逾期/快到期的,就算用餐日還很遠也要拉進本週待處理(訂金期限跟用餐日是兩回事)
+  const depPull=(g)=>!inWeek(g)&&!g.cancelled&&!g.archived&&["overdue","urgent"].includes(depositUrgency(g));
+  const weekGs=noGroup?[]:filtered.filter(g=>inWeek(g)||depPull(g));
+  const weekTodo=noGroup?[]:weekGs.filter(isTodo), weekDone=noGroup?[]:weekGs.filter(g=>!isTodo(g));
+  const restGs=noGroup?filtered:filtered.filter(g=>!inWeek(g)&&!depPull(g));
+  // 顯示順序:本週待處理 → 本週已處理 → 其他
+  const rows=noGroup?filtered:[...weekTodo,...weekDone,...restGs];
+  const gapAfter = weekTodo.length>0 ? weekTodo.length-1 : -1;        // 待處理最後一列後面留空隙
+  const weekEndIdx = weekGs.length-1;
+  const overdueGs=groups.filter(g=>depositUrgency(g)==="overdue");
+  const urgentGs =groups.filter(g=>depositUrgency(g)==="urgent");
+
+// 同時段規則:大人數 >=10 的大訂獨佔該時段;<10 的同時段最多 2 組
+const adultsOf=(g)=>{ const hc=(g.headcount||"").toLowerCase(); const p=+((hc.match(/(\d+)p/)||[])[1]||0); return p||parseInt(hc)||0; };
+const BIG_MIN = 8;                          // 8 位大人以上才算「要線上點餐的大訂」
+const slotRuleCheck=(gs)=>{                 // gs=同一時段的組
+  // 只看大訂(>=8位大人);不到 8 位的只需打電話確認人數,不佔大訂配額
+  // 已註記「客人可接受較晚出餐」的組,視同已協調,不列入計算
+  const big=gs.filter(g=>adultsOf(g)>=BIG_MIN && !g.lateOK);
+  if(big.length<2) return null;
+  if(big.some(g=>adultsOf(g)>=10)) return "有 10 位大人以上的大訂,此時段只能接 1 組";
+  if(big.length>2) return "10 位以下的大訂,同時段最多接 2 組";
+  return null;
+};
+const rowBg=(g)=>{
+    if(g.cancelled)return"#f0dcdc";
+    if(g.archived)return"#dce8dc";
+    if(isPastMeal(g))return"#ece8e0";
+    const u=depositUrgency(g);
+    if(u==="overdue")return"#f5d5d5";
+    if(u==="urgent")return"#f5e5d0";
+    return"#fdfaf4";
+  };
+
+  const Chk=({g,field,color})=>(
+    <div onClick={()=>toggle(g.id,field)} style={{cursor:"pointer",textAlign:"center",fontSize:"14px",
+      color:g[field]?color:"#2e2010",userSelect:"none",padding:"2px 0"}}>
+      {g[field]?"✓":"○"}
+    </div>
+  );
+
+  const MemberBadge=({g})=>{
+    const opts=[
+      {val:"none",  label:"非會員",color:"#7a5c3e"},
+      {val:"existing",label:"✦ 會員",color:"#c4924a"},
+      {val:"new",   label:"★ 入會",color:"#2a7a4a"},
+      {val:"private",label:"🎉 包場",color:"#a85ab4"},
+    ];
+    return(
+      <div style={{display:"flex",flexDirection:"column",gap:"2px",alignItems:"center"}}>
+        {opts.map(o=>(
+          <div key={o.val} onClick={()=>save(g.id,"memberType",o.val)}
+            style={{cursor:"pointer",padding:"1px 7px",borderRadius:"5px",fontSize:"10px",fontWeight:"700",
+              background:g.memberType===o.val?"#ddd0bc":"transparent",
+              color:g.memberType===o.val?o.color:"#a09070",
+              border:`1px solid ${g.memberType===o.val?o.color:"transparent"}`}}>
+            {o.label}
+          </div>
+        ))}
+        <div onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,custom:!x.custom}))}
+          style={{cursor:"pointer",padding:"1px 7px",borderRadius:"5px",fontSize:"10px",fontWeight:"700",marginTop:"3px",
+            background:g.custom?"#e8dcc0":"transparent",color:g.custom?"#9c5a1c":"#9a8a76",
+            border:`1px solid ${g.custom?"#c89a5a":"#e0d5c0"}`}}>
+          {g.custom?"✓ 客製化":"客製化"}
+        </div>
+        <div onClick={()=>{
+            if(!g.takeout){
+              const n=window.prompt("外帶幾份主菜?（每份訂金 $100）");
+              if(n===null) return;
+              const q=parseInt(String(n).replace(/\D/g,""))||0;
+              if(q<=0){ window.alert("請填主菜份數"); return; }
+              setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,takeout:true,takeoutQty:String(q)}));
+            } else {
+              if(window.confirm("取消外帶標記?")) setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,takeout:false,takeoutQty:""}));
+            }
+          }}
+          title="外帶：先點餐、要付訂金（每份主菜 $100，無最低）"
+          style={{cursor:"pointer",padding:"1px 7px",borderRadius:"5px",fontSize:"10px",fontWeight:"700",marginTop:"2px",
+            background:g.takeout?"#f0e4d0":"transparent",color:g.takeout?"#a05a10":"#9a8a76",
+            border:`1px solid ${g.takeout?"#c9a45c":"#e0d5c0"}`}}>
+          {g.takeout?`✓ 外帶${g.takeoutQty}份`:"外帶"}
+        </div>
+      </div>
+    );
+  };
+
+  // 防呆:代碼已經出現(會員身分確認過)但還沒按「轉入追蹤表」→ 離開前攔一下
+  const pendingMai = groups.filter(g=>g.fromMai&&g.memberType&&g.memberType!=="private"&&!g.cancelled);
+  const leaveGuard = (go) => {
+    if(pendingMai.length===0){ go(); return; }
+    if(window.confirm(`還有 ${pendingMai.length} 筆麥訂沒按「轉入追蹤表」\n\n確定＝回去處理　取消＝直接離開`)) return;
+    go();
+  };
+
+  if(showDingwe) return <DingwePage groups={groups} onBack={()=>setShowDingwe(false)} staffList={staffList} setGroups={setGroups} setTodoChecksParent={setTodoChecks} onOpenCpl={()=>{setShowDingwe(false);setShowCplCenter(true);}}/>;
+  if(showStats) return <StatsPage onBack={()=>setShowStats(false)} staffList={staffList}/>;
+  if(showItemsOff) return <ItemsOffPage onBack={()=>setShowItemsOff(false)}/>;
+  if(showCplCenter) return <CplCenterPage onBack={()=>setShowCplCenter(false)} groups={groups} setGroups={setGroups} walkinCpl={walkinCpl} setWalkinCpl={setWalkinCpl}/>;
+
+  const COLS=[
+    {key:"date",       label:"日期",    w:50, text:true},
+    {key:"time",       label:"時間",    w:50, text:true},
+    {key:"name",       label:"姓名",    w:88, text:true},
+    {key:"phone",      label:"電話",    w:102,text:true},
+    {key:"headcount",  label:"人數",    w:60, text:true},
+    {key:"bookDate",   label:"訂位日",  w:50, text:true},
+    {key:"deposit",    label:"訂金",    w:74, text:true},
+    {key:"depositDate",label:"付訂日",  w:66, text:true},
+    {key:"collector",  label:"收款人",  w:48, text:true},
+    {key:"refundSigned",label:"退款\n簽名",w:44,chk:true,color:"#e87a5a"},
+    {key:"cancelled",  label:"取消",   w:38, chk:true,color:"#c05050"},
+    {key:"note",       label:"備註",   w:220,text:true},
+  ];
+  const compactKeys=["date","time","name","headcount"];
+  const shownCols = compactMode ? COLS.filter(c=>compactKeys.includes(c.key)) : COLS;
+  const statusAnchor = compactMode ? "headcount" : "collector";
+
+  return(
+    <div style={{...S.page,background:"#f5f0e8",color:"#3a2a1a"}}>
+      <style>{GS}</style>
+      {toast&&<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:"#e2f2e8",border:"1px solid #2a7a4a",borderRadius:"10px",padding:"8px 18px",fontSize:"12px",color:"#2a7a4a",fontWeight:"700",zIndex:999,whiteSpace:"nowrap"}}>{toast}</div>}
+
+      <div style={{...S.header,paddingBottom:"10px"}}>
+        <button onClick={onBack} style={S.backBtn}>← 離開</button>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
+          <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 {APP_VER}</div>
+          <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
+            <button title={TIP_TXT.items} onClick={()=>leaveGuard(()=>setShowItemsOff(true))}
+              style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
+            <div style={{position:"relative"}}>
+              <button onClick={()=>setGearOpen(v=>!v)}
+                style={{background:gearOpen?"#1a4a6a":"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:gearOpen?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",padding:"7px 12px",cursor:"pointer"}}>⚙</button>
+              {gearOpen&&(
+                <div style={{position:"absolute",top:"110%",right:0,zIndex:200,background:"#fff",border:"1.5px solid #a8c4dc",borderRadius:"10px",boxShadow:"0 6px 20px rgba(0,0,0,0.18)",padding:"6px",minWidth:"160px"}}>
+                  {[["👥 員工",()=>setShowStaff(true)],["📅 假日",()=>setShowHoliday(true)],["📜 操作紀錄",()=>window.alert("操作紀錄功能還在準備中")]].map(([t,fn])=>(
+                    <button key={t} onClick={()=>{fn();setGearOpen(false);}}
+                      style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderRadius:"7px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"9px 11px",cursor:"pointer"}}>{t}</button>
+                  ))}
+                  <div style={{borderTop:"1px solid #e0e8f0",marginTop:"4px",paddingTop:"6px",paddingLeft:"11px",paddingBottom:"3px"}}><FsStatus/></div>
+                </div>
+              )}
+            </div>
+            <button title={TIP_TXT.cpl} onClick={()=>leaveGuard(()=>setShowCplCenter(true))}
+              style={{background:"#c02020",border:"1.5px solid #8a1010",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:"5px"}}><IcoWarn size={15} color="#fff"/> 客訴中心</button>
+            <button title={TIP_TXT.addBig} onClick={()=>setShowAdd(true)}
+              style={{background:"#b07840",border:"1.5px solid #8a5a20",borderRadius:"8px",color:"#fff",fontSize:"13px",fontWeight:"800",padding:"8px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>＋ 新增大訂</button>
+          </div>
+        </div>
+        {showHelp&&(
+          <div style={{background:"#fffaf0",border:"1.5px solid #d8c090",borderRadius:"12px",padding:"12px 14px",marginBottom:"10px"}}>
+            <div style={{fontSize:"13px",fontWeight:"800",color:"#8a5210",marginBottom:"8px",borderBottom:"2px solid #d8c090",paddingBottom:"6px"}}>📖 各按鍵用途</div>
+            {[
+              ["📥 麥訂","從大麥匯入、還沒轉成正式訂位的。點一下只看這些,處理完按「轉入追蹤表」。有紅色 ! 表示有待處理。"],
+              ["過期訂單","用餐日已過、還沒收掉的訂位。點開處理:直接封存,或有狀況就填「客訴與建議」。有紅色 ! 表示有待處理。"],
+              ["人數統計表","訂位人數統計表。每週一三五要導入訂位、關滿20的紅色時段。裡面有步驟 1-2-3 指引。有紅色 ! 表示今天還沒做完。"],
+              ["員工","管理夥伴名單(新增/刪除),就是各種「選夥伴」會出現的名字。"],
+              ["假日","設定哪些日期算假日(影響備料、訂位人數標準)。"],
+              ["🚫 品項","按日期關閉餐點(可選幾號到幾號);季節限定品項在這裡設上架~下架檔期,自動上下架。"],
+              ["⚠ 時間疑義","客人在點餐頁按「時間不對?」回報時,這裡會跳紅字。點時間欄的「⚠時間疑義」標籤 → 選要改成客人說的時間、還是維持原本 → <b>兩種都要記得去大麥 POS 同步</b>。"],
+              ["🤝 櫃檯交接","收合式清單:①<b>金庫清點</b>——數紙鈔張數+零錢袋數,湊到 $20,000 自動顯示正確;有問題按〔✗有不符〕選項目+多少錢+備註,會留紀錄。②<b>備用金</b>——填現金和收據金額,加起來要 $20,000。③<b>錢櫃清點</b>——比對「基準+營業額-支出」。④<b>印訂位表</b>打勾。⑤<b>交接事項</b>——按＋自己寫要交代下一班的事,做完打勾會劃掉。"],
+              ["客訴中心","所有客訴集中管理:統計(本月件數/類型佔比/最常被客訴的餐點)、清單篩選,也可在這裡記現場餐評和 Google 評論。填了電話,下次訂位會自動跳紅色「客訴」提醒。"],
+              ["+ 新增大訂","手動新增一筆大訂訂位(客人沒線上訂、或電話訂位時用)。"],
+            ].map(([k,v],i2,arr)=>(
+              <div key={k} style={{display:"flex",gap:"8px",padding:"7px 0",fontSize:"12px",lineHeight:"1.6",borderBottom:i2<arr.length-1?"1px solid #eee0c4":"none"}}>
+                <span style={{fontWeight:"800",color:"#6a4a2e",flexShrink:0,minWidth:"78px"}}>{k}</span>
+                <span style={{color:"#5a4530"}}>{v}</span>
+              </div>
+            ))}
+            <div style={{fontSize:"11px",color:"#8a6a4a",marginTop:"8px",borderTop:"2px solid #d8c090",paddingTop:"7px"}}>下方每組點餐狀態格可點:選「已封存/現場點餐」等。過期的訂位會出現「直接封存 / 客訴與建議」。</div>
+            <div style={{marginTop:"10px",background:"#fff7e8",border:"1.5px solid #e0b060",borderRadius:"10px",padding:"10px 12px"}}>
+              <div style={{fontSize:"13px",fontWeight:"800",color:"#a05a10",marginBottom:"7px",borderBottom:"1.5px solid #e0c890",paddingBottom:"5px"}}>💰 訂金規則</div>
+              {[
+                ["誰要付訂金","10 人以上（大人+小孩+嬰兒 加總）或包廂,一律要付。包廂不管幾人都要。"],
+                ["金額","每人 $100;包廂最低 $1000。"],
+                ["何時要付清","兩條取<b>先到的</b>:<br/>①<b>訂位後 3 天內的中午 12:00</b>（訂位當天算第1天,例:7/14訂→7/16 12:00）<br/>②<b>用餐日前、最後一個銀行上班日的中午 12:00</b>（六日/國定假日銀行無法對帳,會自動往前推。例:7/18(六)或7/19(日)用餐→7/17(五) 12:00）"],
+                ["前一天才訂位","改成<b>訂位後 2 小時內</b>付款,才會保留位置。"],
+              ["逾期怎麼講","客人的訂金頁面已經明確寫著:<b>逾時未收到訂金,恕不保留座位,訂位將自動取消</b>。"],
+                ["🟠 待付訂","還沒付,截止前 3 天內就會變黃提醒。"],
+                ["🔴 逾期","已過截止時間還沒付。客人端會顯示「座位不予保留,訂位將自動取消」,要打電話確認。"],
+                ["客人怎麼付","訂位頁面有台新帳號＋「複製帳號」鈕;付完客人可自己回報後 5 碼 → 這裡變「待核對」,你核對後點成「已核對」。"],
+                ["填了訂金就不再提醒","訂金欄有金額、或已核對/待核對,紅字就會消失。"],
+              ].map(([k,v],i2,arr)=>(
+                <div key={k} style={{display:"flex",gap:"8px",padding:"6px 0",fontSize:"12px",lineHeight:"1.6",borderBottom:i2<arr.length-1?"1px solid #f0e0c0":"none"}}>
+                  <span style={{fontWeight:"800",color:"#8a5210",flexShrink:0,minWidth:"88px"}}>{k}</span>
+                  <span style={{color:"#5a4530"}} dangerouslySetInnerHTML={{__html:v}}/>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+          <button title={TIP_TXT.dingwe} onClick={()=>leaveGuard(()=>setShowDingwe(true))} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
+          <button title={TIP_TXT.mai} onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂【大訂未加LINE】{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
+          <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單（詢問餐評）"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
+          <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="🔍 搜 日期/姓名/電話/代碼/標籤/備註/大麥備註"
+            style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
+          {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
+        </div>
+        {(()=>{
+          const maiN=groups.filter(g=>g.fromMai&&!g.cancelled).length;
+          const pastAll=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));
+          const pastN=pastAll.filter(isPastMeal2d).length;          // 只催「過2天以上」的
+          const pastWait=pastAll.length-pastN;                       // 昨天的:等客人回覆,不催
+          const importedToday = lastResvImport===todayStr;
+          // 同時段大訂規則衝突掃描(手動新增+麥訂匯入都抓得到)
+          // 同時段 = 固定半小時格(11:00~11:29 算一格、11:30~11:59 算一格)
+          const halfSlot=(t)=>{ const m=(t||"").match(/^(\d{1,2}):(\d{2})$/); if(!m) return t||""; const h=+m[1]; return `${String(h).padStart(2,"0")}:${+m[2]<30?"00":"30"}`; };
+          const slotMap={};
+          groups.filter(g=>!g.cancelled&&!g.archived&&!isPastMeal(g)&&g.date&&g.time).forEach(g=>{ const k=`${g.date} ${halfSlot(g.time)}`; (slotMap[k]=slotMap[k]||[]).push(g); });
+          const slotConflicts=Object.entries(slotMap).map(([k,gs])=>({slot:k,gs,msg:slotRuleCheck(gs)})).filter(x=>x.msg);
+          // ⏰ 快截止還沒點完的訂位 → 夥伴要主動催(客人逾時只能現場點餐,等40分鐘以上)
+          const chaseGs = groups.filter(g=>{
+            if(g.fromMai||noChase(g)) return false;
+            if(!g.date||isPastMeal(g)) return false;
+            const dl=getOrderDeadline(g.date); if(!dl) return false;
+            const left=dl-new Date();
+            if(left<=0 || left>48*3600000) return false;        // 只看「48小時內截止」
+            if(lowConsumeOk(g)) return false;                    // 低消已達標 → 不用催了
+            const need=adultsOfG(g);          // 只算大人(5歲以下不用點餐)
+            const done=(g.orders||[]).length;
+            // 點餐狀態已選「已提醒點餐/已加LINE/餐點封存」→ 夥伴已處理,不再催
+            const st=(g.statusLog&&g.statusLog.status)||"";
+            if(["已提醒點餐","已加LINE","餐點封存"].includes(st)) return false;
+            return need>0 && done<need;                          // 還沒點完
+          });
+          const dow=new Date().getDay(); // 0日 1一 2二 3三 4四 5五 6六
+          const _sm=(new Date().getMonth()+1)<9;   // 暑假(到8/31)每天關訂位;9/1起一三五
+          const needClose=_sm?true:[1,3,5].includes(dow);
+          const needCall=[3,4].includes(dow);      // 三四 要打電話確認週末
+          const needSave=[1,3,5].includes(dow);    // 一三五 要存錢
+          const needKey=[1,2,3,4,5].includes(dow); // 平日 key人事/物料
+          const closeDone=todoChecks[`close_${todayStr}`];
+          const callDone=todoChecks[`call_${todayStr}`];
+          const saveDone=todoChecks[`save_${todayStr}`];
+          const keyDone=todoChecks[`key_${todayStr}`];
+          const fbDone=todoChecks[`fb_${todayStr}`];
+          const igDone=todoChecks[`ig_${todayStr}`];
+          const _dowT=new Date().getDay();
+          const ckey=(t)=>(t.freq&&t.freq!=="once")?`custom_${t.id}_${todayStr}`:`custom_${t.id}`;
+          const customToday=(todoChecks.customList||[]).filter(t=>{
+            if(!t.freq||t.freq==="once") return t.date===todayStr;
+            if(t.freq==="daily") return true;
+            if(t.freq==="weekly") return (t.days||[]).includes(_dowT);
+            return false;
+          });
+          const customAllDone=customToday.every(t=>todoChecks[ckey(t)]);
+          // 前幾天沒做完的(補做提醒)—— 只從開始使用的基準日之後算
+          const overdueTasks=[];
+          const sinceParts=(todoChecks._since||todayStr).split("/").map(Number);
+          const sinceDate=new Date(sinceParts[0],sinceParts[1]-1,sinceParts[2]);
+          for(let i=1;i<=4;i++){
+            const dd=new Date(); dd.setHours(0,0,0,0); dd.setDate(dd.getDate()-i);
+            if(dd<sinceDate) continue;
+            const ds=`${dd.getFullYear()}/${dd.getMonth()+1}/${dd.getDate()}`;
+            const wd=dd.getDay(); const wl=["日","一","二","三","四","五","六"][wd];
+            if([1,3,5].includes(wd)&&!todoChecks[`close_${ds}`]) overdueTasks.push({key:`close_${ds}`,text:`🔒 ${ds}（${wl}）的關訂位還沒做`});
+            if([3,4].includes(wd)&&!todoChecks[`call_${ds}`]) overdueTasks.push({key:`call_${ds}`,text:`📞 ${ds}（${wl}）的打電話確認還沒做`});
+            if([1,3,5].includes(wd)&&!todoChecks[`save_${ds}`]) overdueTasks.push({key:`save_${ds}`,text:`💰 ${ds}（${wl}）的存錢還沒做`});
+          }
+          const allDone = !groups.some(g=>g.timeIssue&&!g.cancelled&&!g.archived) && slotConflicts.length===0 && chaseGs.length===0 && importedToday && maiN===0 && pastN===0 && overdueGs.length===0 && urgentGs.length===0 && overdueTasks.length===0 && (!needClose||closeDone) && (!needCall||callDone) && (!needSave||saveDone) && (!needKey||keyDone) && fbDone && igDone && customAllDone;
+          const todoLeft = [groups.some(g=>g.timeIssue&&!g.cancelled&&!g.archived), slotConflicts.length>0, chaseGs.length>0, !importedToday, maiN>0, pastN>0, overdueGs.length>0, urgentGs.length>0, overdueTasks.length>0,
+            needClose&&!closeDone, needCall&&!callDone, needSave&&!saveDone, needKey&&!keyDone, !fbDone, !igDone]
+            .filter(Boolean).length + customToday.filter(t=>!todoChecks[ckey(t)]).length;
+          // ── 現在該做什麼:依時段自動判斷,不用找 ──────────────────────────
+          const _h=new Date().getHours();
+          const _phase = _h<11 ? {k:"open",t:"早班",icon:"☀️"} : (_h<20 ? {k:"mid",t:"中班",icon:"💰"} : {k:"close",t:"晚班",icon:"🌙"});
+          const _nowJobs=[];
+          if(chaseGs.length>0) _nowJobs.push({t:`${chaseGs.length} 組要催點餐`,lv:1});
+          const _exp=groups.filter(archiveExpiring);
+          if(_exp.length>0) _nowJobs.push({t:`${_exp.length} 筆封存快過期`,lv:1});
+          const _tv=groups.filter(g=>!g.cancelled&&g.depositLast5&&g.depositStatus==="待核對");
+          if(_tv.length>0) _nowJobs.push({t:`${_tv.length} 筆訂金要對帳`,lv:2});
+          if(overdueGs.length>0) _nowJobs.push({t:`${overdueGs.length} 筆逾期未付訂（要去催）`,lv:1});
+          if(slotConflicts.length>0) _nowJobs.push({t:`${slotConflicts.length} 個時段超收`,lv:1});
+          if(groups.some(g=>g.timeIssue&&!g.cancelled&&!g.archived)) _nowJobs.push({t:"客人回報時間有誤",lv:1});
+          if(!importedToday) _nowJobs.push({t:"今天還沒匯入訂位",lv:2});
+          if(maiN>0) _nowJobs.push({t:`${maiN} 筆麥訂待轉入追蹤表（轉了才會追訂金/催點餐）`,lv:2});
+          if(needClose&&!closeDone) _nowJobs.push({t:"今天要關訂位",lv:2});
+          if(pastN>0) _nowJobs.push({t:`${pastN} 筆過期訂單（要詢問餐評）`,lv:2});
+          return (
+            <>
+            <div style={{marginTop:"8px",background:_nowJobs.length?"#fff6ee":"#eef8f0",borderRadius:"12px",border:`2.5px solid ${_nowJobs.length?"#e0a060":"#7ab88a"}`,padding:"11px 13px",marginBottom:"8px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:_nowJobs.length?"8px":"0",flexWrap:"wrap"}}>
+                <span style={{fontSize:"15px",fontWeight:"900",color:_nowJobs.length?"#a04010":"#1a6a3a"}}>{_phase.icon} 現在 {String(new Date().getHours()).padStart(2,"0")}:{String(new Date().getMinutes()).padStart(2,"0")}・{_phase.t}</span>
+                <span style={{flex:1}}/>
+                {_nowJobs.length===0
+                  ? <span style={{fontSize:"14px",fontWeight:"900",color:"#1a6a3a"}}>✓ 目前沒有待辦</span>
+                  : <span style={{fontSize:"13px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"13px",padding:"2px 12px"}}>{_nowJobs.length} 件要做</span>}
+              </div>
+              {_nowJobs.length>0&&(
+                <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
+                  {_nowJobs.map((j,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:"7px",fontSize:"14px",fontWeight:"800",color:j.lv===1?"#c02020":"#8a5210"}}>
+                      <span style={{fontSize:"11px"}}>{j.lv===1?"🔴":"🟡"}</span>{j.t}
+                    </div>
+                  ))}
+                  <div style={{fontSize:"11px",color:"#a08060",marginTop:"3px"}}>詳細內容和處理按鈕在下面「櫃檯待辦」裡</div>
+                </div>
+              )}
+              {(()=>{
+                const day=hoData[todayStr]||{};
+                const cl=day.close||{};
+                // 各時段的項目 + 完成狀態
+                let items=[];
+                if(_phase.k==="open"){
+                  const ot=hoData._openTasks||OPEN_TASKS;
+                  const oc=day.openChk||{};
+                  items=[{t:"開店準備",done:ot.length>0&&ot.every(x=>oc[x])}];
+                  const yStr=dayKey(dayAgo(1));   // v227:同上
+                  const yU=((hoData[yStr]||{}).notes||[]).filter(n=>!n.done);
+                  if(yU.length>0) items.push({t:`昨天沒做完 ${yU.length} 件`,done:false});
+                } else if(_phase.k==="mid"){
+                  const cashDone=CASH_SPOTS.every(k=>day.cash&&day.cash[k]);
+                  const notesLeft=(day.notes||[]).filter(n=>!n.done).length;
+                  items=[{t:"算錢",done:cashDone},{t:"印訂位表",done:!!day.printed},{t:"交接事項",done:notesLeft===0}];
+                } else {
+                  const dn=CLOSE_ORDER.filter(k=>cl[k]).length;
+                  items=[{t:`晚結流程（${dn}/${CLOSE_ORDER.length}）`,done:dn===CLOSE_ORDER.length}];
+                }
+                const allOk=items.every(x=>x.done);
+                return (
+                  <div style={{marginTop:"8px",paddingTop:"7px",borderTop:`1px solid ${_nowJobs.length?"#f0dcc0":"#c8e4cc"}`,fontSize:"12px",color:"#7a6a5a",fontWeight:"700"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                      <span>這個時段要做：</span>
+                      {items.map((x,i)=>(
+                        <span key={i} style={{color:x.done?"#8aaa8a":"#8a5210",textDecoration:x.done?"line-through":"none",fontWeight:"800"}}>
+                          {x.done?"✓ ":""}{x.t}
+                        </span>
+                      ))}
+                      {allOk&&<span style={{fontSize:"11px",fontWeight:"900",color:"#1a6a3a",background:"#dff0e6",borderRadius:"5px",padding:"1px 8px"}}>都完成了</span>}
+                    </div>
+                    <div style={{color:"#8a6a4a",fontWeight:"600",marginTop:"3px"}}>→ 在下面「🤝 櫃檯交接」的「{_phase.k==="open"?"☀️ 開早":_phase.k==="mid"?"💰 中間結算":"🌙 晚結"}」</div>
+                  </div>
+                );
+              })()}
+            </div>
+            <div style={{background:"#fdf4dd",borderRadius:"12px",border:"2.5px solid #d8a840",padding:"11px 13px"}}>
+              <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"800",marginBottom:(allDone||!todoOpen)?"0":"9px",display:"flex",alignItems:"center",gap:"6px"}}>
+                <span onClick={()=>setTodoOpen(v=>!v)} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"6px"}}>
+                  <span style={{fontSize:"11px"}}>{todoOpen?"▼":"▶"}</span>
+                  📋 櫃檯待辦
+                </span>
+                {allDone
+                  ? <span style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700"}}>✓ 今日都完成</span>
+                  : !todoOpen&&<span className="blinkTag" style={{fontSize:"10px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 8px"}}>還有 {todoLeft} 項</span>}
+                <span style={{flex:1}}/>
+                <button onClick={()=>{setNewTodo("");setTodoFreq("once");setTodoDays([1,3,5]);setTodoAdd(true);}}
+                  title="新增待辦"
+                  style={{width:"26px",height:"26px",lineHeight:"1",borderRadius:"7px",border:"1.5px solid #c08a20",background:"#fff",color:"#8a5210",fontSize:"16px",fontWeight:"900",cursor:"pointer",padding:0,flexShrink:0}}>＋</button>
+              </div>
+              {todoOpen&&<div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                {(()=>{
+                  const tIssues=groups.filter(g=>g.timeIssue&&!g.cancelled&&!g.archived);
+                  if(tIssues.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 客人回報訂位時間有誤 {tIssues.length} 筆!</div>
+                      {tIssues.map(g=>(
+                        <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"3px",marginTop:"3px"}}>
+                          <b>{g.date} {g.name}</b> {g.phone}　系統:<b>{g.time}</b> ／ 客人說:<b style={{color:"#c02020"}}>{g.timeIssue.said}</b>
+                          <div style={{fontSize:"9px",color:"#a06050"}}>{g.timeIssue.at} 回報 —— 打電話確認,並到大麥 POS 同步</div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  const mo=menuOffAll||{};
+                  const t=new Date(); const days=[];
+                  for(let i=0;i<7;i++){ const d=new Date(t); d.setDate(t.getDate()+i); days.push(`${d.getMonth()+1}/${d.getDate()}`); }
+                  const hits=days.map(dstr=>({d:dstr,ids:(mo[dstr]||[])})).filter(x=>x.ids.length>0);
+                  if(hits.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c06030",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div style={{fontSize:"12px",color:"#a04010",fontWeight:"900",marginBottom:"3px"}}>🚫 近 7 天有關閉的品項<span title="記得提早開回來，到「🚫 品項」設定" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {hits.map(h=>(
+                        <div key={h.d} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0d0",paddingTop:"3px",marginTop:"3px"}}>
+                          <b>{h.d}</b>　{h.ids.map(id=>{const it=findItem(id);return it?it.name:id;}).join("、")}
+                        </div>
+                      ))}
+                      
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  // 只提醒「還沒用餐」的:已經吃完的不用再重新封存
+                  const expiring=groups.filter(archiveExpiring);
+                  if(expiring.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 封存快過期 {expiring.length} 筆<span title="封存只保留 7 天，過期餐點訂單會消失，請重新拍照封存" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {expiring.map(g=>{const a=archiveAgeDays(g);return (
+                        <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"3px",marginTop:"3px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                            <span><b>{g.date} {g.time} {g.name}</b>　封存 <b style={{color:a>=7?"#c02020":"#c06020"}}>{a} 天</b>{a>=7?"（已超過）":"（明天過期）"}</span>
+                            <span style={{flex:1}}/>
+                            <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                              style={{fontSize:"10px",background:"#c02020",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap"}}>重新封存 →</button>
+                          </div>
+                        </div>
+                      );})}
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  // 同一客人同一天出現兩筆以上 → 之前時間改動造成的重複
+                  const byKey={};
+                  groups.filter(g=>!g.cancelled&&!g.archived&&g.phone&&!isPastMeal(g)).forEach(g=>{
+                    const k=(g.phone||"").replace(/\D/g,"");
+                    (byKey[k]=byKey[k]||[]).push(g);
+                  });
+                  const dups=Object.values(byKey).filter(a=>a.length>1);
+                  if(dups.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 重複訂位 {dups.length} 組<span title="留下資料完整的那筆（有點餐/訂金的），刪掉另一筆" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {dups.map((arr,i)=>(
+                        <div key={i} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.8",borderTop:"1px solid #f0e0e0",paddingTop:"4px",marginTop:"4px"}}>
+                          <b>{arr[0].name}</b> {arr[0].phone}
+                          {arr.map(g=>(
+                            <div key={g.id} style={{display:"flex",alignItems:"center",gap:"6px",paddingLeft:"8px"}}>
+                              <span>・{g.date} {g.time||"無時間"}　{g.headcount}　已點{(g.orders||[]).length}人{g.deposit?`　訂金$${g.deposit}`:""}
+                                <b style={{color:g.fromMai?"#1a6a3a":"#8a5210",marginLeft:"5px"}}>{g.fromMai?"[麥訂]":"[大訂表]"}</b></span>
+                              <button onClick={()=>{ if(window.confirm(`刪除這筆?\n${g.date} ${g.time} ${g.name}\n\n（保留另一筆）`)) setGroups(p=>p.filter(x=>x.id!==g.id)); }}
+                                style={{fontSize:"10px",background:"#fff",color:"#c02020",border:"1px solid #d09090",borderRadius:"4px",padding:"1px 7px",cursor:"pointer",fontWeight:"800"}}>刪除這筆</button>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                      
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  // v218:單已進 POS 之後客人又改單 → POS 裡的內容跟系統不一樣了
+                  const changed=groups.filter(g=>{
+                    if(g.cancelled) return false;
+                    if(!g.date||isPastMeal(g)) return false;          // 跟「要 KEY 單」同一把尺
+                    return ordersEditedAfterLock(g).length>0;
+                  });
+                  if(changed.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 已封存後改單 {changed.length} 組<span title="單已經進 POS 之後客人又改了，POS 裡的內容跟系統不一樣。進去對照後記得改 POS" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {changed.map(g=>{
+                        const eo=ordersEditedAfterLock(g);
+                        return (
+                          <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0d8d8",paddingTop:"3px",marginTop:"3px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                              <span><b>{g.date} {g.time} {g.name}</b>　{g.headcount}
+                                <span style={{color:"#c02020",fontWeight:"800",marginLeft:"6px"}}>{eo.map(o=>`${o.num}號`).join("、")} 改過</span>
+                              </span>
+                              <span style={{flex:1}}/>
+                              <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                                style={{fontSize:"11px",background:"#c02020",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>看全組訂單 →</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  // 已鎖(過點餐截止)但還沒封存餐點 → 還沒 KEY 單
+                  const needKey=groups.filter(g=>{
+                    if(g.fromMai||g.cancelled||g.archived) return false;
+                    if(g.archiveType==="menu"||g.onsiteOrder) return false;   // 已封存/現場點餐 → 免
+                    if(!g.date||isPastMeal(g)) return false;
+                    if((g.orders||[]).length===0) return false;               // 客人完全沒點餐 → 沒東西可 KEY
+                    return g.locked||isPastDeadline(g.date);                  // 已鎖或過截止
+                  });
+                  if(needKey.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c06030",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div className="blinkTag" style={{fontSize:"12px",color:"#a04010",fontWeight:"900",marginBottom:"3px"}}>🔒 要 KEY 單 {needKey.length} 筆<span title="已過點餐截止但還沒封存餐點。KEY 完單記得拍照封存" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {needKey.map(g=>(
+                        <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0d0",paddingTop:"3px",marginTop:"3px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                            <span><b>{g.date} {g.time} {g.name}</b>　{g.headcount}　已點 {(g.orders||[]).length} 人
+                              {!g.deposit&&needsDeposit(g.headcount,g.isVip,g.takeout)&&<span style={{color:"#c02020",fontWeight:"800"}}>　⚠未收訂金</span>}</span>
+                            <span style={{flex:1}}/>
+                            <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                              style={{fontSize:"11px",background:"#c06030",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>前往 KEY 單 →</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  const toVerify=groups.filter(g=>!g.cancelled&&g.depositLast5&&g.depositStatus==="待核對");
+                  if(toVerify.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #c9a45c",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div style={{fontSize:"12px",color:"#8a5210",fontWeight:"900",marginBottom:"3px"}}>🕐 訂金要對帳 {toVerify.length} 筆<span title="客人已回報末5碼，等銀行營業時間查帳確認" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {toVerify.map(g=>(
+                        <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e4d0",paddingTop:"3px",marginTop:"3px"}}>
+                          <b>{g.date} {g.time} {g.name}</b>　末5碼 <b style={{color:"#8a5210"}}>{g.depositLast5}</b>　${depositAmountOf(g)}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {(()=>{
+                  const canLock=groups.filter(g=>{
+                    if(g.fromMai||g.cancelled||g.archived||g.locked||g.noEarlyLock) return false;
+                    if(isPastMeal(g)||g.onsiteOrder) return false;
+                    if(g.archiveType==="menu") return false;               // 已封存餐點 → 不用問了
+                    const st=(g.statusLog&&g.statusLog.status)||"";
+                    if(["餐點封存","已KEY需改單","未KEY-需優先KEY","未KEY-超過1週無法先KEY"].includes(st)) return false;
+                    return lowConsumeOk(g);
+                  });
+                  if(canLock.length===0) return null;
+                  return (
+                    <div style={{background:"#fff",border:"2px solid #7ab88a",borderRadius:"9px",padding:"7px 9px"}}>
+                      <div style={{fontSize:"12px",color:"#1a6a3a",fontWeight:"900",marginBottom:"3px"}}>✓ 低消已達標 {canLock.length} 組<span title="可以問客人是不是點完了，確定的話提前鎖單開始 KEY" style={{fontSize:"10px",fontWeight:"700",color:"#8aaa8a",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                      {canLock.map(g=>(
+                        <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#3a5a40",lineHeight:"1.7",borderTop:"1px solid #e0f0e4",paddingTop:"5px",marginTop:"5px"}}>
+                          {(()=>{
+                            const ls=(g.orders||[]).flatMap(o=>o.lines||[]);
+                            let mn=0,dn=0;
+                            ls.forEach(l=>{const it=findItem(l.itemId);if(!it)return;if(isMainDish(it))mn++;else if(isDrink(it))dn++;});
+                            const ad=adultsOfG(g);
+                            return (
+                              <span><b>{g.date} {g.time} {g.name}{g.gender||""}</b>　{g.headcount}
+                                <span style={{color:"#2a7a4a",fontWeight:"800",marginLeft:"6px"}}>主餐 {mn} ・飲料 {dn}</span>
+                                <span style={{color:"#8a9a8a",marginLeft:"5px"}}>（{ad} 位大人）</span>
+                              </span>
+                            );
+                          })()}
+                          <span style={{flex:1}}/>
+                          <button onClick={()=>copyMsg(`lock_${g.id}`,msgEarlyLock(g))}
+                            style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                              background:copiedId===`lock_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                            {copiedId===`lock_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>問可否鎖單</>}
+                          </button>
+                          <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                            style={{fontSize:"11px",background:"#3a7a5a",color:"#fff",border:"none",borderRadius:"6px",
+                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>看全組訂單 →</button>
+                          <button onClick={()=>{
+                              const d=new Date();
+                              setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:true,noEarlyLockAt:`${d.getMonth()+1}/${d.getDate()}`}));
+                            }}
+                            style={{fontSize:"11px",background:"#fff",color:"#8a6a4a",border:"1.5px solid #d0c0a8",borderRadius:"6px",
+                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>✕ 不用</button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {slotConflicts.length>0&&(
+                  <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 同時段大訂超收 {slotConflicts.length} 個<span title="8 位大人以上才算大訂；不到 8 位只需打電話確認人數，不佔配額。客人同意較晚出餐即可解除警示" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
+                    {slotConflicts.map(x=>(
+                      <div key={x.slot} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"4px",marginTop:"4px"}}>
+                        <b>{x.slot}~{(()=>{const p=x.slot.split(" ")[1].split(":");return `${p[0]}:${p[1]==="00"?"29":"59"}`;})()}</b>
+                        <div style={{color:"#c02020",fontWeight:"700",marginBottom:"3px"}}>{x.msg} —— 打電話跟<b>比較晚訂位</b>的客人協調</div>
+                        {x.gs.filter(g=>adultsOf(g)>=BIG_MIN&&!g.lateOK)
+                          .sort((a,b)=>String(a.bookDate||"").localeCompare(String(b.bookDate||"")))
+                          .map((g,gi,arr)=>(
+                          <div key={g.id} style={{display:"flex",alignItems:"center",gap:"6px",padding:"3px 0",flexWrap:"wrap"}}>
+                            <span style={{fontSize:"11px",fontWeight:"800",color:"#3a2a1a"}}>{g.time} {g.name}（{g.headcount}）</span>
+                            <span style={{fontSize:"10px",color:"#8a6a4a"}}>{g.phone}</span>
+                            <span style={{fontSize:"9px",color:gi===arr.length-1?"#c02020":"#a09070",fontWeight:gi===arr.length-1?"800":"400"}}>
+                              {g.bookDate?`${g.bookDate}訂`:""}{gi===arr.length-1?"（最晚訂・優先協調）":""}
+                            </span>
+                            <span style={{flex:1}}/>
+                            <button onClick={()=>{
+                                const nm=window.prompt(`${g.name} 同意較晚出餐?\n填確認的夥伴名字:`); if(nm===null) return;
+                                const now=new Date();
+                                setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:true,lateOKBy:nm,lateOKAt:`${now.getMonth()+1}/${now.getDate()}`}));
+                              }}
+                              style={{fontSize:"10px",background:"#2a7a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 8px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 可接受較晚出餐</button>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    
+                  </div>
+                )}
+                {chaseGs.length>0&&(
+                  <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>
+                      ⏰ 要打電話催點餐 {chaseGs.length} 組<span title="逾時客人只能現場點餐、現場排單，要等 40 分鐘以上" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span>
+                    </div>
+                    {chaseGs.map(g=>{
+                      const dl=getOrderDeadline(g.date); const left=dl-new Date();
+                      const hh=Math.floor(left/3600000), mm2=Math.floor(left%3600000/60000);
+                      const need=adultsOfG(g);
+                      return (
+                        <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"5px",marginTop:"5px"}}>
+                          <span>
+                            <b>{g.date} {g.time} {g.name}</b> {g.phone}　
+                            <span style={{color:"#c02020",fontWeight:"800"}}>已點 {(g.orders||[]).length}/{need} 人</span>　
+                            <span style={{color:"#8a5a10",fontWeight:"700"}}>剩 {hh}小時{mm2}分</span>
+                          </span>
+                          <span style={{flex:1}}/>
+                          <button onClick={()=>copyMsg(`chase_${g.id}`,msgChase(g))}
+                            style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                              background:copiedId===`chase_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                            {copiedId===`chase_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>催點餐</>}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    
+                  </div>
+                )}
+                {overdueTasks.map(t=>(
+                  <div key={t.key} onClick={()=>toggleTodo(t.key)} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:"#fbe0e0",border:"1px solid #d09090",borderRadius:"8px",padding:"6px 8px"}}>
+                    <span style={{fontSize:"13px"}}>⏰</span>
+                    <span style={{fontSize:"13px",color:"#b03030",fontWeight:"800"}}>補做：{t.text}</span>
+                    <span style={{fontSize:"10px",color:"#c08070",marginLeft:"auto"}}>點一下打勾</span>
+                  </div>
+                ))}
+                <div style={{display:"flex",alignItems:"center",gap:"8px",opacity:importedToday?0.55:1}}>
+                  <span style={{fontSize:"13px"}}>{importedToday?"✅":"🔴"}</span>
+                  <span style={{fontSize:"13px",color:importedToday?"#7a9a7a":"#3a2a1a",fontWeight:"700",textDecoration:importedToday?"line-through":"none"}}>🔄 每天導入 1 個月內訂位</span>
+                  {importedToday&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>今天已導入</span>}
+                </div>
+                {needClose&&(
+                  <div onClick={()=>toggleTodo(`close_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:closeDone?0.55:1,cursor:"pointer"}}>
+                    <span style={{fontSize:"13px"}}>{closeDone?"✅":"🔴"}</span>
+                    <span style={{fontSize:"13px",color:closeDone?"#7a9a7a":"#3a2a1a",fontWeight:"700",textDecoration:closeDone?"line-through":"none"}}>🔒 今天（{["日","一","二","三","四","五","六"][dow]}）要關訂位</span>
+                    {closeDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                  </div>
+                )}
+                {needCall&&(
+                  <div onClick={()=>toggleTodo(`call_${todayStr}`)} style={{display:"flex",alignItems:"flex-start",gap:"8px",opacity:callDone?0.55:1,cursor:"pointer"}}>
+                    <span style={{fontSize:"13px"}}>{callDone?"✅":"🔴"}</span>
+                    <span style={{fontSize:"13px",color:callDone?"#7a9a7a":"#3a2a1a",fontWeight:"700",textDecoration:callDone?"line-through":"none"}}>📞 打電話確認 週五六日 5位以上訂位是否有更動</span>
+                    {callDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                  </div>
+                )}
+                {needSave&&(
+                  <div onClick={()=>toggleTodo(`save_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:saveDone?0.55:1,cursor:"pointer"}}>
+                    <span style={{fontSize:"13px"}}>{saveDone?"✅":"🔴"}</span>
+                    <span style={{fontSize:"13px",color:saveDone?"#7a9a7a":"#3a2a1a",fontWeight:"700",textDecoration:saveDone?"line-through":"none"}}>💰 今天（{["日","一","二","三","四","五","六"][dow]}）要存錢</span>
+                    {saveDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                  </div>
+                )}
+                {needKey&&(
+                  <div onClick={()=>toggleTodo(`key_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:keyDone?0.55:1,cursor:"pointer"}}>
+                    <span style={{fontSize:"13px"}}>{keyDone?"✅":"🔴"}</span>
+                    <span style={{fontSize:"13px",color:keyDone?"#7a9a7a":"#3a2a1a",fontWeight:"700",textDecoration:keyDone?"line-through":"none"}}>⌨️ 平日空閒時 key 人事和物料</span>
+                    {keyDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                  </div>
+                )}
+                <div onClick={()=>toggleTodo(`fb_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:fbDone?0.55:1,cursor:"pointer"}}>
+                  <span style={{fontSize:"13px"}}>{fbDone?"✅":"🔴"}</span>
+                  <span style={{fontSize:"13px",color:fbDone?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:fbDone?"line-through":"none"}}>💬 回覆 FB 訊息</span>
+                  {fbDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                </div>
+                <div onClick={()=>toggleTodo(`ig_${todayStr}`)} style={{display:"flex",alignItems:"center",gap:"8px",opacity:igDone?0.55:1,cursor:"pointer"}}>
+                  <span style={{fontSize:"13px"}}>{igDone?"✅":"🔴"}</span>
+                  <span style={{fontSize:"13px",color:igDone?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:igDone?"line-through":"none"}}>📷 回覆 IG 訊息</span>
+                  {igDone&&<span style={{fontSize:"10px",color:"#6a8a6a"}}>已完成</span>}
+                </div>
+                {customToday.map(t=>{
+                  const k=ckey(t); const done=todoChecks[k];
+                  const WD=["日","一","二","三","四","五","六"];
+                  const fq=(!t.freq||t.freq==="once")?null:t.freq==="daily"?"每天":`每週${(t.days||[]).map(d=>WD[d]).join("")}`;
+                  return (
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:"8px",opacity:done?0.55:1}}>
+                      <span onClick={()=>toggleTodo(k)} style={{fontSize:"13px",cursor:"pointer"}}>{done?"✅":"🔴"}</span>
+                      <span onClick={()=>toggleTodo(k)} style={{fontSize:"13px",color:done?"#8a9a7a":"#4a3010",fontWeight:"700",textDecoration:done?"line-through":"none",cursor:"pointer",flex:1}}>📝 {t.text}</span>
+                      {fq&&<span style={{fontSize:"9px",fontWeight:"700",color:"#8a5210",background:"#f8e8b8",border:"1px solid #d8b860",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>{fq}</span>}
+                      <span onClick={()=>{if(!window.confirm(`刪除待辦「${t.text}」?`))return;const nn={...todoChecks,customList:(todoChecks.customList||[]).filter(x=>x.id!==t.id)};delete nn[k];saveTodo(nn);}} style={{fontSize:"11px",color:"#a06050",cursor:"pointer",padding:"0 4px"}}>✕</span>
+                    </div>
+                  );
+                })}
+                {maiN>0&&(
+                  <div onClick={()=>{setShowMaiOnly(true);setShowPast(false);}} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
+                    <span style={{fontSize:"13px"}}>🔴</span>
+                    <span style={{fontSize:"13px",color:"#1a6a3a",fontWeight:"700"}}>📥 {maiN} 筆麥訂待轉入追蹤表 →<span style={{fontSize:"11px",color:"#8a6a4a",fontWeight:"600"}}>（先確認有沒有加 LINE；轉了才會追訂金/催點餐）</span></span>
+                  </div>
+                )}
+                {pastN>0&&(
+                  <div onClick={()=>{setShowPast(true);setShowMaiOnly(false);}} style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
+                    <span style={{fontSize:"13px"}}>🔴</span>
+                    <span style={{fontSize:"13px",color:"#8a5210",fontWeight:"700"}}>⏰ {pastN} 筆過期待處理 <span style={{fontSize:"11px",color:"#8a6a4a",fontWeight:"600"}}>（要詢問餐評）</span>→{pastWait>0?<span style={{fontSize:"10px",color:"#a09070",fontWeight:"400"}}>（另有 {pastWait} 筆昨天的，等客人回覆）</span>:null}</span>
+                  </div>
+                )}
+                {overdueGs.length>0&&(
+                  <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>💰 逾期未付訂 {overdueGs.length} 筆 —— 要去催<span style={{fontSize:"10px",fontWeight:"600",color:"#a06050",marginLeft:"5px"}}>（用餐日過了就不會再出現）</span></div>
+                    {overdueGs.map(g=>(
+                      <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e0e0",paddingTop:"5px",marginTop:"5px"}}>
+                        <span><b>{g.date} {g.time} {g.name}</b> {g.phone}　<span style={{color:"#c02020",fontWeight:"800"}}>${depositAmountOf(g)}</span></span>
+                        <span style={{flex:1}}/>
+                        <button onClick={()=>copyMsg(`dep_${g.id}`,msgDepChase(g))}
+                          style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                            background:copiedId===`dep_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                            padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                          {copiedId===`dep_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>催訂金</>}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {urgentGs.length>0&&(
+                  <div style={{background:"#fff",border:"2px solid #d8a840",borderRadius:"9px",padding:"7px 9px"}}>
+                    <div style={{fontSize:"12px",color:"#8a5210",fontWeight:"900",marginBottom:"3px"}}>⚠ 訂金即將到期 {urgentGs.length} 筆</div>
+                    {urgentGs.map(g=>{const dd=depDeadlineOf(g);return (
+                      <div key={g.id} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0e4d0",paddingTop:"5px",marginTop:"5px"}}>
+                        <span><b>{g.date} {g.time} {g.name}</b>　<span style={{color:"#8a5210",fontWeight:"800"}}>${depositAmountOf(g)}</span>　{dd?(dd.lastMinute?"訂後2hr內":`${dd.label}前`):""}</span>
+                        <span style={{flex:1}}/>
+                        <button onClick={()=>copyMsg(`dep_${g.id}`,msgDepChase(g))}
+                          style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"11px",
+                            background:copiedId===`dep_${g.id}`?"#2a8a5a":"#06C755",color:"#fff",border:"none",borderRadius:"6px",
+                            padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
+                          {copiedId===`dep_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>催訂金</>}
+                        </button>
+                      </div>
+                    );})}
+                  </div>
+                )}
+              </div>}
+            </div>
+            </>
+          );
+        })()}
+        <HandoverBox todayStr={todayStr} open={hoOpen} setOpen={setHoOpen} groups={groups}/>
+        {!noGroup&&<div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
+          <div style={{display:"flex",border:"1.5px solid #b8a888",borderRadius:"8px",overflow:"hidden"}}>
+            <button onClick={()=>setWeekView(0)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===0?"#8a6a4a":"#fff",color:weekView===0?"#fff":"#8a6a4a"}}>本週</button>
+            <button onClick={()=>setWeekView(1)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===1?"#8a6a4a":"#fff",color:weekView===1?"#fff":"#8a6a4a"}}>下週 →</button>
+          </div>
+          <span style={{fontSize:"11px",color:"#8a6a4a",fontWeight:"700"}}>
+            {wr.mon.getMonth()+1}/{wr.mon.getDate()} ~ {wr.sun.getMonth()+1}/{wr.sun.getDate()}
+          </span>
+          <span style={{fontSize:"11px",fontWeight:"800",color:weekTodo.length>0?"#c02020":"#2a7a4a"}}>
+            {weekTodo.length>0?`待處理 ${weekTodo.length} 筆`:"都處理完了 ✓"}
+          </span>
+          <span style={{fontSize:"10px",color:"#a09070"}}>（左側粗線＝{weekView===0?"本週":"下週"}）</span>
+        </div>}
+        <div style={{fontSize:"10px",color:"#5a3a28",marginTop:"6px"}}>{rows.length} 組 · {compactMode?"手機版:點一列展開看全部欄位":"左右滑動查看所有欄位"}</div>
+      </div>
+
+      <div style={{overflowX:"auto",overflowY:"auto",flex:1}}>
+        <table style={{borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap",width:"100%"}}>
+          <thead>
+            <tr style={{background:"#efe6d4",position:"sticky",top:0,zIndex:5}}>
+              <th style={{...TH,minWidth:80}}>代碼</th>
+              <th style={{...TH,minWidth:66}}>會員</th>
+              <th style={{...TH,minWidth:50}}>點餐<br/>數量</th>
+              {shownCols.map(c=>(<React.Fragment key={c.key}><th style={{...TH,minWidth:c.w,whiteSpace:"pre-line"}}>{c.label}</th>{c.key===statusAnchor&&<th style={{...TH,minWidth:74}}>點餐<br/>狀態</th>}</React.Fragment>))}
+              <th style={{...TH,minWidth:34}}>刪</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length===0&&<tr><td colSpan={shownCols.length+4} style={{textAlign:"center",padding:"40px",color:"#a09070"}}>尚無紀錄</td></tr>}
+            {showMaiOnly&&(
+              <tr><td colSpan={shownCols.length+4} style={{background:"#eaf4ea",padding:"8px 11px",fontSize:"12px",color:"#1a6a3a",fontWeight:"700",borderBottom:"1.5px solid #a8c8a8",lineHeight:"1.7"}}>
+                💡 <b>確認過的要按「轉入追蹤表」</b> —— 轉了才會開始追訂金、催點餐、算低消。留在這裡的都不會動。
+              </td></tr>
+            )}
+            {showMaiOnly&&(()=>{
+              const bk={};
+              groups.filter(g=>!g.cancelled&&!g.archived&&g.phone&&!isPastMeal(g)).forEach(g=>{const k=(g.phone||"").replace(/\D/g,"");(bk[k]=bk[k]||[]).push(g);});
+              const dn=Object.values(bk).filter(a=>a.length>1).length;
+              if(dn===0) return null;
+              return <tr><td colSpan={shownCols.length+4} style={{background:"#fbe0e0",padding:"7px 10px",fontSize:"12px",fontWeight:"900",color:"#c02020",borderBottom:"2px solid #c02020"}}>
+                ⚠ 有 {dn} 組客人重複訂位（日期/時間改動造成）—— 到「櫃檯待辦」可以直接清理
+              </td></tr>;
+            })()}
+            {rows.map((g,ri)=>(
+              <>
+                {!noGroup&&ri===0&&weekTodo.length>0&&(
+                  <tr key="h-todo"><td colSpan={shownCols.length+4} onClick={()=>setSecOpen(p=>({...p,todo:!(p.todo!==false)}))}
+                    style={{background:"#fbe4d0",padding:"10px 12px",borderBottom:"2px solid #d09050",cursor:"pointer"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <span style={{fontSize:"15px",color:"#a04010"}}>{secOpen.todo!==false?"▼":"▶"}</span>
+                      <span style={{fontSize:"17px",fontWeight:"900",color:"#a04010"}}>{weekView===0?"本週":"下週"}待處理</span>
+                      <span style={{fontSize:"17px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"14px",padding:"1px 12px"}}>{weekTodo.length}</span>
+                      <span style={{fontSize:"12px",color:"#a06840",fontWeight:"700"}}>還沒現場點餐、也還沒封存餐點</span>
+                    </div>
+                  </td></tr>
+                )}
+                {!noGroup&&ri===weekTodo.length&&weekDone.length>0&&(
+                  <tr key="h-done"><td colSpan={shownCols.length+4} onClick={()=>setSecOpen(p=>({...p,done:!(p.done!==false)}))}
+                    style={{background:"#e2f0e4",padding:"10px 12px",borderBottom:"2px solid #78b088",cursor:"pointer"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <span style={{fontSize:"15px",color:"#2a7a4a"}}>{secOpen.done!==false?"▼":"▶"}</span>
+                      <span style={{fontSize:"17px",fontWeight:"900",color:"#2a7a4a"}}>{weekView===0?"本週":"下週"}已處理</span>
+                      <span style={{fontSize:"17px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"14px",padding:"1px 12px"}}>{weekDone.length}</span>
+                      <span style={{fontSize:"12px",color:"#5a8a6a",fontWeight:"700"}}>現場點餐或已封存</span>
+                    </div>
+                  </td></tr>
+                )}
+                {!noGroup&&ri===weekGs.length&&restGs.length>0&&(
+                  <tr key="h-rest"><td colSpan={shownCols.length+4} onClick={()=>setSecOpen(p=>({...p,rest:!(p.rest!==false)}))}
+                    style={{background:"#ece5d8",padding:"10px 12px",borderBottom:"2px solid #b8a890",cursor:"pointer"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <span style={{fontSize:"15px",color:"#7a6a5a"}}>{secOpen.rest!==false?"▼":"▶"}</span>
+                      <span style={{fontSize:"17px",fontWeight:"900",color:"#7a6a5a"}}>其他日期</span>
+                      <span style={{fontSize:"17px",fontWeight:"900",color:"#fff",background:"#8a7a68",borderRadius:"14px",padding:"1px 12px"}}>{restGs.length}</span>
+                    </div>
+                  </td></tr>
+                )}
+                {!noGroup&&((ri<weekTodo.length&&secOpen.todo===false)||(ri>=weekTodo.length&&ri<weekGs.length&&secOpen.done===false)||(ri>=weekGs.length&&secOpen.rest===false))?null:(<>
+                <tr key={g.id} style={{background:rowBg(g),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),
+                  borderBottom: "1.5px solid #cbb99a",
+                  boxShadow: inWeek(g) ? "inset 5px 0 0 0 #8a6a4a" : "none"}}>
+                  <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
+                    {g.memberType==="private"
+                      ? <div style={{fontSize:"14px",fontWeight:"700",color:"#a85ab4"}}>🎉 包場</div>
+                      : !g.memberType
+                        ? <div onClick={()=>showToast("請先在右邊「會員」欄確認身分，才會顯示代碼")} style={{cursor:"pointer",fontSize:"10px",fontWeight:"700",color:"#c06030",background:"#fbeede",border:"1px solid #e8c8a0",borderRadius:"6px",padding:"4px 5px",lineHeight:"1.3"}}>⚠ 先確認<br/>會員身分</div>
+                        : <div style={{fontSize:"14px",fontWeight:"700",color:"#8a5210"}}>{g.code}</div>}
+
+                    {/* 〔複製代碼〕按鈕已移除;代碼仍顯示在上方,LINE 訊息範本裡也帶著代碼 */}
+                    {(()=>{
+                      // LINE 按鈕:依狀況顯示現在該傳什麼
+                      const needDep=needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit;
+                      const need2=adultsOfG(g);
+                      const dl2=getOrderDeadline(g.date);
+                      const near=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
+                      const notDone=need2>0&&(g.orders||[]).length<need2&&!lowConsumeOk(g)&&!noChase(g);
+                      const label = needDep?"催訂金" : (near&&notDone?"催點餐" : (g.fromMai?"改名字":"LINE"));
+                      const hot = needDep||(near&&notDone)||g.fromMai;
+                      return (
+                        <div onClick={()=>setLineG(g)} title={TIP_TXT.lineBtn} className={hot?"blinkTag":""}
+                          style={{display:"inline-flex",alignItems:"center",gap:"3px",fontSize:"10px",
+                            background:hot?"#06C755":"#e2f2e8",color:hot?"#fff":"#1a6a3a",
+                            border:`1px solid ${hot?"#049a44":"#7ab88a"}`,borderRadius:"5px",padding:"3px 7px",marginTop:"3px",
+                            fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",minHeight:"22px"}}>
+                          <IcoLine size={12} color={hot?"#fff":"#06C755"}/>{label}
+                        </div>
+                      );
+                    })()}
+                    {g.custom&&<div style={{fontSize:"9px",background:"#e8dcc0",color:"#9c5a1c",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>客製化</div>}
+                    {isLockedNow(g)&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>🔒已鎖</div>}
+                    {/* 狀態圖示(🔓不提前鎖單 / 📢改人數 / 📦封存天數)已搬到備註欄 */}
+                    {g.lateOK&&<div title={`${g.lateOKBy||""} ${g.lateOKAt||""} 確認`} onClick={()=>{ if(window.confirm(`取消「可接受較晚出餐」註記?\n取消後這組會重新列入同時段大訂配額。`)) setGroups(p=>p.map(y=>y.id!==g.id?y:{...y,lateOK:false,lateOKBy:"",lateOKAt:""})); }}
+                      style={{fontSize:"9px",background:"#e2f2e8",color:"#1a6a3a",border:"1px solid #7ab88a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700",cursor:"pointer"}}>⏳可晚出餐</div>}
+                    {depositUrgency(g)==="overdue"&&<div style={{fontSize:"9px",background:"#fbdcdc",color:"#b03030",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>逾期</div>}
+                    {depositUrgency(g)==="urgent" &&<div style={{fontSize:"9px",background:"#5a3a10",color:"#ffd080",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>待付訂</div>}
+                    {depositUrgency(g)&&(()=>{const dd=depDeadlineOf(g);return dd?<div style={{fontSize:"8px",color:"#b06020",marginTop:"1px",fontWeight:"800",whiteSpace:"nowrap"}}>{dd.lastMinute?"⏰訂後2hr內":`⏰${dd.label}前`}</div>:null;})()}
+                    {g.depositFrom&&<div title={`${g.depositFromNote||""}，訂金從此日算`} style={{fontSize:"8px",color:"#fff",background:"#c06020",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"800",whiteSpace:"nowrap"}}>📢 {g.depositFrom}改{g.depositFromNote||"人數"}</div>}
+                  </td>
+                  <td style={{padding:"5px 4px",borderRight:"1.5px solid #cbb99a"}}><MemberBadge g={g}/></td>
+                  <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"3px"}}>
+                      <button onClick={()=>setExpanded(expanded===g.id?null:g.id)}
+                        style={{background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:"1px"}}>
+                        <span style={{fontSize:"15px",fontWeight:"700",color:g.orders.length>0?"#2a7a4a":"#5a3a28"}}>{g.orders.length}</span>
+                        <span style={{fontSize:"9px",color:"#5a3a28"}}>已點</span>
+                        <span style={{fontSize:"9px",color:expanded===g.id?"#8a5210":"#5a3a28"}}>{expanded===g.id?"▲":"▼"}</span>
+                      </button>
+                      {(g.orders||[]).some(o=>(o.lines||[]).some(l=>l.setMeal&&l.setMeal.veggieSoup))&&(
+                        <span style={{fontSize:"9px",fontWeight:"800",color:"#dfeadf",background:"#5fe08a",borderRadius:"4px",padding:"1px 5px"}}>🌿 素湯</span>
+                      )}
+                      {(()=>{
+                        const eff = isLockedNow(g);
+                        const left = unlockLeft(g);
+                        return (
+                          <button onClick={()=>{
+                              if(!eff){   // 目前開著 → 直接鎖上
+                                setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,locked:true,unlockOverride:false,unlockUntil:""}));
+                                return;
+                              }
+                              const pick=window.prompt("解鎖多久?（時間到會自動鎖回去）\n\n1 = 30分鐘\n2 = 1小時\n3 = 2小時\n4 = 今天打烊(23:59)","2");
+                              if(pick===null) return;
+                              const now=new Date(); const u=new Date(now);
+                              if(pick==="1") u.setMinutes(u.getMinutes()+30);
+                              else if(pick==="2") u.setHours(u.getHours()+1);
+                              else if(pick==="3") u.setHours(u.getHours()+2);
+                              else if(pick==="4") u.setHours(23,59,0,0);
+                              else return;
+                              setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,locked:true,unlockOverride:false,unlockUntil:u.toISOString()}));
+                            }}
+                            title={eff?"點一下限時解鎖":(left?`解鎖到 ${left}，時間到自動鎖回去。點一下立刻鎖上`:"目前開著，點一下鎖上")}
+                            style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",whiteSpace:"nowrap",
+                              background:eff?"#fbdcdc":"#dfeadf",color:eff?"#b03030":"#2a7a4a",fontWeight:"700"}}>
+                            {eff?"🔒":(left?`🔓${left}`:"🔓")}
+                          </button>
+                        );
+                      })()}
+                      <button onClick={()=>{
+                          if(!g.setDrinkOnsite&&!window.confirm("打開後，這組客人點套餐可以不選飲料就送出。\n飲料改成現場在櫃檯 POS 點。\n\n確定打開?")) return;
+                          setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,setDrinkOnsite:!x.setDrinkOnsite}));
+                        }}
+                        title={g.setDrinkOnsite?"套餐飲料現場點（已打開）— 點一下關閉":"套餐飲料現場點（關閉中）— 打開後客人可以不選飲料"}
+                        style={{fontSize:"9px",padding:"2px 5px",borderRadius:"5px",border:"none",cursor:"pointer",marginLeft:"3px",
+                          background:g.setDrinkOnsite?"#dfeadf":"#efe8dc",color:g.setDrinkOnsite?"#2a7a4a":"#b0a08c",fontWeight:"700"}}>
+                        🥤
+                      </button>
+                    </div>
+                  </td>
+                  {shownCols.map(c=>{
+                    const noDep = (["deposit","depositDate","collector"].includes(c.key))&&!needsDeposit(g.headcount,g.isVip,g.takeout);
+                    return (
+                    <React.Fragment key={c.key}>
+                    <td style={{padding:"5px 4px",borderRight:"1.5px solid #cbb99a",verticalAlign:"middle",
+                      textAlign:c.chk||c.key==="collector"?"center":"left",
+                      background:noDep?"#e6dece":undefined,opacity:noDep?0.45:1}}>
+                      {noDep?<div style={{color:"#a09070",fontSize:"11px",textAlign:"center"}}>—</div>:
+                       c.chk?<Chk g={g} field={c.key} color={c.color}/>:
+                       c.key==="note"?<NoteCell g={g} setGroups={setGroups} staffList={staffList}/>:
+                       c.key==="collector"?<CollectorCell g={g} onSave={save} staffList={staffList}/>:
+                       c.key==="headcount"?<HeadcountCell g={g} onSave={save} setGroups={setGroups}/>:
+                       c.key==="name"?(
+                         <div>
+                           <EditCell g={g} field={c.key} w={c.w-8} onSave={save}/>
+                           <div onClick={()=>{const nx=g.gender==="先生"?"小姐":(g.gender==="小姐"?"":"先生");setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,gender:nx}));}}
+                             title="點一下切換 先生 / 小姐"
+                             style={{fontSize:"10px",fontWeight:"800",cursor:"pointer",marginTop:"2px",display:"inline-block",borderRadius:"4px",padding:"1px 6px",
+                               background:g.gender?"#f0e8f4":"transparent",color:g.gender?"#7a5a9a":"#c0b0a0",border:`1px solid ${g.gender?"#c8b0d8":"#e0d5c0"}`}}>
+                             {g.gender||"性別?"}
+                           </div>
+                           {(()=>{const n=phoneCplMap[normPhone(g.phone)];return n?(
+                             <div className="blinkTag" style={{marginTop:"2px",fontSize:"10px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"5px",padding:"2px 7px",letterSpacing:"1px"}}>客訴{n>1?` ×${n}`:""}</div>
+                           ):null;})()}
+                         </div>
+                       ):
+                       c.key==="deposit"?(
+                         <div>
+                           {!g.deposit&&needsDeposit(g.headcount,g.isVip,g.takeout)&&(()=>{
+                             const amt=depositAmountOf(g);
+                             if(g.depositLast5&&g.depositStatus==="待核對") return (
+                               <div style={{marginBottom:"3px"}}>
+                                 <div style={{fontSize:"9px",fontWeight:"800",color:"#8a5210",background:"#fcefd6",border:"1px solid #e0c080",borderRadius:"4px",padding:"2px 4px",marginBottom:"2px",whiteSpace:"nowrap"}}>🕐 待核對 {g.depositLast5}</div>
+                                 <button onClick={()=>setDepPick({g,amt,mode:"verify"})}
+                                   style={{width:"100%",fontSize:"9px",fontWeight:"800",border:"none",borderRadius:"5px",padding:"3px 2px",cursor:"pointer",background:"#2a7a4a",color:"#fff",whiteSpace:"nowrap"}}>✓ 已對帳 ${amt}</button>
+                               </div>
+                             );
+                             return (
+                               <button onClick={()=>setDepPick({g,amt,mode:"collect"})}
+                                 style={{width:"100%",marginBottom:"3px",fontSize:"9px",fontWeight:"800",border:"none",borderRadius:"5px",padding:"3px 2px",cursor:"pointer",background:"#2a7a4a",color:"#fff",whiteSpace:"nowrap"}}>✓ 收訂 ${amt}</button>
+                             );
+                           })()}
+                           <div style={{display:"flex",alignItems:"center",gap:"4px",justifyContent:"center"}}>
+                             <div style={{flex:1}}><EditCell g={g} field={c.key} w={c.w-30} onSave={save}/></div>
+                             <div onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,payCash:!x.payCash}))} title="付款方式"
+                               style={{cursor:"pointer",fontSize:"9px",fontWeight:"700",borderRadius:"5px",padding:"1px 4px",whiteSpace:"nowrap",
+                                 background:g.payCash?"#d4a017":"#e0e8f0",color:g.payCash?"#fff":"#6a8aaa"}}>
+                               {g.payCash?"現金":"轉"}
+                             </div>
+                           </div>
+                           {g.depositLast5&&(
+                             <div onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,depositStatus:x.depositStatus==="已核對"?"待核對":"已核對"}))}
+                               title="點一下切換 待核對 / 已核對（客人端會同步看到）"
+                               style={{marginTop:"3px",fontSize:"9px",fontWeight:"700",borderRadius:"5px",padding:"2px 4px",cursor:"pointer",textAlign:"center",whiteSpace:"nowrap",
+                                 background:g.depositStatus==="已核對"?"#dfeadf":"#f5e8d0",color:g.depositStatus==="已核對"?"#2a7a4a":"#8a5210"}}>
+                               末5:{g.depositLast5} {g.depositStatus==="已核對"?"✓已核對":"待核對"}
+                             </div>
+                           )}
+                         </div>
+                       ):
+                       <EditCell g={g} field={c.key} w={c.w-8} onSave={save}/>}
+                    </td>
+                    {c.key===statusAnchor&&<td style={{padding:"4px 3px",borderRight:"1.5px solid #cbb99a",textAlign:"center",minWidth:"74px"}}>
+                      <StatusCell g={g} onSave={save} groups={groups} setGroups={setGroups} staffList={staffList}/>
+                    </td>}
+                    </React.Fragment>
+                    );
+                  })}
+                  <td style={{padding:"5px",textAlign:"center"}}>
+                    <button onClick={()=>del(g.id)} style={{background:"none",border:"1px solid #e0b0b0",borderRadius:"4px",color:"#7a3030",fontSize:"10px",cursor:"pointer",padding:"1px 5px"}}>✕</button>
+                  </td>
+                </tr>
+                {expanded===g.id&&(
+                  <tr key={g.id+"-exp"}>
+                    <td colSpan={shownCols.length+4} style={{background:"#faf6ee",padding:"8px 10px",borderBottom:"2px solid #c8b89c"}}>
+                      {compactMode&&(
+                        <div style={{background:"#fff",border:"1px solid #e0d5c0",borderRadius:"10px",padding:"10px 12px",marginBottom:"8px"}}>
+                          <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>📋 完整欄位</div>
+                          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"5px 10px",fontSize:"13px",alignItems:"center"}}>
+                            {COLS.filter(c=>!compactKeys.includes(c.key)&&c.text).map(c=>(
+                              <React.Fragment key={c.key}>
+                                <span style={{color:"#8a6a4a",fontSize:"12px",whiteSpace:"nowrap"}}>{(c.label||"").replace("\n","")}</span>
+                                <div>{c.key==="collector"?<CollectorCell g={g} onSave={save} staffList={staffList}/>:<EditCell g={g} field={c.key} w={"100%"} onSave={save}/>}</div>
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <ComplaintPanel g={g} setGroups={setGroups} groups={groups} walkin={walkinCpl} onAdd={(gg)=>{setGForm({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setGCpl(gg);}}/>
+                      {(g.refundStaffSig||g.refundCustomerSig)&&(
+                        <div style={{padding:"10px 12px",background:"#f0f6f0",borderRadius:"10px",margin:"8px 0",border:"1px solid #b8d0b8"}}>
+                          <div style={{fontSize:"12px",color:"#2a6a2a",fontWeight:"700",marginBottom:"8px"}}>💰 退款簽名記錄</div>
+                          <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+                            {[["staff","員工","refundStaffSig","refundStaffSigTime"],["customer","客人","refundCustomerSig","refundCustomerSigTime"]].map(([t,label,sk,tk])=>(
+                              <div key={t} style={{flex:1,minWidth:"140px",padding:"8px",background:"#fff",borderRadius:"8px",border:`1px solid ${g[sk]?"#2a6a3a":"#ddd"}`}}>
+                                <div style={{fontSize:"11px",color:g[sk]?"#2a6a2a":"#999",marginBottom:"4px"}}>{g[sk]?"✓ ":""}{label}簽名{g[tk]?`（${g[tk]}）`:""}</div>
+                                {g[sk]&&<img src={g[sk]} style={{width:"100%",maxHeight:"80px",objectFit:"contain",background:"#fafafa",borderRadius:"6px"}}/>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{padding:"12px 16px"}}>
+                        <div style={{fontSize:"12px",color:"#8a5210",fontWeight:"700",marginBottom:"10px"}}>
+                          📋 {g.name} 的點餐 — {g.orders.length} 人
+                        </div>
+                        <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
+                          style={{width:"100%",padding:"11px",borderRadius:"10px",border:"none",background:"#6a3a8a",color:"#fff",fontSize:"13px",fontWeight:"800",cursor:"pointer",marginBottom:"10px"}}>
+                          📋 開啟全組訂單 員工版（新增訂單／備註／封存照片,免密碼）
+                        </button>
+                        {g.orders.length===0?(
+                          <div style={{fontSize:"11px",color:"#5a3a28",background:"#fdfaf4",borderRadius:"10px",padding:"12px"}}>
+                            傳送代碼 <span style={{color:"#8a5210",fontWeight:"700"}}>{g.code}</span> 給客人即可點餐
+                          </div>
+                        ):(
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"8px"}}>
+                            {g.orders.map((order,oi)=>(
+                              <div key={oi} style={{background:"#fdfaf4",borderRadius:"12px",padding:"12px",border:"1px solid #ddd0bc"}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                                    <span style={{fontSize:"16px",fontWeight:"700",color:"#8a5210"}}>{order.num}號</span>
+                                    <span style={{fontSize:"12px",color:"#4a3520",fontWeight:"600"}}>{order.guestName}</span>
+                                  </div>
+                                  <button onClick={()=>setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,orders:x.orders.filter((_,i)=>i!==oi)}))}
+                                    style={{fontSize:"9px",padding:"2px 7px",borderRadius:"5px",background:"none",border:"1px solid #7a3030",color:"#e87a5a",cursor:"pointer"}}>取消</button>
+                                </div>
+                                {order.lines?.map((line,li)=>{
+                                  const item=findItem(line.itemId);
+                                  if(!item) return null;
+                                  return(
+                                    <div key={li} style={{marginBottom:"4px"}}>
+                                      <div style={{fontSize:"10px",color:"#2a7a4a",fontWeight:"700",marginBottom:"1px"}}>{"["+getItemCategory(item)+"]"}</div>
+                                      <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px"}}>
+                                        <span style={{color:"#6a4a2e"}}>{item.name}</span>
+                                        <span style={{color:"#7a5c3e"}}>${getItemPrice(item,g.memberType!=="none")}</span>
+                                      </div>
+                                      {(line.dressing||line.ice||line.sugar||line.mascot||(line.toggles&&line.toggles.length))&&(
+                                        <div style={{fontSize:"10px",color:"#6a4c30"}}>
+                                          {[line.dressing,line.ice,line.sugar,line.mascot,...(line.toggles||[])].filter(Boolean).join(" · ")}
+                                        </div>
+                                      )}
+                                      {line.setMeal&&(
+                                        <div style={{fontSize:"10px",color:"#4a7a4a",marginTop:"2px"}}>
+                                          {SET_MEALS.find(s=>s.id===line.setMeal.id)?.label}
+                                          {["A","C"].includes(line.setMeal.id)&&line.setMeal.veggieSoup&&<span style={{color:"#dfeadf",fontWeight:"800",background:"#5fe08a",borderRadius:"3px",padding:"0 5px",marginLeft:"4px"}}>🌿素湯</span>}
+                                          {line.setMeal.drink&&` · ${line.setMeal.drink.name}`}
+                                          {line.setMeal.drink?.ice&&` · ${line.setMeal.drink.ice}`}
+                                          {line.setMeal.drink?.sugar&&` · ${line.setMeal.drink.sugar}`}
+                                          {line.setMeal.drink?.mascot&&` · ${line.setMeal.drink.mascot}`}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                                <div style={{borderTop:"1px solid #ddd0bc",marginTop:"6px",paddingTop:"6px",textAlign:"right",fontSize:"12px",color:"#8a5210",fontWeight:"700"}}>
+                                  ${orderTotal(order.lines||[],g.memberType!=="none")}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </>)}
+              </>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{padding:"6px 14px",background:"#0a0601",borderTop:"1px solid #f0e8d8",display:"flex",gap:"10px",flexWrap:"wrap"}}>
+        {[["#f5d5d5","🚨逾期"],["#f5e5d0","⚠待付"],["#fdfaf4","進行中"],["#dce8dc","封存"],["#ece8e0","已過餐"],["#f0dcdc","取消"]].map(([bg,label])=>(
+          <div key={label} style={{display:"flex",alignItems:"center",gap:"4px"}}>
+            <div style={{width:10,height:10,background:bg,border:"1px solid #c8b89c",borderRadius:2}}/>
+            <span style={{fontSize:"9px",color:"#5a3a28"}}>{label}</span>
+          </div>
+        ))}
+      </div>
+
+      {showHoliday&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setShowHoliday(false)}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"320px",maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"14px",color:"#a05a20",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>國定假日管理（農曆）</div>
+            <div style={{fontSize:"11px",color:"#8a6a4a",textAlign:"center",marginBottom:"10px"}}>元旦/228/清明/勞動/國慶等已自動，這裡補春節/端午/中秋等農曆假日</div>
+            <div style={{fontSize:"11px",color:"#6a4a2e",marginBottom:"8px"}}>已設定（用餐前一天12:00截止）：</div>
+            {customHolidays.length===0&&<div style={{fontSize:"12px",color:"#b0a090",textAlign:"center",padding:"8px"}}>尚未新增</div>}
+            <div style={{display:"flex",flexWrap:"wrap",gap:"6px",marginBottom:"10px"}}>
+              {customHolidays.map(h=>(
+                <div key={h} style={{display:"flex",alignItems:"center",gap:"4px",background:"#f0e8d6",borderRadius:"8px",padding:"4px 8px"}}>
+                  <span style={{fontSize:"13px",color:"#4a3520",fontWeight:"700"}}>{h}</span>
+                  <span onClick={()=>saveHolidays(customHolidays.filter(x=>x!==h))} style={{cursor:"pointer",color:"#b05050",fontSize:"14px",fontWeight:"700"}}>×</span>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <input value={newHoliday} onChange={e=>setNewHoliday(e.target.value)} placeholder="如 2/17"
+                style={{flex:1,padding:"9px 12px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px"}}/>
+              <button onClick={()=>{const h=newHoliday.trim();if(!/^\d{1,2}\/\d{1,2}$/.test(h)||customHolidays.includes(h))return;saveHolidays([...customHolidays,h]);setNewHoliday("");}}
+                style={{padding:"9px 14px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>新增</button>
+            </div>
+            <button onClick={()=>setShowHoliday(false)} style={{width:"100%",marginTop:"12px",padding:"9px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>關閉</button>
+          </div>
+        </div>
+      )}
+      {showStaff&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setShowStaff(false)}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"300px",border:"1px solid #d0c0a8"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"14px",color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",textAlign:"center"}}>夥伴名單管理</div>
+            {staffList.map(n=>(
+              <div key={n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:"#f0e8d6",borderRadius:"10px",marginBottom:"6px"}}>
+                <span style={{fontSize:"13px",color:"#4a3520",fontWeight:"700"}}>{n}</span>
+                <button onClick={()=>{if(staffList.length<=1)return;saveStaff(staffList.filter(x=>x!==n));}}
+                  style={{background:"none",border:"1px solid #d4a0a0",borderRadius:"6px",color:"#b05050",fontSize:"11px",cursor:"pointer",padding:"2px 8px"}}>刪除</button>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:"8px",marginTop:"10px"}}>
+              <input value={newStaff} onChange={e=>setNewStaff(e.target.value)} placeholder="新夥伴名字"
+                style={{flex:1,padding:"9px 12px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px"}}/>
+              <button onClick={()=>{const n=newStaff.trim();if(!n||staffList.includes(n))return;saveStaff([...staffList,n]);setNewStaff("");}}
+                style={{padding:"9px 14px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>新增</button>
+            </div>
+            <button onClick={()=>setShowStaff(false)} style={{width:"100%",marginTop:"12px",padding:"9px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>關閉</button>
+          </div>
+        </div>
+      )}
+      {todoAdd&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setTodoAdd(false)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"380px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#8a5210",marginBottom:"12px"}}>📋 新增櫃檯待辦</div>
+            <div style={{fontSize:"12px",color:"#6a4a10",fontWeight:"700",marginBottom:"5px"}}>要做什麼?</div>
+            <input value={newTodo} autoFocus onChange={e=>setNewTodo(e.target.value)} placeholder="例如:補印菜單、盤點飲料"
+              style={{width:"100%",boxSizing:"border-box",padding:"11px 12px",borderRadius:"10px",border:"1.5px solid #c08a20",background:"#fff",color:"#4a3010",fontSize:"15px",fontWeight:"700",marginBottom:"14px"}}/>
+            <div style={{fontSize:"12px",color:"#6a4a10",fontWeight:"700",marginBottom:"5px"}}>多久做一次?</div>
+            <div style={{display:"flex",gap:"6px",marginBottom:"10px"}}>
+              {[["once","只有今天"],["daily","每天"],["weekly","每週固定"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setTodoFreq(k)}
+                  style={{flex:1,padding:"10px 4px",borderRadius:"9px",border:`1.5px solid ${todoFreq===k?"#8a5210":"#e0cc90"}`,background:todoFreq===k?"#8a5210":"#fdf4dd",color:todoFreq===k?"#fff":"#6a4a10",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+            {todoFreq==="weekly"&&(
+              <div style={{background:"#fdf4dd",border:"1.5px solid #d8b860",borderRadius:"10px",padding:"10px",marginBottom:"10px"}}>
+                <div style={{fontSize:"11px",color:"#8a5210",fontWeight:"700",marginBottom:"6px"}}>選星期幾（可複選）</div>
+                <div style={{display:"flex",gap:"4px",marginBottom:"7px"}}>
+                  {["日","一","二","三","四","五","六"].map((w,i)=>{
+                    const on=todoDays.includes(i);
+                    return <button key={i} onClick={()=>setTodoDays(p=>on?p.filter(x=>x!==i):[...p,i].sort())}
+                      style={{flex:1,padding:"9px 0",borderRadius:"8px",border:`1.5px solid ${on?"#8a5210":"#e0cc90"}`,background:on?"#8a5210":"#fff",color:on?"#fff":"#8a7a50",fontSize:"13px",fontWeight:"800",cursor:"pointer"}}>{w}</button>;
+                  })}
+                </div>
+                <div style={{display:"flex",gap:"5px"}}>
+                  {[["一三五",[1,3,5]],["二四六",[2,4,6]],["週末",[0,6]],["平日",[1,2,3,4,5]]].map(([l,d])=>(
+                    <button key={l} onClick={()=>setTodoDays(d)} style={{flex:1,padding:"5px 0",borderRadius:"6px",border:"1px solid #d8b860",background:"#fff",color:"#8a5210",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{l}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{fontSize:"11px",color:"#a08a50",marginBottom:"14px",lineHeight:"1.6"}}>
+              {todoFreq==="once"?"只出現今天,做完就結束。":todoFreq==="daily"?"每天都會出現,每天要重新打勾。":`每${todoDays.length?"週"+todoDays.map(d=>["日","一","二","三","四","五","六"][d]).join("、"):"…選星期"}出現,當天要重新打勾。`}
+            </div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setTodoAdd(false)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #e0cc90",color:"#6a4a10",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const t=newTodo.trim(); if(!t){ window.alert("請先寫要做什麼"); return; }
+                  if(todoFreq==="weekly"&&todoDays.length===0){ window.alert("請至少選一天"); return; }
+                  const item={id:`${Date.now()}`,text:t,freq:todoFreq,days:todoFreq==="weekly"?todoDays:[],date:todayStr};
+                  const nn={...todoChecks,customList:[...(todoChecks.customList||[]),item]};
+                  if(!saveTodo(nn)) return; setNewTodo(""); setTodoAdd(false);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#8a5210",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>加入待辦</button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
+      {gCpl&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={()=>setGCpl(null)}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"420px",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"3px"}}>⚠ 新增客訴</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px"}}>{gCpl.name}（{gCpl.date} {gCpl.time}）— 記錄後會跟著這支電話,下次訂位自動提醒</div>
+            <CplDetail val={gForm} onChange={setGForm}/>
+            {[["原因/經過","reason"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+              <div key={k} style={{marginBottom:"11px"}}>
+                <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
+                <textarea value={gForm[k]} onChange={e=>setGForm(p=>({...p,[k]:e.target.value}))} rows={2}
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",lineHeight:"1.5",resize:"vertical",fontFamily:"inherit"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:"8px",marginTop:"4px"}}>
+              <button onClick={()=>setGCpl(null)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  const has=gForm.type||(gForm.kinds||[]).length>0||(gForm.dishes||[]).length>0||gForm.photo||gForm.reason.trim()||gForm.attitude.trim()||gForm.adjust.trim()||gForm.treat.trim();
+                  if(!has){ window.alert("至少選一個類型或填一欄"); return; }
+                  const now=new Date(); const date=`${now.getMonth()+1}/${now.getDate()}`;
+                  setGroups(p=>p.map(x=>x.id!==gCpl.id?x:{...x,complaints:[...(x.complaints||[]),{...gForm,date,source:"大訂餐評"}]}));
+                  setGCpl(null);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#a04020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>儲存客訴</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {wOpen&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)",padding:"16px"}} onClick={()=>setWOpen(false)}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"420px",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"17px",color:"#a04020",fontWeight:"800",marginBottom:"3px"}}>⚠ 散客客訴</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"12px"}}>沒訂位的現場客人。記錄綁電話,之後同一支電話訂位會自動出現 ⚠客訴 提醒。</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+              <input value={wForm.phone} onChange={e=>setWForm(p=>({...p,phone:e.target.value}))} placeholder="電話(必填)" inputMode="tel"
+                style={{flex:1.3,padding:"11px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"15px",fontWeight:"700"}}/>
+              <input value={wForm.name} onChange={e=>setWForm(p=>({...p,name:e.target.value}))} placeholder="姓名(選填)"
+                style={{flex:1,padding:"11px 12px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"15px"}}/>
+            </div>
+            <CplDetail val={wForm} onChange={setWForm}/>
+            {[["原因/經過","reason"],["下次用餐招待什麼","treat"]].map(([l,k])=>(
+              <div key={k} style={{marginBottom:"10px"}}>
+                <div style={{fontSize:"12px",color:"#5a3a28",marginBottom:"4px",fontWeight:"700"}}>{l}</div>
+                <textarea value={wForm[k]} onChange={e=>setWForm(p=>({...p,[k]:e.target.value}))} rows={2}
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#2e2010",fontSize:"14px",lineHeight:"1.5",resize:"vertical",fontFamily:"inherit"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:"8px",marginTop:"4px",marginBottom:"12px"}}>
+              <button onClick={()=>setWOpen(false)} style={{flex:1,padding:"12px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                  if(normPhone(wForm.phone).length<6){ window.alert("電話要填(至少6碼),客訴才能綁得住"); return; }
+                  const now=new Date();
+                  const rec={id:`w${Date.now()}`,date:`${now.getMonth()+1}/${now.getDate()}`,...wForm};
+                  const nl=[...walkinCpl,rec];
+                  setWalkinCpl(nl); FS.saveDoc("walkinCpl",nl);
+                  setWOpen(false);
+                }}
+                style={{flex:2,padding:"12px",borderRadius:"10px",background:"#a04020",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>儲存客訴</button>
+            </div>
+            {walkinCpl.length>0&&(
+              <div style={{borderTop:"1px solid #e8dcc0",paddingTop:"8px"}}>
+                <div style={{fontSize:"11px",fontWeight:"800",color:"#8a5a30",marginBottom:"5px"}}>最近散客客訴(共 {walkinCpl.length} 筆)</div>
+                {[...walkinCpl].reverse().slice(0,6).map(c=>(
+                  <div key={c.id} style={{display:"flex",gap:"8px",alignItems:"center",fontSize:"11px",color:"#5a4030",padding:"5px 0",borderBottom:"1px solid #f0e8d6"}}>
+                    <span style={{flex:1,lineHeight:"1.5"}}><b>{c.date}</b> {c.phone} {c.name||""}｜{c.reason||"—"}</span>
+                    <button onClick={()=>{const nl=walkinCpl.filter(x=>x.id!==c.id);setWalkinCpl(nl);FS.saveDoc("walkinCpl",nl);}}
+                      style={{border:"1px solid #d4a0a0",background:"none",borderRadius:"6px",color:"#b05050",fontSize:"10px",cursor:"pointer",padding:"1px 8px",flexShrink:0}}>刪</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+      {depPick&&createPortal(
+        <div onClick={()=>setDepPick(null)} style={{position:"fixed",inset:0,zIndex:9500,background:"rgba(30,20,10,0.8)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fffaf2",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"340px"}}>
+            <div style={{fontSize:"16px",fontWeight:"900",color:"#5a3a28",marginBottom:"3px"}}>
+              {depPick.mode==="verify"?"核對訂金":"收訂金"} ${depPick.amt.toLocaleString()}
+            </div>
+            <div style={{fontSize:"12px",color:"#a08a70",marginBottom:"14px"}}>
+              {depPick.g.name}　{depPick.g.date} {depPick.g.time}
+              {depPick.mode==="verify"&&depPick.g.depositLast5?`　末5碼 ${depPick.g.depositLast5}`:""}
+            </div>
+            <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",marginBottom:"7px"}}>哪位夥伴{depPick.mode==="verify"?"對帳":"收的"}?</div>
+            <div style={{display:"flex",gap:"7px",flexWrap:"wrap",marginBottom:"14px"}}>
+              {(staffList&&staffList.length?staffList:DEFAULT_STAFF).map(nm=>(
+                <button key={nm} onClick={()=>{
+                    const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()}`;
+                    const patch={deposit:String(depPick.amt),payDate:depPick.g.payDate||d,collector:nm};
+                    if(depPick.mode==="verify") patch.depositStatus="已核對";
+                    setGroups(pr=>pr.map(x=>x.id!==depPick.g.id?x:{...x,...patch}));
+                    setDepPick(null);
+                  }}
+                  style={{padding:"11px 16px",borderRadius:"10px",border:"1.5px solid #c9a45c",background:"#fff",color:"#5a3a28",fontSize:"15px",fontWeight:"800",cursor:"pointer",minHeight:"44px"}}>{nm}</button>
+              ))}
+            </div>
+            <button onClick={()=>setDepPick(null)}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #ddd0bc",background:"transparent",color:"#8a6a48",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+          </div>
+        </div>, document.body
+      )}
+      {lineG&&<LineNameModal g={lineG} onClose={()=>setLineG(null)}/>}
+      {timeIssueG&&createPortal(
+        <div onClick={()=>setTimeIssueG(null)} style={{position:"fixed",inset:0,zIndex:9500,background:"rgba(30,20,10,0.8)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fffaf2",borderRadius:"18px",padding:"22px 20px",width:"100%",maxWidth:"360px"}}>
+            <div style={{fontSize:"17px",fontWeight:"900",color:"#c02020",marginBottom:"3px"}}>⚠ 客人回報訂位時間有誤</div>
+            <div style={{fontSize:"11px",color:"#a08060",marginBottom:"14px"}}>{timeIssueG.name}　{timeIssueG.phone}{timeIssueG.timeIssue&&timeIssueG.timeIssue.at?`　${timeIssueG.timeIssue.at} 回報`:""}</div>
+            <div style={{display:"flex",gap:"10px",marginBottom:"16px",alignItems:"center"}}>
+              <div style={{flex:1,textAlign:"center",background:"#f4ece0",borderRadius:"11px",padding:"12px 8px"}}>
+                <div style={{fontSize:"10px",color:"#8a6a48",fontWeight:"700",marginBottom:"3px"}}>系統目前</div>
+                <div style={{fontSize:"22px",fontWeight:"900",color:"#5a3a28"}}>{timeIssueG.time}</div>
+              </div>
+              <div style={{fontSize:"18px",color:"#a08060"}}>→</div>
+              <div style={{flex:1,textAlign:"center",background:"#fbe4e4",borderRadius:"11px",padding:"12px 8px",border:"1.5px solid #e0a0a0"}}>
+                <div style={{fontSize:"10px",color:"#a04020",fontWeight:"700",marginBottom:"3px"}}>客人說</div>
+                <div style={{fontSize:"22px",fontWeight:"900",color:"#c02020"}}>{timeIssueG.timeIssue&&timeIssueG.timeIssue.said}</div>
+              </div>
+            </div>
+            <div style={{background:"#fff3d6",border:"1.5px solid #e0c060",borderRadius:"9px",padding:"8px 10px",marginBottom:"15px"}}>
+              <div style={{fontSize:"11px",color:"#8a5a10",fontWeight:"800",lineHeight:"1.6"}}>⚠ 大麥 POS 才是正式訂位系統<br/>不論選哪個,都要記得去大麥確認/修改</div>
+            </div>
+            <button onClick={()=>{
+                const gg=timeIssueG, said=gg.timeIssue&&gg.timeIssue.said; const d=new Date(); const at=`${d.getMonth()+1}/${d.getDate()}`;
+                setGroups(p=>p.map(y=>y.id!==gg.id?y:{...y,time:said,timeIssue:null,timeFixed:`${at} 改為客人說的${said}`}));
+                setTimeIssueG(null); window.alert(`已改為 ${said}\n\n⚠ 記得去大麥 POS 也改成 ${said}!`);
+              }}
+              style={{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"#c02020",color:"#fff",fontSize:"15px",fontWeight:"900",cursor:"pointer",marginBottom:"9px"}}>
+              改為客人說的 {timeIssueG.timeIssue&&timeIssueG.timeIssue.said}
+            </button>
+            <button onClick={()=>{
+                const gg=timeIssueG; const d=new Date(); const at=`${d.getMonth()+1}/${d.getDate()}`;
+                setGroups(p=>p.map(y=>y.id!==gg.id?y:{...y,timeIssue:null,timeFixed:`${at} 維持${gg.time}`}));
+                setTimeIssueG(null); window.alert(`維持 ${gg.time}\n\n⚠ 記得去大麥 POS 確認訂位時間是 ${gg.time}!`);
+              }}
+              style={{width:"100%",padding:"14px",borderRadius:"12px",border:"1.5px solid #b0a080",background:"#fff",color:"#5a3a28",fontSize:"15px",fontWeight:"800",cursor:"pointer",marginBottom:"9px"}}>
+              維持原本的 {timeIssueG.time}
+            </button>
+            <button onClick={()=>setTimeIssueG(null)}
+              style={{width:"100%",padding:"10px",borderRadius:"10px",border:"none",background:"transparent",color:"#8a6a48",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>先不處理,關閉</button>
+          </div>
+        </div>, document.body
+      )}
+      {showAdd&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:300,overflowY:"auto",padding:"20px 16px"}}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"20px",border:"1px solid #d0c0a8",maxWidth:"400px",margin:"0 auto"}}>
+            <div style={{...S.logo,marginBottom:"14px"}}>新增大訂</div>
+            {[["姓名 *","name"],["電話","phone"],["日期（如5/3）","date"],["時間（如12:30）","time"],["訂位日","bookDate"],["備註","note"]].map(([l,k])=>(
+              <div key={k} style={{marginBottom:"8px"}}>
+                <div style={{fontSize:"10px",color:"#5a3a28",marginBottom:"3px"}}>{l}</div>
+                <input value={newG[k]||""} onChange={e=>setNewG(p=>({...p,[k]:e.target.value}))} style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",padding:"9px 12px",fontSize:"13px"}}/>
+              </div>
+            ))}
+            {(()=>{
+              const ph=normPhone(newG.phone);
+              if(ph.length<6) return null;
+              const hits=groups.filter(g2=>normPhone(g2.phone)===ph&&(g2.complaints||[]).length>0);
+              if(hits.length===0) return null;
+              return (
+                <div style={{background:"#fce8e0",border:"1.5px solid #d08060",borderRadius:"10px",padding:"10px 12px",marginBottom:"10px"}}>
+                  <div style={{fontSize:"12px",color:"#a04020",fontWeight:"700",marginBottom:"4px"}}>⚠ 此電話有客訴記錄！</div>
+                  {hits.flatMap(g2=>g2.complaints||[]).slice(0,3).map((it,i2)=>(
+                    <div key={i2} style={{fontSize:"11px",color:"#7a4030",lineHeight:"1.6"}}>{it.date}　{it.reason||""} {it.attitude?`／態度：${it.attitude}`:""} {(it.adjust||it.note)?`／調整：${it.adjust||it.note}`:""} {it.treat?`／招待：${it.treat}`:""}</div>
+                  ))}
+                </div>
+              );
+            })()}
+            {/* 人數選擇 P/C/S */}
+            <div style={{marginBottom:"10px"}}>
+              <div style={{fontSize:"10px",color:"#5a3a28",marginBottom:"3px"}}>人數（p=人 c=兒童椅 s=兒童餐具）</div>
+              <div style={{fontSize:"11px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"6px",padding:"5px 8px",marginBottom:"6px",lineHeight:"1.6"}}>
+                ⚠ <b>5 歲以上都算大人</b>，要 key 在「大人 P」<br/>
+                <span style={{fontWeight:"600",color:"#8a6a4a"}}>8 位大人以上才算大訂（要點餐、可能要訂金）</span>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px",flexWrap:"wrap"}}>
+                <button onClick={()=>setNewG(p=>({...p,takeout:!p.takeout,takeoutQty:p.takeout?"":p.takeoutQty}))}
+                  style={{fontSize:"12px",fontWeight:"800",padding:"7px 13px",borderRadius:"8px",cursor:"pointer",
+                    border:`1.5px solid ${newG.takeout?"#c9752a":"#d0c0a8"}`,background:newG.takeout?"#c9752a":"#fff",color:newG.takeout?"#fff":"#8a6a4a"}}>
+                  {newG.takeout?"✓ 外帶":"外帶"}
+                </button>
+                {newG.takeout&&(
+                  <>
+                    <span style={{fontSize:"12px",color:"#8a5210",fontWeight:"700"}}>主菜</span>
+                    <input type="number" min="1" value={newG.takeoutQty||""} onChange={e=>setNewG(p=>({...p,takeoutQty:e.target.value}))}
+                      placeholder="份數" style={{width:"70px",padding:"7px",borderRadius:"7px",border:"1px solid #c8b89c",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2e2010"}}/>
+                    <span style={{fontSize:"12px",color:"#a05a10",fontWeight:"800"}}>訂金 ${(parseInt(newG.takeoutQty)||0)*100}</span>
+                  </>
+                )}
+              </div>
+              <div style={{display:"flex",gap:"8px"}}>
+                <div style={{flex:2}}>
+                  <div style={{fontSize:"9px",color:"#7a5c3e",marginBottom:"3px"}}>大人 P</div>
+                  <input type="number" min="0" value={newG.hcP||""} onChange={e=>setNewG(p=>({...p,hcP:e.target.value}))}
+                    placeholder="0" style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",padding:"8px",fontSize:"14px",textAlign:"center"}}/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:"9px",color:"#7a5c3e",marginBottom:"3px"}}>兒童椅 C</div>
+                  <select value={newG.hcC||0} onChange={e=>setNewG(p=>({...p,hcC:e.target.value}))}
+                    style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",padding:"8px 4px",fontSize:"13px"}}>
+                    {[0,1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:"9px",color:"#7a5c3e",marginBottom:"3px"}}>餐具 S</div>
+                  <select value={newG.hcS||0} onChange={e=>setNewG(p=>({...p,hcS:e.target.value}))}
+                    style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",padding:"8px 4px",fontSize:"13px"}}>
+                    {[0,1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+            {/* 包廂勾選 */}
+            <div onClick={()=>setNewG(p=>({...p,isVip:!p.isVip}))}
+              style={{display:"flex",alignItems:"center",gap:"10px",padding:"10px 14px",borderRadius:"10px",cursor:"pointer",marginBottom:"10px",
+                background:newG.isVip?"#2a1a3a":"#f0e8d6",border:`1.5px solid ${newG.isVip?"#8a5ab4":"#d8c8b0"}`}}>
+              <div style={{width:"20px",height:"20px",borderRadius:"5px",border:`2px solid ${newG.isVip?"#8a5ab4":"#5a3a28"}`,
+                background:newG.isVip?"#8a5ab4":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                {newG.isVip&&<span style={{color:"#fff",fontSize:"12px"}}>✓</span>}
+              </div>
+              <span style={{fontSize:"13px",fontWeight:"700",color:newG.isVip?"#c8a0e0":"#7a5c3e"}}>包廂訂位（需訂金）</span>
+            </div>
+            {/* 訂金區:條件顯示 */}
+            {(()=>{
+              const tp=(parseInt(newG.hcP)||0)+(parseInt(newG.hcC)||0)+(parseInt(newG.hcS)||0);
+              const show = tp>=10 || newG.isVip;
+              if(!show) return <div style={{fontSize:"10px",color:"#5a3a28",padding:"7px 10px",background:"#f0e8d6",borderRadius:"8px",marginBottom:"10px"}}>人數未達10人且非包廂，免付訂金</div>;
+              return (
+                <div style={{background:"#f0e8d6",borderRadius:"10px",padding:"10px 12px",marginBottom:"10px",border:"1px solid #5a3a10"}}>
+                  <div style={{fontSize:"10px",color:"#8a5210",fontWeight:"700",marginBottom:"8px"}}>💰 訂金資訊（必填）</div>
+                  {[["訂金金額","deposit"],["付訂日","depositDate"],["收款人","collector"]].map(([l,k])=>(
+                    <div key={k} style={{marginBottom:"7px"}}>
+                      <div style={{fontSize:"10px",color:"#5a3a28",marginBottom:"3px"}}>{l}</div>
+                      <input value={newG[k]||""} onChange={e=>setNewG(p=>({...p,[k]:e.target.value}))} style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",padding:"8px 12px",fontSize:"13px"}}/>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            <div style={{marginBottom:"12px"}}>
+              <div style={{fontSize:"10px",color:"#5a3a28",marginBottom:"6px"}}>整組會員身份</div>
+              <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
+                {[["existing","✦ 會員","#3d2a10","#c4924a"],["new","★ 現場入會","#1a3d2a","#2a7a4a"],["none","○ 非會員","#f0e8d8","#7a5c3e"]].map(([val,label,bg,col])=>(
+                  <div key={val} onClick={()=>setNewG(p=>({...p,memberType:val}))}
+                    style={{padding:"9px 12px",borderRadius:"10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",
+                      background:newG.memberType===val?bg:"#140b04",border:`1.5px solid ${newG.memberType===val?col:"#ddd0bc"}`}}>
+                    <span style={{fontSize:"13px",fontWeight:"700",color:newG.memberType===val?col:"#5a3a28"}}>{label}</span>
+                    {newG.memberType===val&&<span style={{color:col}}>✓</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{fontSize:"10px",color:"#2a7a4a",padding:"8px 10px",background:"#e2f2e8",borderRadius:"8px",marginBottom:"12px"}}>
+              📌 新增後系統自動產生3位數點餐代碼，傳給客人即可點餐
+            </div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setShowAdd(false)} style={{...S.ghostBtn,flex:1,margin:0,padding:"10px"}}>取消</button>
+              <button onClick={()=>{
+                if(!newG.name.trim()) return;
+                // 包廂人數防呆:10~11 位警告、12 位以上不能存
+                if(newG.isVip){
+                  const vp=(parseInt(newG.hcP)||0)+(parseInt(newG.hcC)||0)+(parseInt(newG.hcS)||0);
+                  if(vp>VIP_HARD_MAX){ window.alert(`⚠ 包廂最多 ${VIP_MAX} 位\n\n這筆 ${vp} 位超過上限，無法新增。\n座位容納不下，請改一般座位或分兩桌。`); return; }
+                  if(vp>VIP_MAX){ if(!window.confirm(`⚠ 包廂建議最多 ${VIP_MAX} 位\n\n這筆 ${vp} 位已超過建議人數，客人可能反應出入不方便。\n確定還是要新增嗎?`)) return; }
+                }
+                // 備註寫了包廂但沒勾包廂 → 提醒(漏勾會被接第二組)
+                if(!newG.isVip && VIP_HINT_WORDS.some(w=>String(newG.note||"").includes(w))){
+                  if(!window.confirm("⚠ 備註裡有提到包廂/低消/點餐，但沒有勾「包廂」\n\n沒勾的話同時段還會被接第二組（包廂前後 3 小時不能再接）。\n\n確定要繼續嗎?（建議先回去勾包廂）")) return;
+                }
+                // 同時段規則檢查
+                if(newG.date&&newG.time){
+                  const hs=(t)=>{const m=(t||"").match(/^(\d{1,2}):(\d{2})$/);if(!m)return t||"";return `${String(+m[1]).padStart(2,"0")}:${+m[2]<30?"00":"30"}`;};
+                  const same=groups.filter(g=>!g.cancelled&&!g.archived&&g.date===newG.date&&hs(g.time)===hs(newG.time));
+                  const hpChk=parseInt(newG.hcP)||parseInt(newG.headcount)||0;
+                  const msg=slotRuleCheck([...same,{headcount:`${hpChk}p`}]);
+                  const bigN=same.filter(g=>adultsOf(g)>=BIG_MIN&&!g.lateOK).length;
+                  if(msg&&!window.confirm(`⚠ ${newG.date} ${newG.time} 已有 ${bigN} 組大訂（8位以上）。\n規則:${msg}。\n\n若客人可接受較晚出餐,可先新增後在該筆註記。\n確定還是要新增嗎?`)) return;
+                }
+                const code=makeCode(groups.map(g=>g.code));
+                const hp=parseInt(newG.hcP)||0, hc2=parseInt(newG.hcC)||0, hs=parseInt(newG.hcS)||0;
+                const headcount=[hp>0?hp+"p":"",hc2>0?hc2+"c":"",hs>0?hs+"s":""].filter(Boolean).join("")||newG.headcount||"";
+                setGroups(p=>[...p,{...BLANK_G,...newG,headcount,takeout:!!newG.takeout,takeoutQty:newG.takeout?String(parseInt(newG.takeoutQty)||0):"",id:`g${Date.now()}`,code,orders:[],disabledItems:[],locked:false}]);
+                setNewG({...BLANK_G});
+                setShowAdd(false);
+                showToast(`已新增 ${newG.name}，代碼：${code}`);
+              }} style={{...S.primaryBtn,flex:2,padding:"10px"}}>新增並產生代碼</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+// ─── DINGWE TABLE ─────────────────────────────────────────────────────────────
+const TIMES = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
+               "14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30",
+               "18:00","18:30","19:00","19:30"];
+const DAYS = ["一","二","三","四","五","六","日"];
+
+
+function getWeekDates(offset=0) {
+  const now = new Date();
+  const day = now.getDay();
+  const mon = new Date(now);
+  mon.setDate(now.getDate() - (day===0?6:day-1) + offset*7);
+  return Array.from({length:7},(_,i)=>{
+    const d = new Date(mon);
+    d.setDate(mon.getDate()+i);
+    return `${d.getMonth()+1}/${d.getDate()}`;
+  });
+}
+
+function parsePeople(headcount) {
+  if(!headcount) return {total:0,adults:0,children:0};
+  const hc = headcount.toLowerCase();
+  const p=(hc.match(/(\d+)p/)||[])[1]||(hc.match(/^(\d+)$/)||[])[1]||0;
+  const c=(hc.match(/(\d+)c/)||[])[1]||0;
+  const adults=parseInt(p)||0, children=parseInt(c)||0;
+  return {total:adults+children, adults, children};
+}
+
+function CloseCell({ cellKey, closeMap, setCloseMap, staffList }) {
+  const [open, setOpen] = useState(false);
+  const closer = closeMap[cellKey];
+  return (
+    <div style={{position:"relative"}}>
+      {open&&<div style={{position:"fixed",inset:0,zIndex:50}} onClick={()=>setOpen(false)}/>}
+      <div onClick={()=>setOpen(p=>!p)}
+        style={{cursor:"pointer",fontSize:"10px",color:closer?"#1a6a1a":"#aaa",
+          fontWeight:closer?"700":"400",background:closer?"#e0f0e0":"transparent",
+          borderRadius:"3px",padding:"2px 3px",textAlign:"center",minWidth:"30px"}}>
+        {closer?(typeof closer==="object"?closer.by:closer):"—"}
+      </div>
+      {open&&(
+        <div style={{position:"fixed",top:"50%",left:"50%",transform:"translate(-50%,-50%)",zIndex:300,background:"#fdfaf4",
+          border:"1px solid #5a3520",borderRadius:"8px",padding:"4px",minWidth:"80px",
+          boxShadow:"0 4px 12px rgba(0,0,0,0.5)"}}>
+          {(staffList||DEFAULT_STAFF).map(name=>(
+            <div key={name} onClick={()=>{setCloseMap(p=>({...p,[cellKey]:name}));setOpen(false);}}
+              style={{padding:"6px 10px",cursor:"pointer",fontSize:"12px",color:"#8a5210",borderRadius:"4px"}}
+              onMouseEnter={e=>e.currentTarget.style.background="#ffffff"}
+              onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              {name}
+            </div>
+          ))}
+          <div onClick={()=>{setCloseMap(p=>{const n={...p};delete n[cellKey];return n;});setOpen(false);}}
+            style={{padding:"4px 10px",cursor:"pointer",fontSize:"10px",color:"#e87a5a",
+              borderTop:"1px solid #d8c8b0",marginTop:"2px"}}>清除</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function StaffPicker({ onSelect, onClose, staffList }) {
+  const sl = (staffList&&staffList.length>0)?staffList:["佩霓","TINA","07","佑庭","大銘"];
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.75)"}} onClick={onClose}>
+      <div style={{background:"#fdfaf4",border:"1px solid #5a3520",borderRadius:"16px",padding:"16px 12px",minWidth:"150px",maxWidth:"200px"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:"12px",color:"#8a5210",fontWeight:"700",marginBottom:"10px",textAlign:"center"}}>選擇夥伴</div>
+        {sl.map(name=>(
+          <div key={name} onClick={()=>onSelect(name)}
+            style={{padding:"10px 14px",cursor:"pointer",fontSize:"14px",color:"#8a5210",borderRadius:"8px",textAlign:"center",marginBottom:"4px",background:"#ffffff"}}>
+            {name}
+          </div>
+        ))}
+        <div onClick={onClose} style={{padding:"8px",cursor:"pointer",fontSize:"11px",color:"#e87a5a",borderTop:"1px solid #d8c8b0",marginTop:"6px",textAlign:"center"}}>取消</div>
+      </div>
+    </div>
+  );
+}
+
+function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent, onOpenCpl }) {
+  const RED_AT=22, ORG_AT=17, YEL_AT=17; // 紅22+必關 黃17-21留意(兩色制)
+  const TIMES2 = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30"];
+  const DAYS2 = ["一","二","三","四","五","六","日"];
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [closeMap, setCloseMap] = useState({});
+  const [peopleMap, setPeopleMap] = useState({}); // {key:{a,ch,by,at}}
+  const [progress, setProgress] = useState(null); // {by,at,status,lastDate}
+  const [viewDay, setViewDay] = useState(null);
+  const [dupOpen, setDupOpen] = useState(false);
+  const dwLoaded = useRef(false);      // dingwe 是否已成功載入(沒載入不准寫)
+  const [dwErr,setDwErr] = useState(false);
+  const [cplWarn,setCplWarn]=useState([]);      // 有客訴紀錄的訂位(比對全部訂位,不只大訂)
+  const [cplWarnOpen,setCplWarnOpen]=useState(false);
+  const [walkinCpl,setWalkinCpl]=useState([]);  // 散客/Google 客訴(比對電話用)
+  useEffect(()=>{
+    FS.loadDoc("cplWarn").then(v=>{ if(Array.isArray(v)) setCplWarn(v); });
+    const uA=FS.subscribeDoc("cplWarn", v=>{ if(Array.isArray(v)) setCplWarn(v); });
+    FS.loadDoc("walkinCpl").then(v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
+    const uB=FS.subscribeDoc("walkinCpl", v=>{ if(Array.isArray(v)) setWalkinCpl(v); });
+    return ()=>{ uA&&uA(); uB&&uB(); };
+  },[]);
+  const [warnOpen, setWarnOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(typeof window!=="undefined"&&window.innerWidth<640);
+  const [editCell, setEditCell] = useState(null); // {key,a,ch,autoT}
+  const [closePicker, setClosePicker] = useState(null);
+  const [finishOpen, setFinishOpen] = useState(false);
+  const [finishStatus, setFinishStatus] = useState(null); // "complete"|"partial"
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null); // {count,slots,at,by}
+  const [importStaff, setImportStaff] = useState(null); // 待選夥伴的暫存 parsed data
+  const fileInputRef = useRef(null);
+  const [mismatchList, setMismatchList] = useState(null);
+  const sessionKeys = useRef([]);
+
+  useEffect(()=>{
+    const fn=()=>setIsMobile(window.innerWidth<640);
+    window.addEventListener("resize",fn); return()=>window.removeEventListener("resize",fn);
+  },[]);
+
+  useEffect(()=>{
+    FS.loadDoc("dingwe").then(v=>{
+      if(v===undefined){ dwLoaded.current=false; setDwErr(true); return; }   // 讀取失敗 → 禁止寫入
+      if(v){ if(v.peopleMap)setPeopleMap(v.peopleMap); if(v.closeMap)setCloseMap(v.closeMap); if(v.progress)setProgress(v.progress); if(v.dupReservations)setDupReservations(v.dupReservations); if(v.lastImport!==undefined)setLastImport(v.lastImport); if(v.noReopen)setNoReopen(v.noReopen); }
+      dwLoaded.current=true; setDwErr(false);       // 讀到了(或確認沒這份文件)→ 才可以寫
+    });
+    const unsub = FS.subscribeDoc("dingwe", v=>{ if(v){ if(v.peopleMap)setPeopleMap(v.peopleMap); if(v.closeMap)setCloseMap(v.closeMap); if(v.progress!==undefined)setProgress(v.progress); if(v.dupReservations!==undefined)setDupReservations(v.dupReservations); if(v.lastImport!==undefined)setLastImport(v.lastImport); if(v.noReopen!==undefined)setNoReopen(v.noReopen); } });
+    return ()=>unsub&&unsub();
+  },[]);
+  const [dupReservations,setDupReservations]=useState([]);
+  const [lastImport,setLastImport]=useState("");
+  const [leaveWarn,setLeaveWarn]=useState(false);   // 一三五未關紅單就離開 → 防呆
+  const [leaveAck,setLeaveAck]=useState(false);     // 本次已確認不關,不再攔
+  const [closeTaskDone,setCloseTaskDone]=useState(false); // 首頁閃燈用的關訂位打勾
+  useEffect(()=>{
+    const k=`close_${todayStr}`;
+    FS.loadDoc("todo").then(d=>{ if(d&&d[k]) setCloseTaskDone(true); });
+    const u=FS.subscribeDoc("todo",d=>{ if(d) setCloseTaskDone(!!d[k]); });
+    return ()=>u&&u();
+  },[]);
+  const markCloseDone=()=>{ FS.loadDoc("todo").then(d=>{
+    if(d===undefined){ window.alert("雲端連線異常,這次的「完成關訂位」沒存到,請重新整理後再試一次"); return; }
+    const nd={...(d||{}),[`close_${todayStr}`]:true}; FS.saveDoc("todo",nd);
+    setCloseTaskDone(true);
+    if(setTodoChecksParent) setTodoChecksParent(prev=>({...prev,[`close_${todayStr}`]:true}));  // 即時劃掉追蹤表的待辦,不等雲端同步
+  }); };
+  const [noReopen,setNoReopen]=useState({}); // {date-time:true} = 已確認不開放
+  // ⚠ 安全鎖:資料還沒從雲端讀進來之前,絕對不可以寫回去 —— 否則會用「空的」蓋掉關訂紀錄
+  const persistDW=(pm,cm,pg,dup,li,nr)=>{
+    if(!dwLoaded.current){
+      console.warn("dingwe 尚未載入完成,已擋下這次寫入(避免蓋掉雲端資料)");
+      setDwErr(true);
+      return;
+    }
+    return FS.saveDoc("dingwe",{peopleMap:pm,closeMap:cm,progress:pg,dupReservations:dup!==undefined?dup:dupReservations,lastImport:li!==undefined?li:lastImport,noReopen:nr!==undefined?nr:noReopen});
+  };
+  const toggleNoReopen=(key)=>{ const nn={...noReopen,[key]:!noReopen[key]}; setNoReopen(nn); persistDW(peopleMap,closeMap,progress,undefined,undefined,nn); };
+  const [missedPick,setMissedPick]=useState(null);
+  // ✕ 移除一筆重複訂位 → 從人數扣掉、重算
+  const removeDupItem = (di, rid) => {
+    const d = dupReservations[di]; if(!d) return;
+    const removed = (d.items||[]).find(it=>it.rid===rid);
+    const nd = dupReservations.map((x,idx)=>idx!==di?x:{...x,items:(x.items||[]).filter(it=>it.rid!==rid)})
+                              .filter(x=>(x.items||[]).length>1);
+    let nm = peopleMap;
+    if(removed){
+      const key=`${removed.date}-${removed.time}`;
+      if(peopleMap[key]){
+        nm={...peopleMap,[key]:{...peopleMap[key],
+          a:String(Math.max(0,(parseInt(peopleMap[key].a)||0)-removed.a)),
+          ch:String(Math.max(0,(parseInt(peopleMap[key].ch)||0)-removed.ch))}};
+        setPeopleMap(nm);
+      }
+    }
+    setDupReservations(nd);
+    persistDW(nm, closeMap, progress, nd);
+  };
+  // 未接(記夥伴+時間+累計次數)
+  const markMissed = (di, operator) => {
+    const now=new Date(); const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+    const nd=dupReservations.map((x,idx)=>idx!==di?x:{...x,missed:(x.missed||0)+1,missedAt:at,missedBy:operator});
+    setDupReservations(nd);
+    persistDW(peopleMap,closeMap,progress,nd);
+  };
+
+  function getWeekDates2(off=0){
+    const now=new Date(),day=now.getDay();
+    const mon=new Date(now); mon.setDate(now.getDate()-(day===0?6:day-1)+off*7);
+    return Array.from({length:7},(_,i2)=>{const d=new Date(mon);d.setDate(mon.getDate()+i2);return `${d.getMonth()+1}/${d.getDate()}`;});
+  }
+  const weekDates = getWeekDates2(weekOffset);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const oneMonthLater = new Date(today); oneMonthLater.setMonth(today.getMonth()+1);
+  const todayStr = `${today.getMonth()+1}/${today.getDate()}`;
+
+  // 手機預設只看今天
+  useEffect(()=>{
+    if(isMobile&&viewDay===null&&weekOffset===0){
+      const idx = weekDates.indexOf(todayStr);
+      if(idx>=0) setViewDay(idx);
+    }
+  },[isMobile]);
+
+  function dOf(ds){ const[m,d]=ds.split("/").map(Number); let x=new Date(today.getFullYear(),m-1,d); if(x<today&&(today-x)>1000*60*60*24*180) x=new Date(today.getFullYear()+1,m-1,d); return x; }
+  function inRange(ds){ const d=dOf(ds); return d>=today && d<=oneMonthLater; }
+
+  const getSlotGroups=(date,time)=>(groups||[]).filter(g=>!g.cancelled&&!(g.archived&&g.archiveType!=="menu"&&g.archiveType)&& !(g.archived&&!g.archiveType) &&(g.date||"").trim()===date&&(g.time||"").trim()===time);
+  const getSlotGroups2=(date,time)=>(groups||[]).filter(g=>!g.cancelled&&(!g.archived)&&(g.date||"").trim()===date&&(g.time||"").trim()===time);
+
+  function parsePpl(hc){
+    if(!hc) return {total:0,adults:0,children:0};
+    const h=hc.toLowerCase();
+    const p=parseInt((h.match(/(\d+)p/)||[])[1])||parseInt(h)||0;
+    const ch=parseInt((h.match(/(\d+)c/)||[])[1])||0;
+    return {total:p+ch,adults:p,children:ch};
+  }
+
+  const saveCell=(key,a,ch)=>{
+    setPeopleMap(p=>{
+      const n={...p};
+      if((a===""||a===undefined)&&(ch===""||ch===undefined)){ delete n[key]; }
+      else n[key]={...(n[key]||{}),a:a||"0",ch:ch||"0"};
+      persistDW(n,closeMap,progress);
+      return n;
+    });
+    if(!sessionKeys.current.includes(key)) sessionKeys.current.push(key);
+    setEditCell(null);
+  };
+
+  const finishSession=(staffName)=>{
+    const now=new Date();
+    const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+    // 本輪關到哪:以「關訂位的格子(closeMap)最後日期」為準
+    let lastDate = (progress&&progress.lastDate)||todayStr;
+    const closedDates = Object.keys(closeMap).map(k=>k.split("-")[0]);
+    if(closedDates.length>0){
+      closedDates.sort((x,y)=>dOf(x)-dOf(y));
+      lastDate = closedDates[closedDates.length-1];
+    }
+    // 輪次:上一輪已完成→開新一輪;未完成→延續同一輪
+    const round = progress ? (progress.status==="complete" ? (progress.round||1)+1 : (progress.round||1)) : 1;
+    const pg = {by:staffName,at,status:finishStatus,lastDate,round};
+    setProgress(pg);
+    if(finishStatus==="complete") markCloseDone&&markCloseDone();
+    // 把這次 key 的格子標記夥伴+時間
+    setPeopleMap(p=>{
+      const n={...p};
+      sessionKeys.current.forEach(k=>{ if(n[k]) n[k]={...n[k],by:staffName,at}; });
+      persistDW(n,closeMap,pg);
+      return n;
+    });
+    sessionKeys.current=[];
+    setFinishOpen(false); setFinishStatus(null);
+  };
+
+  const jumpToUnkeyed=()=>{
+    if(!progress||!progress.lastDate) return;
+    const target=dOf(progress.lastDate); target.setDate(target.getDate()+1);
+    if(target>oneMonthLater) return;
+    // 計算該日期所在週的 offset
+    const now=new Date(),day=now.getDay();
+    const mon=new Date(now); mon.setDate(now.getDate()-(day===0?6:day-1)); mon.setHours(0,0,0,0);
+    const diff=Math.floor((target-mon)/(7*24*60*60*1000));
+    setWeekOffset(diff);
+    const wd=getWeekDates2(diff);
+    const ts=`${target.getMonth()+1}/${target.getDate()}`;
+    const idx=wd.indexOf(ts);
+    setViewDay(idx>=0?idx:null);
+  };
+
+  const normDate = (s) => {
+    const m=String(s).match(/(\d{1,2})[\/-](\d{1,2})/);
+    return m?`${parseInt(m[1])}/${parseInt(m[2])}`:String(s).trim();
+  };
+  const normTime = (s) => {
+    const m=String(s).match(/(\d{1,2}):(\d{2})/);
+    return m?`${m[1].padStart(2,"0")}:${m[2]}`:String(s).trim();
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if(!file) return;
+    setImporting(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, {type:"array"});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+      // 找標題列
+      let hi=-1, di=-1, ti=-1, pi=-1, si=-1, sti=-1, nti=-1, dti=-1, gi=-1, nmi=-1, xi1=-1, xi2=-1, xi3=-1;
+      for(let r=0;r<Math.min(rows.length,5);r++){
+        const row=rows[r].map(x=>String(x||""));
+        const d=row.findIndex(x=>x.includes("訂位日期")||x.includes("日期"));
+        if(d>=0){ hi=r; di=d;
+          ti=row.findIndex(x=>x.includes("時間")&&!x.includes("下訂")&&!x.includes("更新"));
+          pi=row.findIndex(x=>x.includes("人數")&&!x.includes("開桌"));
+          si=row.findIndex(x=>x.includes("狀態"));
+          sti=row.findIndex(x=>x.includes("預訂桌位")||x.includes("桌位"));
+          nti=row.findIndex(x=>x.includes("店家備註"));
+          dti=row.findIndex(x=>x.includes("下訂時間"));
+          gi=row.findIndex(x=>x.includes("性別"));
+          nmi=row.findIndex(x=>x.includes("訂位人名稱")||x.includes("訂位人"));
+          xi1=row.findIndex(x=>x.includes("特殊需求"));
+          xi2=row.findIndex(x=>x.includes("顧客備註"));
+          xi3=row.findIndex(x=>x.includes("用餐目的"));
+          break;
+        }
+      }
+      if(hi<0){ alert("找不到標題列（需有「訂位日期」欄）"); setImporting(false); return; }
+      // 彙總(同電話＋同日期＋同時段的多筆 = 改訂位 → 只留「最新一筆」,人數不灌水、大訂不重複)
+      const parseTS=(v)=>{ if(!v) return 0; if(v instanceof Date) return v.getTime(); const mm=String(v).match(/(\d{4})-(\d{1,2})-(\d{1,2})[ T]?(\d{0,2}):?(\d{0,2})/); return mm?new Date(+mm[1],+mm[2]-1,+mm[3],+(mm[4]||0),+(mm[5]||0)).getTime():0; };
+      const dedupe={};   // phone|date|time -> 最新一筆(計人數用)
+      const noPhone=[];  // 沒抓到電話的,各自獨立保留
+      const rawList=[];  // 每一筆原始訂位(不合併)→ 給「重複訂位」提醒用
+      const cancelMap={}; // 取消的訂位 phone|date|time -> {name,date,time,phone}
+      for(let r=hi+1;r<rows.length;r++){
+        const row=rows[r]; if(!row||!row[di]) continue;
+        const status=si>=0?String(row[si]||""):"";
+        const date=normDate(row[di]);
+        const time=normTime(row[ti]);
+        const pStr=String(row[pi]||"");
+        const m=pStr.match(/大人\s*(\d+).*?小孩\s*(\d+)/);
+        const a=m?parseInt(m[1]):(parseInt(pStr)||0);
+        const ch=m?parseInt(m[2]):0;
+        const phone=(()=>{ for(let cc=0;cc<row.length;cc++){const s=String(row[cc]||"");if(/^09\d{8}$/.test(s.replace(/\D/g,""))) return s.replace(/\D/g,""); } return ""; })();
+        const nameCol = nmi>=0?String(row[nmi]||""):(row[di+2]!==undefined?String(row[di+2]||""):"");
+        // 性別在姓名的下一欄(訂位日期→時間→姓名→性別);轉成「先生/小姐」
+        const gRaw = gi>=0?String(row[gi]||"").trim():(row[di+3]!==undefined?String(row[di+3]||"").trim():"");
+        const gender = /先生|男/.test(gRaw)?"先生":(/小姐|女|女士/.test(gRaw)?"小姐":"");
+        // 大麥備註:用餐目的 / 特殊需求 / 顧客備註 / 店家備註 → 合併帶進來
+        const noteRaw=[xi3,xi1,xi2,nti].filter(k=>k>=0).map(k=>String(row[k]||"").trim())
+          .filter(x=>x&&x!=="-"&&x!=="無").join("；");
+        // 取消/未到:不計入人數與大訂,但記下來 → 用來自動封存對應的大訂
+        if(status.includes("取消")||status.includes("未到")){
+          if(phone) cancelMap[`${phone}|${date}|${time}`]={name:nameCol||"(未填)",date,time,phone};
+          continue;
+        }
+        const tableCol = sti>=0?String(row[sti]||""):"";
+        const noteCol = nti>=0?String(row[nti]||""):"";
+        const isVip = tableCol.includes("包廂") && !noteCol.includes("取消包廂");
+        const orderTS=(dti>=0&&row[dti])?parseTS(row[dti]):0;
+        let orderAt="";
+        if(dti>=0&&row[dti]){
+          const dv=row[dti]; let d2;
+          if(dv instanceof Date) d2=dv;
+          else { const s=String(dv); const mm=s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if(mm) d2=new Date(+mm[1],+mm[2]-1,+mm[3]); }
+          if(d2) orderAt=`${d2.getMonth()+1}/${d2.getDate()}`;
+        }
+        const rec={date,time,a,ch,phone,name:nameCol||"(未填)",gender,noteRaw,isVip,orderAt,orderTS};
+        if(phone){
+          rawList.push(rec);   // 原始(不合併)
+          const k=`${phone}|${date}|${time}`;
+          if(!dedupe[k] || orderTS>=dedupe[k].orderTS) dedupe[k]=rec;   // 計人數:同時段留最新
+        } else noPhone.push(rec);
+      }
+      const allRaw=[...rawList,...noPhone];                  // 計人數:全部算(重複由夥伴按✕移除)
+      const allDedup=[...Object.values(dedupe),...noPhone];  // 大訂候選:同時段去重
+      // 依時段彙總人數(全部算)
+      const agg={};
+      allRaw.forEach(rec=>{ const key=`${rec.date}-${rec.time}`; if(!agg[key]) agg[key]={a:0,ch:0}; agg[key].a+=rec.a; agg[key].ch+=rec.ch; });
+      const cnt=allRaw.length;
+      // ≥8 大人 → 大訂候選(去重)
+      const bigOrders=allDedup.filter(rec=>rec.a>=8 || rec.isVip).map(rec=>({date:rec.date,time:rec.time,name:rec.name,gender:rec.gender||"",maiNote:rec.noteRaw||"",phone:rec.phone,adults:rec.a,children:rec.ch,isVip:rec.isVip,orderAt:rec.orderAt}));
+      // 重複訂位:同一支電話有多筆 → 結構化存,讓夥伴可按✕移除(人數自動重算)
+      const byPhone={};
+      rawList.forEach(rec=>{ (byPhone[rec.phone]=byPhone[rec.phone]||[]).push(rec); });
+      const dupWarn=Object.entries(byPhone).filter(([p,rs])=>rs.length>1)
+        .map(([p,rs])=>({
+          phone:p, name:rs[0].name, missed:0, missedAt:"",
+          items: rs.sort((x,y)=>(x.date+x.time).localeCompare(y.date+y.time)).map((x,i)=>({rid:`${p}_${x.date}_${x.time}_${x.a}_${x.ch}_${i}`, date:x.date, time:x.time, a:x.a, ch:x.ch}))
+        }));
+      // 客訴客人比對:掃「全部訂位」(不只大訂) vs 有客訴紀錄的電話 → 小桌訂位也抓得到
+      const cplPhones={};
+      (groups||[]).forEach(gg=>{ const p2=normPhone(gg.phone); if(p2&&(gg.complaints||[]).length>0){ (cplPhones[p2]=cplPhones[p2]||[]).push(...(gg.complaints||[])); } });
+      (walkinCpl||[]).forEach(c=>{ const p2=normPhone(c.phone); if(p2) (cplPhones[p2]=cplPhones[p2]||[]).push(c); });
+      const cplWarn=allDedup.filter(rec=>cplPhones[normPhone(rec.phone)]&&cplPhones[normPhone(rec.phone)].length>0)
+        .map(rec=>{
+          const cs=cplPhones[normPhone(rec.phone)];
+          const last=cs[cs.length-1]||{};
+          const dishNames=(last.dishes||[]).map(d=>{const id=typeof d==="object"?d.id:d;const it=findItem(id);return it?it.name:id;});
+          return {
+            rid:`${normPhone(rec.phone)}_${rec.date}_${rec.time}`,
+            date:rec.date, time:rec.time, name:rec.name, phone:rec.phone,
+            a:rec.a, ch:rec.ch, n:cs.length,
+            type:last.type||"", kinds:(last.kinds||[]).join("、"), dishes:dishNames.join("、"),
+            reason:last.reason||"", attitude:last.attitude||"", adjust:last.adjust||"",
+            treat:(last.treat&&!last.treatDone)?last.treat:"", src:last.source||"", ack:false
+          };
+        });
+      // 取消 → 自動封存對應大訂(取消的時段、且沒有同時段的有效訂位才封存)
+      const activeSet=new Set(allDedup.filter(rc=>rc.phone).map(rc=>`${rc.phone}|${rc.date}|${rc.time}`));
+      const toArchive=[];
+      (groups||[]).forEach(g=>{
+        if(g.archived||g.cancelled) return;
+        const k=`${(g.phone||"").replace(/\D/g,"")}|${(g.date||"").trim()}|${(g.time||"").trim()}`;
+        if(cancelMap[k] && !activeSet.has(k)) toArchive.push({id:g.id,name:g.name||cancelMap[k].name,date:g.date,time:g.time});
+      });
+      // 比對既有大訂,算新訂位數與變動數
+      let newC2=0, changedC2=0;
+      const curG = groups||[];
+      bigOrders.forEach(bo=>{
+        const eg=curG.find(g=>(g.phone||"").replace(/\D/g,"")===bo.phone&&(g.date||"").trim()===bo.date&&(g.time||"").trim()===bo.time);
+        if(!eg){ newC2++; }
+        else {
+          const h=(eg.headcount||"").toLowerCase();
+          const oa=parseInt((h.match(/(\d+)p/)||[])[1])||0, oc=parseInt((h.match(/(\d+)c/)||[])[1])||0;
+          if(oa!==bo.adults||oc!==bo.children) changedC2++;
+        }
+      });
+      setImportStaff({agg,cnt,slots:Object.keys(agg).length,bigOrders,newCount:newC2,changedCount:changedC2,dupWarn,cplWarn,toArchive});
+    } catch(err) {
+      alert("讀取失敗："+err.message);
+    }
+    setImporting(false);
+    if(fileInputRef.current) fileInputRef.current.value="";
+  };
+
+  const confirmImport = (staffName, forceUpdate=false) => {
+    if(!dwLoaded.current){
+      window.alert("⚠ 雲端資料還沒讀到,現在匯入會蓋掉關訂紀錄!\n\n請先「重新整理」頁面,等資料出現後再匯入。");
+      setDwErr(true);
+      return;
+    }
+    const {agg} = importStaff;
+    const now=new Date();
+    const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+    const todayLI=`${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()}`;
+    setLastImport(todayLI);
+    // 重複訂位:合併,不要整個蓋掉 → 保留「未接」記錄、已確認的不再跳出來(#2 #6)
+    // 用「電話+這組訂位內容」當識別:同一筆確認過才跳過;新的重複訂位照樣要提醒
+    const sig=(d)=>`${normPhone(d.phone)}|${(d.items||[]).map(it=>`${it.date} ${it.time} ${it.a}/${it.ch}`).sort().join("|")}`;
+    const prevBySig={}; (dupReservations||[]).forEach(d=>{ prevBySig[sig(d)]=d; });
+    const mergedDup=(importStaff.dupWarn||[])
+      .map(d=>{ const pv=prevBySig[sig(d)]; return pv?{...d,missed:pv.missed,missedAt:pv.missedAt,missedBy:pv.missedBy,confirmed:pv.confirmed}:d; });
+    setPeopleMap(p=>{
+      const n={...p};
+      Object.entries(agg).forEach(([key,v])=>{
+        n[key]={a:String(v.a),ch:String(v.ch),by:staffName,at,src:"麥"};
+      });
+      persistDW(n,closeMap,progress,mergedDup,todayLI);
+      return n;
+    });
+    setDupReservations(mergedDup);
+    // 客訴警示:合併保留「✓已知道」,沒處理的下次打開還在
+    const prevAck={}; (cplWarn||[]).forEach(c=>{ if(c.ack) prevAck[c.rid]=true; });
+    const mergedCpl=(importStaff.cplWarn||[]).map(c=>prevAck[c.rid]?{...c,ack:true}:c);
+    setCplWarn(mergedCpl);
+    FS.saveDoc("cplWarn", mergedCpl);
+    // 匯入 ≥8 大人的大訂到追蹤表(去重 + 人數變動偵測)— 先在外面算好
+    const mismatches=[];
+    const toAdd=[];
+    if(importStaff.bigOrders&&importStaff.bigOrders.length>0&&setGroups){
+      const cur=groups||[];
+      importStaff.bigOrders.forEach(bo=>{
+        // 同一支電話同時只會有一組未用餐訂位 → 用「電話」判斷是不是同一筆
+        // 這樣日期、時間、人數怎麼改，都是「更新原本那筆」，不會再多一筆
+        const eg=cur.find(g=>(g.phone||"").replace(/\D/g,"")===bo.phone && !g.cancelled && !isPastMeal(g));
+        if(eg){
+          const h=(eg.headcount||"").toLowerCase();
+          const oldA=parseInt((h.match(/(\d+)p/)||[])[1])||0;
+          const oldC=parseInt((h.match(/(\d+)c/)||[])[1])||0;
+          const timeChanged=(eg.time||"").trim()!==(bo.time||"").trim();
+          const dateChanged=(eg.date||"").trim()!==(bo.date||"").trim();
+          if(oldA!==bo.adults||oldC!==bo.children||timeChanged||dateChanged){
+            mismatches.push({name:eg.name,phone:bo.phone,date:bo.date,time:bo.time,oldA,oldC,newA:bo.adults,newC:bo.children,
+              oldTime:(eg.time||""),newTime:(bo.time||""),timeChanged,
+              oldDate:(eg.date||""),newDate:(bo.date||""),dateChanged,id:eg.id});
+          }
+        } else {
+          toAdd.push(bo);
+        }
+      });
+      if(toAdd.length>0){
+        setGroups(prev=>{
+          let next=[...prev];
+          toAdd.forEach((bo,i)=>{
+            const code=makeCode(next.map(g=>g.code));
+            const headcount=[bo.adults>0?bo.adults+"p":"",bo.children>0?bo.children+"c":""].filter(Boolean).join("");
+            const needsDep = needsDeposit(headcount, bo.isVip);
+            next=[...next,{...BLANK_G,id:`g${Date.now()}_${i}`,code,name:bo.name,gender:bo.gender||"",maiNote:bo.maiNote||"",phone:bo.phone,date:bo.date,time:bo.time,headcount,bookDate:(bo.orderAt||""),
+              isVip:!!bo.isVip, depositDate:"",
+              orders:[],disabledItems:[],locked:false,fromMai:true}];
+          });
+          return next;
+        });
+      }
+    }
+    // 取消的訂位 → 自動封存對應大訂
+    if(importStaff.toArchive && importStaff.toArchive.length>0 && setGroups){
+      const aids=new Set(importStaff.toArchive.map(t=>t.id));
+      setGroups(prev=>prev.map(g=>aids.has(g.id)?{...g,archived:true,cancelled:true,archiveType:"cancelled"}:g));
+    }
+    const added=toAdd.length;
+    const _today=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
+    // 侦测「跨过10人门槛」→ 记录订金起算日为今天(汇入日≈改人数日)
+    const applyHc=(g,mm)=>{
+      const hc=[mm.newA>0?mm.newA+"p":"",mm.newC>0?mm.newC+"c":""].filter(Boolean).join("");
+      const wasDep=needsDeposit(g.headcount, g.isVip);
+      const nowDep=needsDeposit(hc, g.isVip);
+      const patch={headcount:hc};
+      if(mm.timeChanged) patch.time=mm.newTime;
+      if(mm.dateChanged) patch.date=mm.newDate;
+      if(!wasDep && nowDep){ patch.depositFrom=_today; patch.depositFromNote=`${(mm.oldA||0)+(mm.oldC||0)}→${(mm.newA||0)+(mm.newC||0)}人`; }
+      return {...g, ...patch};
+    };
+    if(forceUpdate && mismatches.length>0){
+      // 全部更新:直接套用大麥人數
+      setGroups(prev=>prev.map(g=>{
+        const mm=mismatches.find(m=>m.id===g.id);
+        if(!mm) return g;
+        return applyHc(g,mm);
+      }));
+    } else if(mismatches.length>0){
+      setMismatchList(mismatches);
+    }
+    setImportResult({count:importStaff.cnt,slots:importStaff.slots,at,by:staffName,added,updated:forceUpdate?mismatches.length:0,changed:mismatches.length});
+    setImportStaff(null);
+    setTimeout(()=>setImportResult(null),4000);
+  };
+
+  // 某天:有 ≥20 人時段但該時段沒關訂位 → 警示
+  const dayNeedsClose = (dateStr) => {
+    // 只提醒「明天(含)以後」還沒關的;當天與過去不提醒(時間過了關了也沒意義)
+    const mm=String(dateStr).match(/(\d{1,2})\/(\d{1,2})/);
+    if(mm){
+      const dd=new Date(today.getFullYear(), +mm[1]-1, +mm[2]);
+      if(dd.getTime() < today.getTime()-1000*60*60*24*180) dd.setFullYear(dd.getFullYear()+1); // 跨年保險
+      if(dd.getTime() <= today.getTime()) return false;
+    }
+    return TIMES2.some(time=>{
+      const key=`${dateStr}-${time}`;
+      const entry=peopleMap[key];
+      const sg=(groups||[]).filter(g=>!g.cancelled&&!g.archived&&(g.date||"").trim()===dateStr&&(g.time||"").trim()===time);
+      const autoT=sg.reduce((s,g)=>{const h=(g.headcount||"").toLowerCase();const p=parseInt((h.match(/(\d+)p/)||[])[1])||parseInt(h)||0;const ch=parseInt((h.match(/(\d+)c/)||[])[1])||0;return s+p+ch;},0);
+      const a=entry?parseInt(entry.a)||0:0, ch=entry?parseInt(entry.ch)||0:0;
+      const total=entry?(a+ch):autoT;
+      return total>=RED_AT && !closeMap[key];
+    });
+  };
+
+  const daySlots = (dateStr) => {
+    // 回傳該天「需關訂的時段」與「人數掉下來可開放的時段」
+    const mm=String(dateStr).match(/(\d{1,2})\/(\d{1,2})/);
+    let future=true;
+    if(mm){const dd=new Date(today.getFullYear(),+mm[1]-1,+mm[2]);if(dd.getTime()<today.getTime()-1000*60*60*24*180)dd.setFullYear(dd.getFullYear()+1);if(dd.getTime()<=today.getTime())future=false;}
+    const needClose=[], canReopen=[], needJudge=[];
+    if(!future) return {needClose,canReopen,needJudge};
+    TIMES2.forEach(time=>{
+      const key=`${dateStr}-${time}`;
+      const entry=peopleMap[key];
+      const sg=(groups||[]).filter(g=>!g.cancelled&&!g.archived&&(g.date||"").trim()===dateStr&&(g.time||"").trim()===time);
+      const autoT=sg.reduce((s,g)=>{const h=(g.headcount||"").toLowerCase();const p=parseInt((h.match(/(\d+)p/)||[])[1])||parseInt(h)||0;const ch=parseInt((h.match(/(\d+)c/)||[])[1])||0;return s+p+ch;},0);
+      const a=entry?parseInt(entry.a)||0:0, ch=entry?parseInt(entry.ch)||0:0;
+      const total=entry?(a+ch):autoT;
+      if(total>=RED_AT && !closeMap[key]) needClose.push(time);
+      if(total>=ORG_AT && total<RED_AT && !closeMap[key] && !noReopen[`judge-${key}`]) needJudge.push(time);
+      if(total<ORG_AT && closeMap[key]) canReopen.push(time);
+    });
+    return {needClose,canReopen,needJudge};
+  };
+
+  const daysToShow = (viewDay!==null)?[viewDay]:Array.from({length:7},(_,i2)=>i2);
+  const staffOpts = (staffList&&staffList.length>0)?staffList:DEFAULT_STAFF;
+
+  // ── 關訂位防呆 + 步驟指引 ──
+  const _dowNow = new Date().getDay();
+  // 暑假期間(至 8/31)每天都要關訂位;9/1 起恢復每週一三五
+  const _tdy = new Date();
+  const _isSummer = (_tdy.getMonth()+1) < 9;              // 1~8月 = 暑假模式(每天)
+  const isCloseDay = _isSummer ? true : [1,3,5].includes(_dowNow);
+  const closeDayLabel = _isSummer ? "暑假期間每天都要關訂位（到 8/31）" : "每週一、三、五要關訂位";
+  const _weekDGuard = Array.from({length:7},(_,di)=>weekDates[di]).filter(d=>inRange(d));
+  const unclosedRedCnt = _weekDGuard.reduce((s,d)=>s+daySlots(d).needClose.length,0);
+  const importedThisWeek = !!lastImport;                    // 有導入紀錄
+  // 步驟狀態:1導入 2關紅單 3按完成。current=正在做的那步
+  const _doneClosing = progress && progress.status==="complete";
+  const stepCur = !importedThisWeek ? 1 : (unclosedRedCnt>0 ? 2 : 3);
+  const showSteps = isCloseDay && (stepCur<3 || !_doneClosing);
+  const guardedBack = () => {
+    if(isCloseDay && !closeTaskDone && !leaveAck){ setLeaveWarn(true); }
+    else onBack();
+  };
+
+  return (
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",background:"#f5f0e8",fontFamily:"'Noto Sans TC',sans-serif"}}>
+      <style>{"@media print{.np{display:none!important}.dw{overflow:visible!important}table{font-size:8px!important}}"}</style>
+
+      <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleFile}/>
+      {importing&&(
+        <div style={{position:"fixed",inset:0,zIndex:350,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.6)"}}>
+          <div style={{background:"#fdfaf4",borderRadius:"14px",padding:"24px 30px",fontSize:"14px",color:"#6a4a2e",fontWeight:"700"}}>讀取中…</div>
+        </div>
+      )}
+      {importStaff&&(
+        <div style={{position:"fixed",inset:0,zIndex:360,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)"}} onClick={()=>setImportStaff(null)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"20px",width:"280px"}} onClick={ev=>ev.stopPropagation()}>
+            <div style={{fontSize:"14px",color:"#3a7a5a",fontWeight:"700",marginBottom:"6px",textAlign:"center"}}>📥 大麥匯入確認</div>
+            <div style={{fontSize:"12px",color:"#6a4a2e",textAlign:"center",marginBottom:"4px"}}>共 {importStaff.cnt} 筆訂位 → {importStaff.slots} 個時段</div>
+            <div style={{fontSize:"13px",color:"#3a7a5a",fontWeight:"700",textAlign:"center",marginBottom:"8px"}}>📋 ≥8人或包廂大訂：{(importStaff.bigOrders||[]).length} 筆</div>
+            {importStaff.dupWarn&&importStaff.dupWarn.length>0&&(
+              <div style={{background:"#fbe8d8",border:"1px solid #e0b088",borderRadius:"8px",padding:"8px",margin:"6px 0",maxHeight:"130px",overflowY:"auto"}}>
+                <div style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",marginBottom:"4px"}}>⚠ 重複訂位 {importStaff.dupWarn.length} 組（同電話多筆，請確認是否重複下訂）</div>
+                {importStaff.dupWarn.map((d,i)=>(
+                  <div key={i} style={{fontSize:"10px",color:"#6a4a2e",marginBottom:"3px",lineHeight:"1.4"}}>
+                    <b>{d.name}</b>（{d.phone}）<br/>{(d.items||[]).map(it=>`${it.date} ${it.time}（${it.a}大${it.ch}小）`).join("、")}
+                  </div>
+                ))}
+              </div>
+            )}
+            {importStaff.toArchive&&importStaff.toArchive.length>0&&(
+              <div style={{background:"#e6f0e6",border:"1px solid #a8c8a8",borderRadius:"8px",padding:"8px",margin:"6px 0",maxHeight:"110px",overflowY:"auto"}}>
+                <div style={{fontSize:"12px",color:"#3a7a5a",fontWeight:"700",marginBottom:"4px"}}>🗄 取消將自動封存 {importStaff.toArchive.length} 筆大訂</div>
+                {importStaff.toArchive.map((t,i)=>(
+                  <div key={i} style={{fontSize:"10px",color:"#5a6a4a",marginBottom:"2px"}}>{t.name}（{t.date} {t.time}）</div>
+                ))}
+              </div>
+            )}
+            <div style={{display:"flex",gap:"8px",justifyContent:"center",marginBottom:"6px"}}>
+              {importStaff.newCount>0&&<span style={{fontSize:"11px",color:"#fff",background:"#3a7a5a",borderRadius:"6px",padding:"2px 8px",fontWeight:"700"}}>🆕 新訂位 {importStaff.newCount}</span>}
+              {importStaff.changedCount>0&&<span style={{fontSize:"11px",color:"#fff",background:"#c0392b",borderRadius:"6px",padding:"2px 8px",fontWeight:"700"}}>⚠ 人數變動 {importStaff.changedCount}</span>}
+            </div>
+            <div style={{fontSize:"11px",color:"#b05a10",textAlign:"center",marginBottom:"12px"}}>※ 人數時段會以大麥為準</div>
+            <div style={{fontSize:"12px",color:"#6a4a2e",fontWeight:"700",marginBottom:"8px",textAlign:"center"}}>你是哪位夥伴?</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:"7px",justifyContent:"center",marginBottom:"10px"}}>
+              {staffOpts.map(n=>(
+                <button key={n} onClick={()=>setImportStaff(p=>({...p,picked:n}))}
+                  style={{padding:"10px 14px",borderRadius:"10px",border:"none",
+                    background:importStaff.picked===n?"#b07840":"#ede2d0",color:importStaff.picked===n?"#fff":"#5a3a28",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>{n}</button>
+              ))}
+            </div>
+            {importStaff.picked&&(
+              <div style={{marginBottom:"10px"}}>
+                {importStaff.changedCount>0?(
+                  <>
+                    <button onClick={()=>confirmImport(importStaff.picked,true)}
+                      style={{width:"100%",padding:"11px",borderRadius:"10px",border:"none",background:"#c0392b",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer",marginBottom:"6px"}}>
+                      全部更新（含 {importStaff.changedCount} 筆變動人數）
+                    </button>
+                    <button onClick={()=>confirmImport(importStaff.picked,false)}
+                      style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #c0392b",background:"transparent",color:"#c0392b",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>
+                      只匯入，變動讓我逐筆確認
+                    </button>
+                  </>
+                ):(
+                  <button onClick={()=>confirmImport(importStaff.picked,false)}
+                    style={{width:"100%",padding:"12px",borderRadius:"10px",border:"none",background:"#3a7a5a",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>
+                    確認匯入
+                  </button>
+                )}
+              </div>
+            )}
+            <button onClick={()=>setImportStaff(null)} style={{width:"100%",padding:"9px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>取消</button>
+          </div>
+        </div>
+      )}
+      {mismatchList&&mismatchList.length>0&&(
+        <div style={{position:"fixed",inset:0,zIndex:380,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"20px"}} onClick={()=>setMismatchList(null)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"340px",maxHeight:"80vh",overflowY:"auto"}} onClick={ev=>ev.stopPropagation()}>
+            <div style={{fontSize:"14px",color:"#c02020",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>⚠ 訂位有變動（{mismatchList.length}筆）</div>
+            <div style={{fontSize:"11px",color:"#8a6a4a",textAlign:"center",marginBottom:"12px"}}>大麥跟追蹤表不一致（人數或時間）</div>
+            {mismatchList.map((m,idx)=>(
+              <div key={idx} style={{background:"#fff",borderRadius:"10px",padding:"10px",marginBottom:"8px",border:"1px solid #e0d5c0"}}>
+                <div style={{fontSize:"12px",fontWeight:"700",color:"#3a2a1a"}}>{m.name}　{m.date}</div>
+                {m.dateChanged&&(
+                  <div style={{fontSize:"13px",color:"#6a4a2e",marginTop:"5px",fontWeight:"800",background:"#fdf0e4",borderRadius:"6px",padding:"5px 8px"}}>
+                    📅 日期：{m.oldDate||"—"} → <b style={{color:"#c02020"}}>{m.newDate}</b>
+                  </div>
+                )}
+                {m.timeChanged&&(
+                  <div style={{fontSize:"13px",color:"#6a4a2e",marginTop:"5px",fontWeight:"800",background:"#fdf0e4",borderRadius:"6px",padding:"5px 8px"}}>
+                    🕐 時間：{m.oldTime||"—"} → <b style={{color:"#c02020"}}>{m.newTime}</b>
+                  </div>
+                )}
+                {(m.oldA!==m.newA||m.oldC!==m.newC)&&(
+                  <div style={{fontSize:"12px",color:"#6a4a2e",marginTop:"4px"}}>
+                    👥 人數：大{m.oldA}{m.oldC>0?` 童${m.oldC}`:""} → <b style={{color:"#c02020"}}>大{m.newA}{m.newC>0?` 童${m.newC}`:""}</b>
+                  </div>
+                )}
+                <button onClick={()=>{
+                  const hc=[m.newA>0?m.newA+"p":"",m.newC>0?m.newC+"c":""].filter(Boolean).join("");
+                  const _td=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
+                  setGroups(p=>p.map(x=>{
+                    if(x.id!==m.id) return x;
+                    const wasDep=needsDeposit(x.headcount,x.isVip,x.takeout), nowDep=needsDeposit(hc,x.isVip);
+                    const patch={headcount:hc};
+                    if(m.timeChanged) patch.time=m.newTime;
+                    if(m.dateChanged) patch.date=m.newDate;
+                    if(!wasDep&&nowDep){ patch.depositFrom=_td; patch.depositFromNote=`${(m.oldA||0)+(m.oldC||0)}→${(m.newA||0)+(m.newC||0)}人`; }
+                    return {...x,...patch};
+                  }));
+                  setMismatchList(prev=>prev.filter((_,i)=>i!==idx));
+                }} style={{marginTop:"7px",padding:"8px 14px",borderRadius:"8px",border:"none",background:"#3a7a5a",color:"#fff",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>更新為大麥的資料</button>
+              </div>
+            ))}
+            <button onClick={()=>setMismatchList(null)} style={{width:"100%",marginTop:"6px",padding:"9px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>關閉（不更新）</button>
+          </div>
+        </div>
+      )}
+      {importResult&&(
+        <div style={{position:"fixed",top:60,left:"50%",transform:"translateX(-50%)",zIndex:370,background:"#2a6a2a",color:"#fff",padding:"10px 18px",borderRadius:"12px",fontSize:"13px",fontWeight:"700",boxShadow:"0 4px 12px rgba(0,0,0,0.3)"}}>
+          ✓ 已匯入 {importResult.slots} 個時段{importResult.added>0?`，🆕新增 ${importResult.added} 筆大訂`:""}{importResult.updated>0?`，更新 ${importResult.updated} 筆人數`:""}（{importResult.by}）
+        </div>
+      )}
+      {/* 填人數彈窗:大人/小孩 */}
+      {editCell&&(
+        <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)"}} onClick={()=>setEditCell(null)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"18px",width:"250px"}} onClick={ev=>ev.stopPropagation()}>
+            <div style={{fontSize:"13px",color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",textAlign:"center"}}>填寫人數 {editCell.key}</div>
+            <div style={{display:"flex",gap:"10px",marginBottom:"14px"}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"11px",color:"#8a6a50",marginBottom:"4px",textAlign:"center"}}>大人</div>
+                <input type="number" autoFocus value={editCell.a}
+                  onChange={ev=>setEditCell(p=>({...p,a:ev.target.value}))}
+                  style={{width:"100%",padding:"12px 4px",fontSize:"20px",fontWeight:"700",textAlign:"center",border:"1.5px solid #c8b89c",borderRadius:"10px",background:"#fff",color:"#2e2010"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"11px",color:"#8a6a50",marginBottom:"4px",textAlign:"center"}}>小孩</div>
+                <input type="number" value={editCell.ch}
+                  onChange={ev=>setEditCell(p=>({...p,ch:ev.target.value}))}
+                  style={{width:"100%",padding:"12px 4px",fontSize:"20px",fontWeight:"700",textAlign:"center",border:"1.5px solid #c8b89c",borderRadius:"10px",background:"#fff",color:"#2e2010"}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>saveCell(editCell.key,"","")}
+                style={{flex:1,padding:"10px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",cursor:"pointer"}}>清除</button>
+              <button onClick={()=>saveCell(editCell.key,editCell.a,editCell.ch)}
+                style={{flex:2,padding:"10px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 完成 key 彈窗:狀態→夥伴 */}
+      {finishOpen&&(
+        <div style={{position:"fixed",inset:0,zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)"}} onClick={()=>{setFinishOpen(false);setFinishStatus(null);}}>
+          <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"18px",width:"260px"}} onClick={ev=>ev.stopPropagation()}>
+            {!finishStatus?(
+              <>
+                <div style={{fontSize:"13px",color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",textAlign:"center"}}>本次關訂位關到哪?</div>
+                <button onClick={()=>setFinishStatus("complete")}
+                  style={{width:"100%",padding:"13px",borderRadius:"10px",border:"none",background:"#3a7a3a",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer",marginBottom:"8px"}}>✓ 已關完當月</button>
+                <button onClick={()=>setFinishStatus("partial")}
+                  style={{width:"100%",padding:"13px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>關到目前為止</button>
+              </>
+            ):(
+              <>
+                <div style={{fontSize:"13px",color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",textAlign:"center"}}>你是哪位夥伴?</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:"7px",justifyContent:"center"}}>
+                  {staffOpts.map(n=>(
+                    <button key={n} onClick={()=>finishSession(n)}
+                      style={{padding:"11px 16px",borderRadius:"10px",border:"none",background:"#ede2d0",color:"#5a3a28",fontSize:"14px",fontWeight:"700",cursor:"pointer"}}>{n}</button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 關訂位選夥伴 */}
+      {closePicker&&(closeMap[closePicker]?createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setClosePicker(null)}>
+          <div style={{background:"#fff",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"320px",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"16px",fontWeight:"800",color:"#2a6a3a",marginBottom:"4px"}}>🔒 這個時段已關訂位</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",marginBottom:"14px",lineHeight:"1.6"}}>
+              {closePicker.split("-")[0]} {closePicker.split("-").slice(1).join("-")}<br/>
+              關閉夥伴:{typeof closeMap[closePicker]==="object"?`${closeMap[closePicker].by} ${closeMap[closePicker].at||""}`:closeMap[closePicker]}
+            </div>
+            <button onClick={()=>{ setCloseMap(p=>{ const m={...p}; delete m[closePicker]; persistDW(peopleMap,m,progress); return m; }); setClosePicker(null); }}
+              style={{width:"100%",padding:"13px",borderRadius:"11px",border:"none",background:"#c04030",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer",marginBottom:"8px"}}>
+              ↩ 取消關訂（重新開放訂位）
+            </button>
+            <div style={{fontSize:"10px",color:"#a08070",marginBottom:"10px"}}>記得也要去大麥POS把訂位打開</div>
+            <button onClick={()=>setClosePicker(null)}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>關閉視窗</button>
+          </div>
+        </div>, document.body
+      ):(
+        <StaffPicker staffList={staffList} onSelect={n=>{setCloseMap(p=>{const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;const m={...p,[closePicker]:{by:n,at}};persistDW(peopleMap,m,progress);return m;});setClosePicker(null);}} onClose={()=>setClosePicker(null)}/>
+      ))}
+
+      {leaveWarn&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"18px"}} onClick={()=>setLeaveWarn(false)}>
+          <div style={{background:"#fff",borderRadius:"18px",padding:"22px",width:"100%",maxWidth:"340px",textAlign:"center",boxShadow:"0 12px 40px rgba(0,0,0,0.4)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"34px",marginBottom:"6px"}}>⚠️</div>
+            <div style={{fontSize:"17px",color:"#c02020",fontWeight:"800",marginBottom:"8px"}}>今天的關訂位還沒完成!</div>
+            <div style={{fontSize:"14px",color:"#5a4530",lineHeight:"1.7",marginBottom:"16px"}}>
+              {_isSummer?"暑假期間每天都要關訂位。":`今天(週${["日","一","二","三","四","五","六"][_dowNow]})要關訂位。`}
+              {unclosedRedCnt>0?<><br/>目前還有 <b style={{color:"#c02020"}}>{unclosedRedCnt} 個滿{RED_AT}人的時段</b>沒關。</>:""}
+            </div>
+            <button onClick={()=>{setLeaveWarn(false);setFinishOpen(true);}}
+              style={{width:"100%",padding:"14px",borderRadius:"12px",border:"none",background:"#2a7a4a",color:"#fff",fontSize:"15px",fontWeight:"800",cursor:"pointer",marginBottom:"8px"}}>
+              🔒 完成關訂位（記錄關到哪＋夥伴）
+            </button>
+            <button onClick={()=>setLeaveWarn(false)}
+              style={{width:"100%",padding:"11px",borderRadius:"11px",border:"1.5px solid #c02020",background:"#fff",color:"#c02020",fontSize:"13px",fontWeight:"800",cursor:"pointer",marginBottom:"9px"}}>
+              留下來處理（還沒關完）
+            </button>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>{setLeaveAck(true);setLeaveWarn(false);onBack();}}
+                style={{flex:1,padding:"11px",borderRadius:"10px",border:"1px solid #d0b090",background:"#fbf3e6",color:"#8a5a10",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>稍後提醒關閉<div style={{fontSize:"9px",fontWeight:"400",opacity:0.8}}>紅燈保留</div></button>
+              <button onClick={()=>{markCloseDone();setLeaveAck(true);setLeaveWarn(false);onBack();}}
+                style={{flex:1,padding:"11px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#f0e8d8",color:"#7a6a4a",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>確認不關閉<div style={{fontSize:"9px",fontWeight:"400",opacity:0.8}}>紅燈熄滅</div></button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* 表頭 */}
+      <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 {APP_VER}</div>
+          <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
+        </div>
+        <div style={{display:"flex",gap:"5px"}}>
+          <button onClick={()=>fileInputRef.current&&fileInputRef.current.click()} style={{padding:"6px 10px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",cursor:"pointer",fontSize:"11px",fontWeight:"700"}}>📥 大麥</button>
+          <button onClick={()=>{setWeekOffset(p=>Math.max(0,p-1));if(isMobile)setViewDay(0);}} style={{padding:"6px 9px",borderRadius:"6px",background:"#e0d2bc",border:"none",color:"#6a4a2e",cursor:"pointer",fontWeight:"700"}}>◀</button>
+          <button onClick={()=>{setWeekOffset(0);setViewDay(isMobile?weekDates.indexOf(todayStr):null);}} style={{padding:"5px 8px",borderRadius:"6px",background:"#b07840",border:"none",color:"#fff",cursor:"pointer",fontSize:"10px"}}>本週</button>
+          <button onClick={()=>{setWeekOffset(p=>p+1);if(isMobile)setViewDay(0);}} style={{padding:"6px 9px",borderRadius:"6px",background:"#e0d2bc",border:"none",color:"#6a4a2e",cursor:"pointer",fontWeight:"700"}}>▶</button>
+        </div>
+      </div>
+
+      {/* 一三五 關訂位步驟指引(閃爍提醒夥伴照步驟走) */}
+      {showSteps && (
+        <div className="np" style={{padding:"7px 10px",background:"#fff4e0",borderBottom:"2px solid #e8a040",flexShrink:0,display:"flex",gap:"6px",alignItems:"stretch",justifyContent:"center"}}>
+          {[{n:1,t:"導入訂位"},{n:2,t:"關紅色滿20訂位"},{n:3,t:"按完成關訂位"}].map(s=>{
+            const done=s.n<stepCur, cur=s.n===stepCur;
+            return (
+              <div key={s.n} className={cur?"blinkStep":""} style={{flex:1,maxWidth:"140px",textAlign:"center",padding:"5px 4px",borderRadius:"8px",
+                background:done?"#dff0e0":cur?"#ffdf8a":"#f0e6d2",
+                border:`2px solid ${done?"#8ac09a":cur?"#e0900a":"#d8c8b0"}`}}>
+                <div style={{fontSize:"14px",fontWeight:"900",color:done?"#2a7a4a":cur?"#a05000":"#a08a6a"}}>{done?"✓":s.n}</div>
+                <div style={{fontSize:"10px",fontWeight:"700",color:done?"#2a7a4a":cur?"#7a3a00":"#a08a6a",lineHeight:"1.2"}}>{s.t}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 進度橫幅 */}
+      {progress&&(
+        <div className="np" style={{padding:"5px 12px",background:progress.status==="complete"?"#dff0df":"#fceedc",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:"8px"}}>
+          <div style={{fontSize:"11px",color:progress.status==="complete"?"#2a6a2a":"#9a5a10",fontWeight:"700",lineHeight:"1.5"}}>
+            {progress.status==="complete"
+              ? `✓ 第${progress.round||1}輪：${progress.by} 已關完當月訂位（${progress.at}）`
+              : `⏸ 第${progress.round||1}輪：${progress.by} 關訂位關到 ${progress.lastDate}（${progress.at}），尚未完成`}
+          </div>
+          {progress.status!=="complete"&&(
+            <button onClick={jumpToUnkeyed} style={{padding:"7px 10px",borderRadius:"8px",border:"none",background:"#b07840",color:"#fff",fontSize:"11px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>跳到未關處 →</button>
+          )}
+        </div>
+      )}
+
+      {/* 重複訂位提醒(同電話多筆)— 按✕移除重複,人數自動重算;未接記夥伴 */}
+      {dwErr&&(
+        <div className="np" style={{padding:"9px 12px",background:"#c02020",flexShrink:0}}>
+          <div style={{fontSize:"13px",color:"#fff",fontWeight:"800",lineHeight:"1.6"}}>
+            ⚠ 雲端資料還沒讀到 —— 請先「重新整理」再操作
+          </div>
+          <div style={{fontSize:"11px",color:"#ffd0d0",marginTop:"2px",lineHeight:"1.6"}}>
+            為了保護你的關訂紀錄,系統已暫停儲存(不會蓋掉雲端資料)。重新整理後這條會消失。{FSTAT.err?`　[${FSTAT.err}]`:""}
+          </div>
+        </div>
+      )}
+      {cplWarn&&cplWarn.filter(c=>!c.ack).length>0&&(
+        <div className="np" style={{padding:"5px 12px",background:"#fbe0e0",borderBottom:"1.5px solid #d09090",flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cplWarnOpen?"5px":"0",gap:"8px"}}>
+            <span className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"800",flex:1}}>
+              ⚠ 這批訂位有 {cplWarn.filter(c=>!c.ack).length} 位客人有客訴紀錄
+            </span>
+            <button onClick={()=>setCplWarnOpen(o=>!o)} style={{fontSize:"11px",background:cplWarnOpen?"#8a2020":"#c02020",border:"none",borderRadius:"6px",padding:"5px 10px",color:"#fff",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{cplWarnOpen?"▲ 收合":"▼ 展開"}</button>
+            <button onClick={()=>{const m=cplWarn.map(c=>({...c,ack:true}));setCplWarn(m);FS.saveDoc("cplWarn",m);}} style={{fontSize:"10px",background:"#e8c0c0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a2020",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已備註POS機</button>
+          </div>
+          {cplWarnOpen&&cplWarn.map((c,ci)=>c.ack?null:(
+            <div key={c.rid} style={{background:"#fff",border:"1px solid #e0a0a0",borderRadius:"8px",padding:"7px 9px",marginBottom:"4px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                <span style={{fontSize:"12px",fontWeight:"800",color:"#3a2a1a"}}>{c.date} {c.time}</span>
+                <span style={{fontSize:"12px",fontWeight:"700",color:"#5a4030"}}>{c.name||"—"}</span>
+                <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c.phone}</span>
+                <span style={{fontSize:"11px",color:"#8a6a4a"}}>{c.a}大{c.ch>0?`${c.ch}小`:""}</span>
+                <span style={{fontSize:"10px",fontWeight:"800",background:"#c02020",color:"#fff",borderRadius:"4px",padding:"1px 6px"}}>客訴 ×{c.n}</span>
+                <span style={{flex:1}}/>
+                {onOpenCpl&&(
+                  <button onClick={()=>onOpenCpl(c)}
+                    title="到客訴中心看完整紀錄"
+                    style={{fontSize:"10px",background:"#a04020",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",marginRight:"5px"}}>📋 客訴中心</button>
+                )}
+                <button onClick={()=>{const m=cplWarn.map((x,j)=>j===ci?{...x,ack:true}:x);setCplWarn(m);FS.saveDoc("cplWarn",m);}}
+                  style={{fontSize:"10px",background:"#3a8a5a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 9px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 已備註POS機</button>
+              </div>
+              <div style={{fontSize:"11px",color:"#a04020",marginTop:"3px",lineHeight:"1.6"}}>
+                {c.type&&<b>{c.type}</b>}{c.kinds?`・${c.kinds}`:""}{c.dishes?`　🍽 ${c.dishes}`:""}{c.src?`　(${c.src})`:""}
+              </div>
+              {c.reason&&<div style={{fontSize:"12px",color:"#7a2020",marginTop:"3px",lineHeight:"1.6",background:"#fff",border:"1px solid #e8c0c0",borderRadius:"6px",padding:"5px 8px"}}>
+                <b>客訴內容:</b>{c.reason}
+              </div>}
+              {c.attitude&&<div style={{fontSize:"11px",color:"#8a4020",marginTop:"2px",lineHeight:"1.6"}}><b>當下態度:</b>{c.attitude}</div>}
+              {c.adjust&&<div style={{fontSize:"11px",color:"#8a4020",marginTop:"2px",lineHeight:"1.6"}}><b>當時處理:</b>{c.adjust}</div>}
+              {c.treat&&<div style={{fontSize:"11px",color:"#1a6a3a",fontWeight:"700",marginTop:"2px"}}>👉 這次要招待:{c.treat}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+      {dupReservations&&dupReservations.filter(d=>!d.confirmed).length>0&&(
+        <div className="np" style={{padding:"5px 12px",background:"#fbe8d8",borderBottom:"1px solid #e0b088",flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:dupOpen?"4px":"0",gap:"8px"}}>
+            <span style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",flex:1}}>⚠ 重複訂位 {dupReservations.filter(d=>!d.confirmed).length} 組{dupOpen?" — 按 ✕ 移除多訂的,人數自動更新":""}</span>
+            <button onClick={()=>setDupOpen(o=>!o)} style={{fontSize:"11px",background:dupOpen?"#c08040":"#e8a040",border:"none",borderRadius:"6px",padding:"5px 10px",color:"#fff",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{dupOpen?"▲ 收合":"▼ 展開處理"}</button>
+            <button onClick={()=>{const marked=dupReservations.map(x=>({...x,confirmed:true}));setDupReservations(marked);persistDW(peopleMap,closeMap,progress,marked);}} style={{fontSize:"10px",background:"#e0c0a0",border:"none",borderRadius:"5px",padding:"5px 8px",color:"#7a4a10",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>全部已確認</button>
+          </div>
+          {dupOpen&&dupReservations.map((d,di)=>d.confirmed?null:(
+            <div key={di} style={{marginBottom:"6px",paddingBottom:"5px",borderBottom:"1px dashed #e0c0a0"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap",marginBottom:"3px"}}>
+                <span style={{fontSize:"12px",color:"#6a4a2e",fontWeight:"700"}}>{d.name}（{d.phone}）</span>
+                <button onClick={()=>setMissedPick(di)} style={{fontSize:"10px",background:"#c06030",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 8px",fontWeight:"700",cursor:"pointer"}}>📵 未接{d.missed?` ×${d.missed}`:""}</button>
+                <button onClick={()=>{const marked=dupReservations.map((x,idx)=>idx===di?{...x,confirmed:true}:x);setDupReservations(marked);persistDW(peopleMap,closeMap,progress,marked);}} style={{fontSize:"10px",background:"#3a8a5a",color:"#fff",border:"none",borderRadius:"5px",padding:"3px 8px",fontWeight:"700",cursor:"pointer"}}>✓ 確認不是重複</button>
+                {d.missed>0&&<span style={{fontSize:"9px",color:"#a05030"}}>{d.missedBy} {d.missedAt}</span>}
+                {d.missed>=3&&<span style={{fontSize:"9px",color:"#fff",background:"#c0302a",borderRadius:"4px",padding:"1px 5px",fontWeight:"700"}}>⚠ 聯絡不上</span>}
+              </div>
+              <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+                {(d.items||[]).map(it=>(
+                  <span key={it.rid} style={{display:"inline-flex",alignItems:"center",gap:"4px",fontSize:"10px",color:"#6a4a2e",background:"#fff",border:"1px solid #e0c8a8",borderRadius:"6px",padding:"2px 4px 2px 7px"}}>
+                    {it.date} {it.time}（{it.a}大{it.ch}小）
+                    <button onClick={()=>removeDupItem(di,it.rid)} title="移除這筆(人數會扣掉)" style={{background:"#f0d0c0",border:"none",borderRadius:"4px",color:"#a04020",fontWeight:"700",cursor:"pointer",fontSize:"11px",lineHeight:"1",padding:"2px 5px"}}>✕</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {missedPick!==null&&<StaffPicker staffList={staffList} onSelect={n=>{markMissed(missedPick,n);setMissedPick(null);}} onClose={()=>setMissedPick(null)}/>}
+      {/* 需關訂位警示(滿20未關)— 顯示時段 */}
+      {(()=>{
+        const weekD = Array.from({length:7},(_,di)=>weekDates[di]).filter(d=>inRange(d));
+        const closeList = weekD.map(d=>({d,slots:daySlots(d).needClose})).filter(x=>x.slots.length>0);
+        const reopenList = weekD.map(d=>({d,slots:daySlots(d).canReopen})).filter(x=>x.slots.length>0);
+        const judgeList = weekD.map(d=>({d,slots:daySlots(d).needJudge})).filter(x=>x.slots.length>0);
+        if(closeList.length===0&&reopenList.length===0&&judgeList.length===0) return null;
+        const judgeN = judgeList.reduce((s,x)=>s+x.slots.length,0);
+        return (
+          <div className="np" style={{flexShrink:0}}>
+            <div onClick={()=>setWarnOpen(o=>!o)} style={{padding:"5px 12px",background:closeList.length>0?"#fbe0e0":judgeN>0?"#fdeedd":"#e0f0e0",borderBottom:"1px solid #d0b0b0",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer"}}>
+              <span style={{fontSize:"11px",fontWeight:"800",flex:1,color:closeList.length>0?"#c02020":judgeN>0?"#b05a10":"#2a7a3a"}}>
+                {closeList.length>0&&`⚠ 必關未關 ${closeList.reduce((s,x)=>s+x.slots.length,0)} 時段`}
+                {closeList.length>0&&(judgeN>0||reopenList.length>0)&&"　"}
+                {judgeN>0&&`🟠 需判斷 ${judgeN} 時段`}
+                {judgeN>0&&reopenList.length>0&&"　"}
+                {reopenList.length>0&&`↩ 可開放 ${reopenList.reduce((s,x)=>s+x.slots.length,0)} 時段`}
+              </span>
+              <span style={{fontSize:"11px",fontWeight:"800",color:"#8a5a30",background:"#f0e0d0",borderRadius:"5px",padding:"2px 8px"}}>{warnOpen?"▲ 收合":"▼ 展開"}</span>
+            </div>
+            {warnOpen&&closeList.length>0&&(
+              <div style={{padding:"6px 12px",background:"#fbe0e0",borderBottom:"1px solid #e0a0a0"}}>
+                <span style={{fontSize:"12px",color:"#c02020",fontWeight:"700"}}>⚠ 滿{RED_AT}人必關未關：{closeList.map(x=>`${x.d} ${x.slots.join("/")}`).join("、")} — 請至大麥POS關閉並在此標記</span>
+              </div>
+            )}
+            {warnOpen&&judgeN>0&&(()=>{
+              const slots=[];
+              judgeList.forEach(x=>x.slots.forEach(t=>slots.push({d:x.d,t,key:`${x.d}-${t}`})));
+              return (
+                <div style={{padding:"6px 12px",background:"#fdeedd",borderBottom:"1px solid #e0b080"}}>
+                  <div style={{fontSize:"12px",color:"#b05a10",fontWeight:"700",marginBottom:"5px"}}>🟡 {ORG_AT}–{RED_AT-1} 人,要不要關訂位?（不用一定關,決定後就不再提醒）</div>
+                  <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                    {slots.map(s=>(
+                      <span key={s.key} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"11px",background:"#fff",border:"1px solid #e0b080",borderRadius:"6px",padding:"3px 5px 3px 8px",color:"#a05a10",fontWeight:"700"}}>
+                        {s.d} {s.t}
+                        <button onClick={(e)=>{e.stopPropagation();setClosePicker(s.key);}} style={{fontSize:"10px",border:"none",borderRadius:"4px",padding:"2px 6px",cursor:"pointer",fontWeight:"700",background:"#c04030",color:"#fff",whiteSpace:"nowrap"}}>關訂位</button>
+                        <button onClick={(e)=>{e.stopPropagation();toggleNoReopen(`judge-${s.key}`);}} style={{fontSize:"10px",border:"none",borderRadius:"4px",padding:"2px 6px",cursor:"pointer",fontWeight:"700",background:"#8a9a8a",color:"#fff",whiteSpace:"nowrap"}}>本次不關</button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+            {warnOpen&&reopenList.length>0&&(()=>{
+              const slots=[];
+              reopenList.forEach(x=>x.slots.forEach(t=>slots.push({d:x.d,t,key:`${x.d}-${t}`})));
+              return (
+                <div style={{padding:"6px 12px",background:"#e0f0e0",borderBottom:"1px solid #a0c0a0"}}>
+                  <div style={{fontSize:"12px",color:"#2a7a3a",fontWeight:"700",marginBottom:"5px"}}>↩ 人數已減少，可開放訂位（前後時段可能爆客，可按「已確認不開」記錄不重開）：</div>
+                  <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                    {slots.map(s=>{
+                      const ack=noReopen[s.key];
+                      return (
+                        <span key={s.key} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"11px",background:ack?"#dfe6df":"#fff",border:`1px solid ${ack?"#b0c0b0":"#88b888"}`,borderRadius:"6px",padding:"3px 5px 3px 8px",color:ack?"#7a8a7a":"#2a6a3a",fontWeight:"700"}}>
+                          {s.d} {s.t}
+                          <button onClick={(e)=>{e.stopPropagation();toggleNoReopen(s.key);}} style={{fontSize:"10px",border:"none",borderRadius:"4px",padding:"2px 6px",cursor:"pointer",fontWeight:"700",background:ack?"#c0d0c0":"#3a8a5a",color:ack?"#5a6a5a":"#fff",whiteSpace:"nowrap"}}>{ack?"✓ 已確認不開（點取消）":"已確認不開"}</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        );
+      })()}
+      {/* 顏色說明 */}
+      <div className="np" style={{padding:"3px 12px",background:"#f5f0e8",display:"flex",gap:"14px",alignItems:"center",flexShrink:0,fontSize:"10px",color:"#6a4a2e"}}>
+        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#fff3cc",border:"1px solid #d8c060",borderRadius:"3px",verticalAlign:"-2px"}}/> {YEL_AT}–{RED_AT-1}人 留意</span>
+        <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe8e8",border:"1px solid #d88080",borderRadius:"3px",verticalAlign:"-2px"}}/> {RED_AT}人以上 必關</span>
+      </div>
+
+      {/* 選單日時的返回全部列(只在篩選單日時出現) */}
+      {viewDay!==null&&(
+        <div className="np" onClick={()=>setViewDay(null)} style={{padding:"6px 12px",background:"#e8dcc8",flexShrink:0,cursor:"pointer",textAlign:"center",fontSize:"12px",color:"#6a4a2e",fontWeight:"700",borderBottom:"1px solid #d0c0a8"}}>
+          目前只看 （{DAYS2[viewDay]}）{weekDates[viewDay]}　—　◀ 點這裡看全部 7 天
+        </div>
+      )}
+
+      {/* 表格 */}
+      <div className="dw" style={{flex:1,overflowY:"auto",overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse",minWidth:"100%",background:"#fff",fontSize:"11px"}}>
+          <thead style={{position:"sticky",top:0,zIndex:10}}>
+            <tr style={{background:"#ede2d0"}}>
+              <th style={{padding:"6px 4px",color:"#6a4a2e",border:"1px solid #c8b89c",minWidth:"46px",position:"sticky",left:0,background:"#ede2d0",zIndex:11,textAlign:"center"}}>時段</th>
+              {daysToShow.map(di=>{
+                const active=inRange(weekDates[di]);
+                const warn=active&&dayNeedsClose(weekDates[di]);
+                const sel=viewDay===di;
+                return (
+                <th key={di} colSpan={3} onClick={()=>active&&setViewDay(viewDay===di?null:di)}
+                  style={{padding:"5px 4px",color:sel?"#fff":warn?"#c02020":"#6a4a2e",border:"1px solid #c8b89c",borderLeft:"3px solid #8a6a3a",textAlign:"center",opacity:active?1:0.4,cursor:active?"pointer":"default",background:sel?"#b07840":warn?"#f5d0d0":"transparent"}}>
+                  <div style={{fontWeight:"700"}}>（{DAYS2[di]}）{warn?"⚠":""}</div>
+                  <div style={{fontSize:"9px",color:sel?"#f5e5d0":"#8a6a4a"}}>{weekDates[di]}</div>
+                  {(()=>{const f=festivalOf(weekDates[di]);return f?
+                    <div style={{fontSize:"9px",fontWeight:"800",color:sel?"#fff":"#c0392b",background:sel?"rgba(255,255,255,0.2)":"#fce8e6",borderRadius:"4px",padding:"0 3px",marginTop:"1px",whiteSpace:"nowrap"}}>🎉{f}</div>
+                    :null;})()}
+                </th>
+                );
+              })}
+            </tr>
+            <tr style={{background:"#e0d2bc"}}>
+              <th style={{padding:"4px",border:"1px solid #c8b89c",position:"sticky",left:0,background:"#e0d2bc",zIndex:11}}></th>
+              {daysToShow.map(di=>(
+                <React.Fragment key={di}>
+                  <th style={{padding:"4px 2px",border:"1px solid #c8b89c",borderLeft:"3px solid #8a6a3a",textAlign:"center",fontSize:"10px",color:"#6a4a2e",minWidth:isMobile?"60px":"40px"}}>人數</th>
+                  <th style={{padding:"4px 2px",border:"1px solid #c8b89c",textAlign:"center",fontSize:"10px",color:"#6a4a2e",minWidth:isMobile?"70px":"44px"}}>大訂</th>
+                  <th style={{padding:"4px 2px",border:"1px solid #c8b89c",textAlign:"center",fontSize:"10px",color:"#6a4a2e",minWidth:isMobile?"50px":"36px"}}>關訂</th>
+                </React.Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {TIMES2.map(time=>(
+              <tr key={time}>
+                <td style={{padding:"6px 3px",border:"1px solid #e0d8c8",textAlign:"center",fontWeight:"700",color:"#a09070",background:"#f0ebe0",fontSize:"11px",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:5}}>{time}</td>
+                {daysToShow.map(di=>{
+                  const date=weekDates[di];
+                  const key=`${date}-${time}`;
+                  const sg=getSlotGroups2(date,time);
+                  const autoT=sg.reduce((s,g)=>s+parsePpl(g.headcount).total,0);
+                  const entry=peopleMap[key];
+                  const a=entry?parseInt(entry.a)||0:0;
+                  const ch=entry?parseInt(entry.ch)||0:0;
+                  const manualTotal=entry?(a+ch):null;
+                  const disp=manualTotal!==null?manualTotal:autoT;
+                  const red=disp>=RED_AT;
+                  const org=!red&&disp>=ORG_AT;
+                  const yel=!red&&!org&&disp>=YEL_AT;
+                  const active=inRange(date);
+                  const closer=closeMap[key];
+                  return (
+                    <React.Fragment key={di}>
+                      <td onClick={()=>active&&setEditCell({key,a:entry?String(entry.a):"",ch:entry?String(entry.ch):"",autoT})}
+                        style={{padding:"3px",border:"1px solid #e0d8c8",borderLeft:"3px solid #8a6a3a",minWidth:isMobile?"60px":"40px",verticalAlign:"top",cursor:active?"pointer":"default",
+                        background:red?"#ffe8e8":org?"#ffe6cc":yel?"#fff3cc":active?"transparent":"#ece8e0",opacity:active?1:0.45}}>
+                        {active&&(entry?(
+                          <div style={{textAlign:"center",minHeight:"30px"}}>
+                            <div style={{fontSize:"14px",fontWeight:"700",color:red?"#e82020":org?"#c06010":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</div>
+                            <div style={{fontSize:"8px",color:"#8a6a50"}}>大{a} 小{ch}</div>
+                            {entry.by&&<div style={{fontSize:"7px",color:"#aaa"}}>{entry.src==="麥"?"麥·":""}{entry.by} {entry.at}</div>}
+                          </div>
+                        ):(
+                          <div style={{textAlign:"center",minHeight:"30px",lineHeight:"30px",fontSize:"13px",fontWeight:"700",color:autoT>=RED_AT?"#e82020":autoT>=ORG_AT?"#c06010":autoT>=YEL_AT?"#b08000":autoT>0?"#9a8a76":"#c8c0b0"}}>{autoT>0?autoT:"＋"}</div>
+                        ))}
+                      </td>
+                      <td style={{padding:"3px",border:"1px solid #e0d8c8",verticalAlign:"top",minWidth:isMobile?"70px":"44px",opacity:active?1:0.45}}>
+                        {sg.length>0&&<div style={{textAlign:"center",fontSize:"11px",color:"#5a3a28",fontWeight:"700"}}>{sg.length}</div>}
+                        {sg.map(g=>{const p2=parsePpl(g.headcount);return<div key={g.id} style={{fontSize:"9px",color:g.onsiteOrder?"#b07840":"#5a3a28",lineHeight:"1.3",whiteSpace:"nowrap"}}>{g.onsiteOrder?"🍽現點 ":""}{g.name}{p2.adults>0?` 大${p2.adults}`:""}{p2.children>0?` 童${p2.children}`:""}</div>;})}
+                      </td>
+                      <td style={{padding:"3px",border:"1px solid #e0d8c8",textAlign:"center",minWidth:isMobile?"50px":"36px",opacity:active?1:0.45}}>
+                        {active&&<div onClick={()=>setClosePicker(key)}
+                          style={{cursor:"pointer",fontSize:"11px",color:closer?"#1a6a1a":"#b0a890",fontWeight:closer?"700":"400",background:closer?"#e0f0e0":"transparent",borderRadius:"4px",padding:"4px 3px",minHeight:"22px"}}>
+                          {closer?(typeof closer==="object"?closer.by:closer):"—"}
+                          {closer&&typeof closer==="object"&&closer.at&&<div style={{fontSize:"7px",color:"#6a9a6a",fontWeight:"400"}}>{closer.at}</div>}
+                        </div>}
+                      </td>
+                    </React.Fragment>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+
+    </div>
+  );
+}
+
+function StatsPage({ onBack, staffList }) {
+  const [data, setData] = useState({customers:{}, dishes:{}, daily:{}, hourly:{}, lastImport:null});
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState(null);
+  const fileRef = useRef(null);
+  const [tab, setTab] = useState("trend");
+  const [rangeMode, setRangeMode] = useState("all"); // all|month|custom
+  const [fromYmd, setFromYmd] = useState(0);
+  const [toYmd, setToYmd] = useState(0);
+  const [menuSplit, setMenuSplit] = useState(0); // 菜單分界日 ymd
+  const [showMenuSplit, setShowMenuSplit] = useState(false);
+  const [showMissing, setShowMissing] = useState(false);
+  const localSaveTime = useRef(0);
+
+  const loadAll = async () => {
+    // 讀所有月份文件 + meta,合併成 data
+    const months = await FS.loadAllStatsMonths();
+    const meta = await FS.loadStatsMeta();
+    const merged = {records:[], seenBills:{}, seenOrders:{}, orderSlots:{}, orderDays:{}, dishes:{},
+      orderMinY:0, orderMaxY:0, lastImport:(meta&&meta.lastImport)||null, menuSplit:(meta&&meta.menuSplit)||0,
+      _months:Object.keys(months).sort()};
+    Object.keys(months).forEach(ym=>{
+      const mo=months[ym];
+      if(mo.records) merged.records.push(...mo.records);
+      if(mo.seenBills) Object.assign(merged.seenBills, mo.seenBills);
+    });
+    // 入單檔時段彙總在 meta
+    if(meta){
+      merged.orderSlots=meta.orderSlots||{};
+      merged.seenOrders=meta.seenOrders||{};
+      merged.orderDays=meta.orderDays||{};
+      merged.orderMinY=meta.orderMinY||0;
+      merged.orderMaxY=meta.orderMaxY||0;
+    }
+    setData(merged);
+    if(meta&&meta.menuSplit) setMenuSplit(meta.menuSplit);
+  };
+  const clearBilling = async () => {
+    if(!window.confirm("確定清除所有「結帳單」資料？\n清除後請重新匯入一份完整範圍的結帳單，日期才會正確。\n此動作無法復原。")) return;
+    const months = await FS.loadAllStatsMonths();
+    for(const ym of Object.keys(months)){ await FS.saveStatsMonth(ym, {records:[],seenBills:{}}); }
+    await FS.saveDoc("stats", {_migrated:true, records:[]});
+    await loadAll();
+    window.alert("結帳單資料已清除，請重新匯入完整範圍的結帳單。");
+  };
+  const clearOrders = async () => {
+    if(!window.confirm("確定清除所有「入單檔」資料？\n清除後請重新匯入。\n此動作無法復原。")) return;
+    const meta = (await FS.loadStatsMeta())||{};
+    meta.orderSlots={}; meta.seenOrders={}; meta.orderDays={}; meta.orderMinY=0; meta.orderMaxY=0;
+    await FS.saveStatsMeta(meta);
+    await loadAll();
+    window.alert("入單檔資料已清除，請重新匯入。");
+  };
+  useEffect(()=>{
+    // 先嘗試舊格式(相容),再讀新格式月份
+    FS.loadDoc("stats").then(v=>{ if(v&&v.records&&v.records.length>0&&!v._migrated){ setData(v); if(v.menuSplit) setMenuSplit(v.menuSplit); } });
+    loadAll();
+  },[]);
+
+  const handleFile = async (e) => {
+    const file=e.target.files?.[0]; if(!file) return;
+    setImporting(true);
+    try {
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      // 找「結帳單列表」和「結帳單明細」
+      const listSheet = wb.Sheets["結帳單列表"]||wb.Sheets[wb.SheetNames[0]];
+      const detailSheet = wb.Sheets["結帳單明細"]||wb.Sheets[wb.SheetNames[1]];
+      const list = XLSX.utils.sheet_to_json(listSheet,{header:1});
+      const detail = detailSheet?XLSX.utils.sheet_to_json(detailSheet,{header:1}):[];
+
+      // 列表標題
+      if(!list.length||!list[0]){ alert("讀取失敗：這個檔案的第一個工作表是空的，請確認上傳的是大麥「結帳單」匯出檔。"); setImporting(false); if(fileRef.current)fileRef.current.value=""; return; }
+      const lh=list[0].map(x=>String(x||""));
+      const cBill=lh.findIndex(x=>x.includes("結帳單編號"));
+      const cPhone=lh.findIndex(x=>x.includes("電話"));
+      const cAmt=lh.findIndex(x=>x.includes("總金額"));
+      // 結帳單列表本身就帶日期(建立時間/取餐時間)，單一工作表的匯出檔也能抓到日期
+      const cTime=lh.findIndex(x=>x.includes("建立時間"));
+      const cTime2=lh.findIndex(x=>x.includes("取餐時間"));
+      const parseDT=(t)=>{ if(t===null||t===undefined||t==="") return null; if(t instanceof Date) return t; if(typeof t==="number"){ const o=(XLSX.SSF&&XLSX.SSF.parse_date_code)?XLSX.SSF.parse_date_code(t):null; return o?new Date(o.y,o.m-1,o.d,o.H||0,o.M||0):null; } const m=String(t).match(/(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})/); return m?new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5]):null; };
+      if(cBill<0){ alert("讀取失敗：找不到「結帳單編號」欄位，請確認上傳的是大麥「結帳單」匯出檔（不是入單檔）。"); setImporting(false); if(fileRef.current)fileRef.current.value=""; return; }
+      // 明細標題
+      let billDate={}, billDishes={};
+      if(detail.length>0){
+        const dh=detail[0].map(x=>String(x||""));
+        const dBill=dh.findIndex(x=>x.includes("結帳單編號"));
+        const dName=dh.findIndex(x=>x.includes("餐點名稱"));
+        const dQty=dh.findIndex(x=>x.includes("數量"));
+        const dTime=dh.findIndex(x=>x.includes("建立時間"));
+        const dAmt=dh.findIndex(x=>x==="金額");
+        for(let r=1;r<detail.length;r++){
+          const row=detail[r]; if(!row||!row[dBill]) continue;
+          const bill=String(row[dBill]);
+          const t=row[dTime];
+          if(t&&!billDate[bill]){
+            let d2; if(t instanceof Date) d2=t; else if(typeof t==="number"){const o=(XLSX.SSF&&XLSX.SSF.parse_date_code)?XLSX.SSF.parse_date_code(t):null; if(o)d2=new Date(o.y,o.m-1,o.d,o.H||0,o.M||0);} else {const m=String(t).match(/(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):/);if(m)d2=new Date(+m[1],+m[2]-1,+m[3],+m[4]);}
+            if(d2) billDate[bill]=d2;
+          }
+          const name=row[dName];
+          if(name&&name!=="--"&&!String(name).includes("會員")){
+            const q=parseInt(row[dQty])||1;
+            const amt=dAmt>=0?parseInt(String(row[dAmt]||"").replace(/\D/g,""))||0:0;
+            billDishes[bill]=billDishes[bill]||[];
+            billDishes[bill].push({name:String(name),q,amt});
+          }
+        }
+      }
+
+      // 按月分文件儲存(避免單一文件超過 Firestore 1MB 上限)
+      // 先載入現有所有月份
+      const existMonths = await FS.loadAllStatsMonths();
+      const haveBills={};
+      Object.values(existMonths).forEach(mo=>{ if(mo.seenBills) Object.assign(haveBills, mo.seenBills); });
+      // 新資料按月分組
+      const monthBuckets={}; // ym → {records:[], seenBills:{}}
+      let newBills=0;
+      for(let r=1;r<list.length;r++){
+        const row=list[r]; if(!row||!row[cBill]) continue;
+        const bill=String(row[cBill]);
+        if(haveBills[bill]) continue;
+        haveBills[bill]=1; newBills++;
+        const phone=cPhone>=0?String(row[cPhone]||"").replace(/\D/g,""):"";
+        const amt=cAmt>=0?parseInt(String(row[cAmt]||"").replace(/\D/g,""))||0:0;
+        let d2=billDate[bill];
+        if(!d2&&cTime>=0) d2=parseDT(row[cTime]);
+        if(!d2&&cTime2>=0) d2=parseDT(row[cTime2]);
+        const ymd=d2?d2.getFullYear()*10000+(d2.getMonth()+1)*100+d2.getDate():0;
+        const ym=d2?`${d2.getFullYear()}_${String(d2.getMonth()+1).padStart(2,"0")}`:"unknown";
+        if(!monthBuckets[ym]) monthBuckets[ym]={records:[],seenBills:{}};
+        monthBuckets[ym].records.push({
+          ymd, phone:(phone&&/^09\d{8}$/.test(phone))?phone:"",
+          amt, hour:d2?d2.getHours():null, slot:d2?`${String(d2.getHours()).padStart(2,"0")}:${d2.getMinutes()<30?"00":"30"}`:null,
+          dishes:(billDishes[bill]||[]).map(it=>[it.name,it.q,it.amt||0])
+        });
+        monthBuckets[ym].seenBills[bill]=1;
+      }
+      // 合併進現有月份文件並儲存
+      localSaveTime.current=Date.now();
+      for(const ym in monthBuckets){
+        const exist=existMonths[ym]||{records:[],seenBills:{}};
+        const merged={
+          records:[...(exist.records||[]),...monthBuckets[ym].records],
+          seenBills:{...(exist.seenBills||{}),...monthBuckets[ym].seenBills}
+        };
+        await FS.saveStatsMonth(ym, merged);
+      }
+      // 更新 meta
+      const meta=(await FS.loadStatsMeta())||{};
+      meta.lastImport=`${new Date().getMonth()+1}/${new Date().getDate()}`;
+      await FS.saveStatsMeta(meta);
+      await loadAll();
+      setResult({newBills, total:Object.keys(haveBills).length});
+      setTimeout(()=>setResult(null),4000);
+    } catch(err){ alert("讀取失敗："+err.message); }
+    setImporting(false);
+    if(fileRef.current) fileRef.current.value="";
+  };
+
+  const orderFileRef = useRef(null);
+  const handleOrderFile = async (e) => {
+    const file=e.target.files?.[0]; if(!file) return;
+    setImporting(true);
+    try {
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const listSheet = wb.Sheets["訂單列表"]||wb.Sheets[wb.SheetNames[0]];
+      const list = XLSX.utils.sheet_to_json(listSheet,{header:1});
+      if(!list.length||!list[0]){ alert("讀取失敗：這個檔案的第一個工作表是空的，請確認上傳的是大麥「入單檔（訂單列表）」匯出檔。"); setImporting(false); if(orderFileRef.current)orderFileRef.current.value=""; return; }
+      const lh=list[0].map(x=>String(x||""));
+      const cOrder=lh.findIndex(x=>x.includes("訂單編號"));
+      const cOrderTime=lh.findIndex(x=>x.includes("下訂時間"));
+      if(cOrder<0){ alert("讀取失敗：找不到「訂單編號」欄位，請確認上傳的是大麥「入單檔（訂單列表）」匯出檔（不是結帳單）。"); setImporting(false); if(orderFileRef.current)orderFileRef.current.value=""; return; }
+      const nd=JSON.parse(JSON.stringify(data));
+      nd.orderSlots=nd.orderSlots||{};
+      nd.seenOrders=nd.seenOrders||{};
+      // 舊資料沒有日期範圍/每日清單 → 這次強制重算(即使編號重複也讀日期)
+      const needRebuildDate = !nd.orderMinY || !nd.orderDays;
+      nd.orderDays=nd.orderDays||{};
+      let newOrders=0;
+      for(let r=1;r<list.length;r++){
+        const row=list[r]; if(!row||!row[cOrder]) continue;
+        const oid=String(row[cOrder]);
+        const isNew = !nd.seenOrders[oid];
+        if(!isNew && !needRebuildDate) continue;
+        const t=row[cOrderTime];
+        let d2; if(t instanceof Date) d2=t; else if(typeof t==="number"){const o=(XLSX.SSF&&XLSX.SSF.parse_date_code)?XLSX.SSF.parse_date_code(t):null; if(o)d2=new Date(o.y,o.m-1,o.d,o.H||0,o.M||0);} else {const m=String(t).match(/(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})/);if(m)d2=new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5]);}
+        if(d2){
+          const oy=d2.getFullYear()*10000+(d2.getMonth()+1)*100+d2.getDate();
+          nd.orderDays[oy]=1;
+          if(!nd.orderMinY||oy<nd.orderMinY) nd.orderMinY=oy;
+          if(!nd.orderMaxY||oy>nd.orderMaxY) nd.orderMaxY=oy;
+          if(isNew){
+            const slot=`${String(d2.getHours()).padStart(2,"0")}:${d2.getMinutes()<30?"00":"30"}`;
+            nd.orderSlots[slot]=(nd.orderSlots[slot]||0)+1;
+          }
+        }
+        if(isNew){ nd.seenOrders[oid]=1; newOrders++; }
+      }
+      localSaveTime.current=Date.now();
+      // 入單檔資料(時段/去重/日期)存 meta
+      const meta=(await FS.loadStatsMeta())||{};
+      meta.orderSlots=nd.orderSlots;
+      meta.seenOrders=nd.seenOrders;
+      meta.orderMinY=nd.orderMinY;
+      meta.orderMaxY=nd.orderMaxY;
+      meta.orderDays=nd.orderDays;
+      meta.menuSplit=menuSplit;
+      await FS.saveStatsMeta(meta);
+      await loadAll();
+      setResult({newBills:newOrders, total:Object.keys(nd.seenOrders).length, isOrder:true});
+      setTimeout(()=>setResult(null),4000);
+    } catch(err){ alert("讀取失敗："+err.message); }
+    setImporting(false);
+    if(orderFileRef.current) orderFileRef.current.value="";
+  };
+
+  // 日期區間篩選 records
+  const allRecords=data.records||[];
+  const ymds=allRecords.map(r=>r.ymd).filter(y=>y>0);
+  const minYmd=ymds.length?Math.min(...ymds):0;
+  const maxYmd=ymds.length?Math.max(...ymds):0;
+  const fmtYmd=(y)=>y?`${Math.floor(y/10000)}/${Math.floor(y/100)%100}/${y%100}`:"";
+  // 缺漏日期:涵蓋範圍內哪幾天沒有結帳單資料
+  const haveDays={};
+  allRecords.forEach(r=>{ if(r.ymd>0) haveDays[r.ymd]=1; });
+  const missingDays=[];
+  if(minYmd>0&&maxYmd>0&&minYmd!==maxYmd){
+    const ymdToD=(y)=>new Date(Math.floor(y/10000),Math.floor(y/100)%100-1,y%100);
+    const dToYmd=(d)=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
+    let cur=ymdToD(minYmd); const end=ymdToD(maxYmd);
+    let guard=0;
+    while(cur<=end&&guard<1000){
+      const y=dToYmd(cur);
+      if(!haveDays[y]) missingDays.push(y);
+      cur.setDate(cur.getDate()+1); guard++;
+    }
+  }
+  // 入單檔缺漏日期:涵蓋範圍內哪幾天沒有入單檔資料(與結帳單分開告知)
+  const orderHaveDays=data.orderDays||{};
+  const orderMissingDays=[];
+  // 只有在已建立每日清單後才比對(舊資料需重新匯入一次入單檔才會有)，避免整段誤報
+  if(Object.keys(orderHaveDays).length>0&&data.orderMinY>0&&data.orderMaxY>0&&data.orderMinY!==data.orderMaxY){
+    const ymdToD=(y)=>new Date(Math.floor(y/10000),Math.floor(y/100)%100-1,y%100);
+    const dToYmd=(d)=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
+    let cur=ymdToD(data.orderMinY); const end=ymdToD(data.orderMaxY);
+    let guard=0;
+    while(cur<=end&&guard<1000){
+      const y=dToYmd(cur);
+      if(!orderHaveDays[y]) orderMissingDays.push(y);
+      cur.setDate(cur.getDate()+1); guard++;
+    }
+  }
+  // 把連續缺漏的日期合併成「幾號到幾號」區間
+  const mdShort=(y)=>`${Math.floor(y/100)%100}/${y%100}`;
+  const toRanges=(arr)=>{
+    if(!arr.length) return [];
+    const next=(y)=>{const d=new Date(Math.floor(y/10000),Math.floor(y/100)%100-1,y%100);d.setDate(d.getDate()+1);return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();};
+    const out=[]; let s=arr[0], p=arr[0];
+    for(let i=1;i<arr.length;i++){ if(arr[i]===next(p)){ p=arr[i]; } else { out.push([s,p]); s=arr[i]; p=arr[i]; } }
+    out.push([s,p]); return out;
+  };
+  const rangeStr=([a,b])=>a===b?mdShort(a):`${mdShort(a)} ~ ${mdShort(b)}`;
+  // 篩選範圍
+  const recs=allRecords.filter(r=>{
+    if(rangeMode==="all") return true;
+    if(rangeMode==="week"){
+      const now=new Date(); const dow=(now.getDay()+6)%7;
+      const mon=new Date(now); mon.setDate(now.getDate()-dow); mon.setHours(0,0,0,0);
+      const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+      const mY=mon.getFullYear()*10000+(mon.getMonth()+1)*100+mon.getDate();
+      const sY=sun.getFullYear()*10000+(sun.getMonth()+1)*100+sun.getDate();
+      return r.ymd>=mY && r.ymd<=sY;
+    }
+    if(rangeMode==="month"){
+      const now=new Date(); const ty=now.getFullYear()*10000+(now.getMonth()+1)*100;
+      return r.ymd>=ty && r.ymd<ty+100;
+    }
+    if(rangeMode==="custom"){
+      const f=fromYmd||0, t=toYmd||99999999;
+      return r.ymd>=f && r.ymd<=t;
+    }
+    return true;
+  });
+  // 用篩選後 recs 計算
+  const custMap={};
+  const dishMap={}; const hourMap={}; let revTotal=0; const daySet={};
+  recs.forEach(r=>{
+    if(r.phone){ if(!custMap[r.phone]) custMap[r.phone]={visits:0,total:0,ymds:[]}; custMap[r.phone].visits++; custMap[r.phone].total+=r.amt; custMap[r.phone].ymds.push(r.ymd); }
+    revTotal+=r.amt;
+    if(r.ymd>0) daySet[r.ymd]=1;
+    if(r.slot) hourMap[r.slot]=(hourMap[r.slot]||0)+1;
+    else if(r.hour!==null&&r.hour!==undefined){const s=`${String(r.hour).padStart(2,"0")}:00`;hourMap[s]=(hourMap[s]||0)+1;}
+    (r.dishes||[]).forEach(([nm,q])=>{ dishMap[nm]=(dishMap[nm]||0)+q; });
+  });
+  const customers=custMap;
+  const phones=Object.keys(customers);
+  const totalCust=phones.length;
+  const repeatCust=phones.filter(p=>customers[p].visits>1);
+  const newCust=phones.filter(p=>customers[p].visits===1);
+  const repeatRate=totalCust>0?Math.round(repeatCust.length/totalCust*100):0;
+  const intervals=[];
+  repeatCust.forEach(p=>{
+    const ds=[...new Set(customers[p].ymds)].sort((a,b)=>a-b).map(y=>new Date(Math.floor(y/10000),Math.floor(y/100)%100-1,y%100));
+    for(let i=1;i<ds.length;i++) intervals.push((ds[i]-ds[i-1])/(1000*60*60*24));
+  });
+  const avgInterval=intervals.length>0?Math.round(intervals.reduce((a,b)=>a+b,0)/intervals.length):0;
+  const topCust=[...repeatCust].sort((a,b)=>customers[b].visits-customers[a].visits).slice(0,15);
+  const topDishes=Object.entries(dishMap).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  // 時段:優先用入單檔下訂時間(orderSlots),較準
+  const orderSlots=data.orderSlots||{};
+  const hasOrderSlots=Object.keys(orderSlots).length>0;
+  const hourly=hasOrderSlots?orderSlots:hourMap;
+  const maxHour=Math.max(1,...Object.values(hourly));
+  const dailyTotal=revTotal;
+  const dayCount=Object.keys(daySet).length;
+  // 三類日均營業額:週一到四 / 週五 / 假日(週六日+國定假日)
+  const catRev={wd:0,fri:0,hol:0}, catDays={wd:{},fri:{},hol:{}};
+  Object.keys(daySet).forEach(ymd=>{
+    const y=Math.floor(ymd/10000),m=Math.floor(ymd/100)%100,d=ymd%100;
+    const dt=new Date(y,m-1,d); const dow=dt.getDay();
+    const dayRev=recs.filter(r=>r.ymd==ymd).reduce((s,r)=>s+r.amt,0);
+    let cat;
+    if(isHoliday(dt)||dow===0||dow===6) cat="hol";
+    else if(dow===5) cat="fri";
+    else cat="wd";
+    catRev[cat]+=dayRev; catDays[cat][ymd]=1;
+  });
+  const catAvg={
+    wd:Object.keys(catDays.wd).length>0?Math.round(catRev.wd/Object.keys(catDays.wd).length):0,
+    fri:Object.keys(catDays.fri).length>0?Math.round(catRev.fri/Object.keys(catDays.fri).length):0,
+    hol:Object.keys(catDays.hol).length>0?Math.round(catRev.hol/Object.keys(catDays.hol).length):0,
+  };
+  // 客單價 = 營業額 / 消費筆數
+  const avgTicket=recs.length>0?Math.round(revTotal/recs.length):0;
+  // 菜單分界:前後客單價比較(用全部 records,不受區間影響)
+  let menuCompare=null, seriesCompare=null;
+  if(menuSplit>0){
+    const before=allRecords.filter(r=>r.ymd>0&&r.ymd<menuSplit);
+    const after=allRecords.filter(r=>r.ymd>=menuSplit);
+    const avgB=before.length>0?Math.round(before.reduce((s,r)=>s+r.amt,0)/before.length):0;
+    const avgA=after.length>0?Math.round(after.reduce((s,r)=>s+r.amt,0)/after.length):0;
+    const diff=avgB>0?Math.round((avgA-avgB)/avgB*100):0;
+    menuCompare={avgB,avgA,diff,cntB:before.length,cntA:after.length};
+    // 系列均價漲幅(用 dishes 的 amt/q 算每份單價)
+    const serBefore={}, serAfter={};
+    const collectSer=(recsArr,target)=>{
+      recsArr.forEach(r=>{(r.dishes||[]).forEach(([nm,q,amt])=>{
+        if(!amt||!q) return;
+        const ser=getDishSeries(nm); if(!ser) return;
+        if(!target[ser]) target[ser]={sum:0,cnt:0};
+        target[ser].sum+=amt; target[ser].cnt+=q;
+      });});
+    };
+    collectSer(before,serBefore); collectSer(after,serAfter);
+    seriesCompare=[];
+    const allSers=[...new Set([...Object.keys(serBefore),...Object.keys(serAfter)])];
+    allSers.forEach(s=>{
+      const b=serBefore[s], a=serAfter[s];
+      const avgB2=b&&b.cnt>0?Math.round(b.sum/b.cnt):0;
+      const avgA2=a&&a.cnt>0?Math.round(a.sum/a.cnt):0;
+      if(avgB2>0&&avgA2>0){
+        seriesCompare.push({series:s,avgB:avgB2,avgA:avgA2,diff:Math.round((avgA2-avgB2)/avgB2*100),amt:avgA2-avgB2});
+      }
+    });
+    seriesCompare.sort((x,y)=>y.diff-x.diff);
+  }
+  // 年度對比:今年 vs 去年同期(到目前月份為止)
+  let yoyCompare=null;
+  if(allRecords.length>0){
+    const now=new Date(); const curY=now.getFullYear(); const curMD=(now.getMonth()+1)*100+now.getDate();
+    const thisY={rev:0,custs:{},cnt:0}, lastY={rev:0,custs:{},cnt:0};
+    allRecords.forEach(r=>{
+      if(!r.ymd) return;
+      const y=Math.floor(r.ymd/10000), md=Math.floor(r.ymd/100)%100*100+r.ymd%100;
+      if(md>curMD) return; // 只比到今天同期
+      if(y===curY){ thisY.rev+=r.amt; thisY.cnt++; if(r.phone)thisY.custs[r.phone]=1; }
+      else if(y===curY-1){ lastY.rev+=r.amt; lastY.cnt++; if(r.phone)lastY.custs[r.phone]=1; }
+    });
+    if(lastY.cnt>0){
+      const tCust=Object.keys(thisY.custs).length, lCust=Object.keys(lastY.custs).length;
+      const tTicket=thisY.cnt>0?Math.round(thisY.rev/thisY.cnt):0, lTicket=lastY.cnt>0?Math.round(lastY.rev/lastY.cnt):0;
+      yoyCompare={
+        thisRev:thisY.rev,lastRev:lastY.rev,revDiff:lastY.rev>0?Math.round((thisY.rev-lastY.rev)/lastY.rev*100):0,
+        thisCust:tCust,lastCust:lCust,custDiff:lCust>0?Math.round((tCust-lCust)/lCust*100):0,
+        thisTicket:tTicket,lastTicket:lTicket,ticketDiff:lTicket>0?Math.round((tTicket-lTicket)/lTicket*100):0,
+        curY,lastY:curY-1
+      };
+    }
+  }
+  // 趨勢對照:本週 vs 上週 vs 過去4週同星期平均
+  const ymdToDate=(y)=>new Date(Math.floor(y/10000),Math.floor(y/100)%100-1,y%100);
+  const dateToYmd=(d)=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
+  // 以資料最新日為「本週」基準
+  const latestYmd=maxYmd;
+  let trendRows=null, weekTotals=null;
+  if(latestYmd>0){
+    const latest=ymdToDate(latestYmd);
+    // 找本週週一
+    const dow=(latest.getDay()+6)%7; // 0=週一
+    const monday=new Date(latest); monday.setDate(latest.getDate()-dow);
+    // 按日彙總 records
+    const byDay={};
+    allRecords.forEach(r=>{ if(r.ymd>0){ if(!byDay[r.ymd]) byDay[r.ymd]={rev:0,cnt:0}; byDay[r.ymd].rev+=r.amt; byDay[r.ymd].cnt++; } });
+    const dayName=["一","二","三","四","五","六","日"];
+    trendRows=[];
+    let twRev=0,twCnt=0,lwRev=0,lwCnt=0;
+    for(let i=0;i<7;i++){
+      const thisD=new Date(monday); thisD.setDate(monday.getDate()+i);
+      const lastD=new Date(monday); lastD.setDate(monday.getDate()+i-7);
+      const tY=dateToYmd(thisD), lY=dateToYmd(lastD);
+      const tv=byDay[tY]?byDay[tY].rev:0, lv=byDay[lY]?byDay[lY].rev:0;
+      const tc=byDay[tY]?byDay[tY].cnt:0, lc=byDay[lY]?byDay[lY].cnt:0;
+      // 過去4週同星期平均
+      let sum4=0,n4=0;
+      for(let w=1;w<=4;w++){ const d=new Date(monday); d.setDate(monday.getDate()+i-7*w); const y=dateToYmd(d); if(byDay[y]){sum4+=byDay[y].rev;n4++;} }
+      const avg4=n4>0?Math.round(sum4/n4):0;
+      const diffLW=lv>0?Math.round((tv-lv)/lv*100):null;
+      const diff4=avg4>0?Math.round((tv-avg4)/avg4*100):null;
+      twRev+=tv; twCnt+=tc; lwRev+=lv; lwCnt+=lc;
+      trendRows.push({day:dayName[i],ymd:tY,thisRev:tv,lastRev:lv,thisCnt:tc,lastCnt:lc,avg4,diffLW,diff4,hasData:tv>0||lv>0});
+    }
+    weekTotals={twRev,twCnt,lwRev,lwCnt,
+      revDiff:lwRev>0?Math.round((twRev-lwRev)/lwRev*100):null,
+      cntDiff:lwCnt>0?Math.round((twCnt-lwCnt)/lwCnt*100):null,
+      twTicket:twCnt>0?Math.round(twRev/twCnt):0, lwTicket:lwCnt>0?Math.round(lwRev/lwCnt):0,
+      monday:dateToYmd(monday)};
+    weekTotals.ticketDiff=weekTotals.lwTicket>0?Math.round((weekTotals.twTicket-weekTotals.lwTicket)/weekTotals.lwTicket*100):null;
+  }
+
+  const Stat=({label,value,sub,color})=>(
+    <div style={{flex:1,minWidth:"100px",background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0",textAlign:"center"}}>
+      <div style={{fontSize:"22px",fontWeight:"900",color:color||"#6a4a2e"}}>{value}</div>
+      <div style={{fontSize:"11px",color:"#8a6a4a",marginTop:"2px"}}>{label}</div>
+      {sub&&<div style={{fontSize:"9px",color:"#b0a090",marginTop:"1px"}}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",background:"#f5f0e8",fontFamily:"'Noto Sans TC',sans-serif"}}>
+      <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleFile}/>
+      <input ref={orderFileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleOrderFile}/>
+      {importing&&<div style={{position:"fixed",inset:0,zIndex:350,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.6)"}}><div style={{background:"#fff",borderRadius:"14px",padding:"24px 30px",fontSize:"14px",color:"#6a4a2e",fontWeight:"700"}}>分析中…</div></div>}
+      {result&&<div style={{position:"fixed",top:60,left:"50%",transform:"translateX(-50%)",zIndex:370,background:"#2a6a2a",color:"#fff",padding:"10px 18px",borderRadius:"12px",fontSize:"13px",fontWeight:"700"}}>✓ 新增 {result.newBills} 筆，累積 {result.total} 筆{result.isOrder?"訂單(時段)":"消費"}</div>}
+      {showMenuSplit&&(
+        <div style={{position:"fixed",inset:0,zIndex:380,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.7)",padding:"20px"}} onClick={()=>setShowMenuSplit(false)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #d0c0a8",borderRadius:"16px",padding:"20px",width:"100%",maxWidth:"300px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"14px",color:"#6a4a2e",fontWeight:"700",marginBottom:"4px",textAlign:"center"}}>設定換菜單日期</div>
+            <div style={{fontSize:"11px",color:"#8a6a4a",textAlign:"center",marginBottom:"14px"}}>系統會比較這天前後的平均客單價</div>
+            <input type="date" defaultValue={menuSplit>0?`${Math.floor(menuSplit/10000)}-${String(Math.floor(menuSplit/100)%100).padStart(2,"0")}-${String(menuSplit%100).padStart(2,"0")}`:""}
+              onChange={e=>{const v=e.target.value;if(v){const[y,m,d]=v.split("-").map(Number);setMenuSplit(y*10000+m*100+d);}}}
+              style={{width:"100%",padding:"10px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"14px",marginBottom:"14px"}}/>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={async ()=>{setMenuSplit(0);const meta=(await FS.loadStatsMeta())||{};meta.menuSplit=0;await FS.saveStatsMeta(meta);setShowMenuSplit(false);}}
+                style={{flex:1,padding:"10px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>清除</button>
+              <button onClick={async ()=>{const meta=(await FS.loadStatsMeta())||{};meta.menuSplit=menuSplit;await FS.saveStatsMeta(meta);setShowMenuSplit(false);}}
+                style={{flex:1,padding:"10px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📊 數據統計 {APP_VER}</div>
+        <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 結帳單</button>
+          <button onClick={()=>orderFileRef.current&&orderFileRef.current.click()} style={{padding:"6px 9px",borderRadius:"6px",background:"#8a5ab4",border:"none",color:"#fff",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 入單檔</button>
+          <button onClick={clearBilling} style={{padding:"6px 9px",borderRadius:"6px",background:"#fff",border:"1px solid #c08060",color:"#a05030",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>🗑 清結帳</button>
+          <button onClick={clearOrders} style={{padding:"6px 9px",borderRadius:"6px",background:"#fff",border:"1px solid #a080c0",color:"#7050a0",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>🗑 清入單</button>
+        </div>
+      </div>
+
+      <div style={{flex:1,overflowY:"auto",padding:"14px"}}>
+        {totalCust===0?(
+          <div style={{textAlign:"center",padding:"40px 20px",color:"#8a6a4a"}}>
+            <div style={{fontSize:"40px",marginBottom:"12px"}}>📊</div>
+            <div style={{fontSize:"14px",fontWeight:"700",marginBottom:"6px"}}>還沒有資料</div>
+            <div style={{fontSize:"12px",lineHeight:"1.6"}}>點右上「📥 匯入結帳單」上傳大麥結帳單<br/>每月匯入一次，系統會累積分析<br/>越多月份資料越準確</div>
+          </div>
+        ):(
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"4px"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:"2px"}}>
+                <div style={{fontSize:"10px",color:"#3a7a5a",fontWeight:"700"}}>📋 結帳單：{minYmd>0?`${fmtYmd(minYmd)} ~ ${fmtYmd(maxYmd)}`:"未匯入"}</div>
+                <div style={{fontSize:"10px",color:"#8a5ab4",fontWeight:"700"}}>📥 入單檔：{data.orderMinY?`${fmtYmd(data.orderMinY)} ~ ${fmtYmd(data.orderMaxY)}`:"未匯入"}</div>
+              </div>
+            </div>
+            {(missingDays.length>0||orderMissingDays.length>0)&&(
+              <div style={{background:"#fff4e6",borderRadius:"10px",padding:"10px",border:"1px solid #f0d0a0",marginBottom:"10px"}}>
+                <div onClick={()=>setShowMissing(v=>!v)} style={{cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"6px"}}>
+                  <span style={{fontSize:"11px",color:"#c07020",fontWeight:"700"}}>⚠ 有日期沒匯入（結帳單 {missingDays.length} 天、入單檔 {orderMissingDays.length} 天）</span>
+                  <span style={{fontSize:"11px",color:"#c07020",whiteSpace:"nowrap"}}>{showMissing?"收合 ▲":"展開 ▼"}</span>
+                </div>
+                {showMissing&&(
+                  <div style={{marginTop:"8px"}}>
+                    <div style={{fontSize:"9px",color:"#a08060",marginBottom:"6px"}}>以下日期可能漏匯入，或當天公休沒營業：</div>
+                    {missingDays.length>0&&(
+                      <div style={{marginBottom:"8px"}}>
+                        <div style={{fontSize:"10px",color:"#3a7a5a",fontWeight:"700",marginBottom:"4px"}}>📋 結帳單缺 {missingDays.length} 天</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+                          {toRanges(missingDays).map((r,i)=>(
+                            <span key={"b"+i} style={{fontSize:"10px",color:"#a05020",background:"#fde8d0",borderRadius:"5px",padding:"2px 8px"}}>{rangeStr(r)}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {orderMissingDays.length>0&&(
+                      <div>
+                        <div style={{fontSize:"10px",color:"#8a5ab4",fontWeight:"700",marginBottom:"4px"}}>📥 入單檔缺 {orderMissingDays.length} 天</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+                          {toRanges(orderMissingDays).map((r,i)=>(
+                            <span key={"o"+i} style={{fontSize:"10px",color:"#7040a0",background:"#efe2fa",borderRadius:"5px",padding:"2px 8px"}}>{rangeStr(r)}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{display:"flex",gap:"6px",marginBottom:"6px"}}>
+              {[["all","全部"],["week","本週"],["month","本月"],["custom","自訂區間"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setRangeMode(k)} style={{flex:1,padding:"7px",borderRadius:"8px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"700",background:rangeMode===k?"#6a4a2e":"#e0d2bc",color:rangeMode===k?"#fff":"#6a4a2e"}}>{l}</button>
+              ))}
+            </div>
+            {rangeMode==="custom"&&(
+              <div style={{display:"flex",gap:"6px",marginBottom:"10px",alignItems:"center"}}>
+                <input type="date" onChange={e=>{const v=e.target.value;if(v){const[y,m,d]=v.split("-").map(Number);setFromYmd(y*10000+m*100+d);}}} style={{flex:1,padding:"7px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"12px"}}/>
+                <span style={{fontSize:"12px",color:"#8a6a4a"}}>~</span>
+                <input type="date" onChange={e=>{const v=e.target.value;if(v){const[y,m,d]=v.split("-").map(Number);setToYmd(y*10000+m*100+d);}}} style={{flex:1,padding:"7px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"12px"}}/>
+              </div>
+            )}
+            <div style={{fontSize:"10px",color:"#b0a090",marginBottom:"8px"}}>目前顯示 {recs.length} 筆消費</div>
+            {/* 總覽 */}
+            <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"10px"}}>
+              <Stat label="總顧客數" value={totalCust} color="#6a4a2e"/>
+              <Stat label="回頭客" value={repeatCust.length} sub={`回訪率 ${repeatRate}%`} color="#3a7a5a"/>
+              <Stat label="新客" value={newCust.length} color="#b07840"/>
+            </div>
+            <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"14px"}}>
+              <Stat label="平均回流" value={avgInterval>0?`${avgInterval}天`:"—"} sub="回客平均間隔" color="#8a5ab4"/>
+              <Stat label="累積營業額" value={`$${dailyTotal.toLocaleString()}`} sub={`${dayCount}天`} color="#c0392b"/>
+              <Stat label="日均營業額" value={dayCount>0?`$${Math.round(dailyTotal/dayCount).toLocaleString()}`:"—"} color="#6a4a2e"/>
+              <Stat label="客單價" value={avgTicket>0?`$${avgTicket.toLocaleString()}`:"—"} sub="每筆平均" color="#3a7a5a"/>
+            </div>
+            {/* 三類日均營業額 */}
+            <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0",marginBottom:"14px"}}>
+              <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e",marginBottom:"10px"}}>📅 日均營業額（分類）</div>
+              <div style={{display:"flex",gap:"8px",textAlign:"center"}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:"10px",color:"#8a6a4a"}}>週一至四</div>
+                  <div style={{fontSize:"15px",fontWeight:"900",color:"#6a4a2e"}}>{catAvg.wd>0?`$${catAvg.wd.toLocaleString()}`:"—"}</div>
+                </div>
+                <div style={{flex:1,borderLeft:"1px solid #e0d5c0",borderRight:"1.5px solid #cbb99a"}}>
+                  <div style={{fontSize:"10px",color:"#8a6a4a"}}>週五</div>
+                  <div style={{fontSize:"15px",fontWeight:"900",color:"#b07840"}}>{catAvg.fri>0?`$${catAvg.fri.toLocaleString()}`:"—"}</div>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:"10px",color:"#8a6a4a"}}>假日</div>
+                  <div style={{fontSize:"15px",fontWeight:"900",color:"#c0392b"}}>{catAvg.hol>0?`$${catAvg.hol.toLocaleString()}`:"—"}</div>
+                </div>
+              </div>
+              <div style={{fontSize:"9px",color:"#b0a090",marginTop:"6px",textAlign:"center"}}>假日含週六日及國定假日</div>
+            </div>
+            {/* 年度對比 */}
+            {yoyCompare&&(
+              <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0",marginBottom:"14px"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e",marginBottom:"2px"}}>📆 今年 vs 去年同期</div>
+                <div style={{fontSize:"9px",color:"#b0a090",marginBottom:"10px"}}>{yoyCompare.lastY} vs {yoyCompare.curY}年（至今日同期）</div>
+                {[["營業額",`$${yoyCompare.lastRev.toLocaleString()}`,`$${yoyCompare.thisRev.toLocaleString()}`,yoyCompare.revDiff],
+                  ["來客數",yoyCompare.lastCust,yoyCompare.thisCust,yoyCompare.custDiff],
+                  ["客單價",`$${yoyCompare.lastTicket.toLocaleString()}`,`$${yoyCompare.thisTicket.toLocaleString()}`,yoyCompare.ticketDiff]].map(([label,last,now,diff])=>(
+                  <div key={label} style={{display:"flex",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #f5efe3"}}>
+                    <div style={{width:"50px",fontSize:"12px",color:"#6a4a2e",fontWeight:"700"}}>{label}</div>
+                    <div style={{flex:1,textAlign:"right",fontSize:"12px",color:"#8a6a4a"}}>{last}</div>
+                    <div style={{width:"20px",textAlign:"center",color:"#b07840"}}>→</div>
+                    <div style={{flex:1,textAlign:"right",fontSize:"12px",color:"#3a2a1a",fontWeight:"700"}}>{now}</div>
+                    <div style={{width:"54px",textAlign:"right",fontSize:"12px",fontWeight:"700",color:diff>=0?"#2a8a4a":"#c0392b"}}>{diff>=0?"▲":"▼"}{Math.abs(diff)}%</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* 菜單分界客單價比較 */}
+            <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0",marginBottom:"14px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:menuCompare?"10px":"0"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>📋 新舊菜單客單價</div>
+                <button onClick={()=>setShowMenuSplit(true)} style={{padding:"5px 10px",borderRadius:"7px",border:"none",background:"#ede2d0",color:"#6a4a2e",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{menuSplit>0?`換菜單日：${fmtYmd(menuSplit)}`:"設定換菜單日"}</button>
+              </div>
+              {menuCompare&&(
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-around",textAlign:"center"}}>
+                  <div>
+                    <div style={{fontSize:"10px",color:"#8a6a4a"}}>舊菜單</div>
+                    <div style={{fontSize:"18px",fontWeight:"900",color:"#8a6a4a"}}>${menuCompare.avgB.toLocaleString()}</div>
+                    <div style={{fontSize:"9px",color:"#b0a090"}}>{menuCompare.cntB}筆</div>
+                  </div>
+                  <div style={{fontSize:"20px",color:"#b07840"}}>→</div>
+                  <div>
+                    <div style={{fontSize:"10px",color:"#3a7a5a"}}>新菜單</div>
+                    <div style={{fontSize:"18px",fontWeight:"900",color:"#3a7a5a"}}>${menuCompare.avgA.toLocaleString()}</div>
+                    <div style={{fontSize:"9px",color:"#b0a090"}}>{menuCompare.cntA}筆</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:"10px",color:"#8a6a4a"}}>變化</div>
+                    <div style={{fontSize:"18px",fontWeight:"900",color:menuCompare.diff>=0?"#c0392b":"#3a7a5a"}}>{menuCompare.diff>=0?"+":""}{menuCompare.diff}%</div>
+                  </div>
+                </div>
+              )}
+              {seriesCompare&&seriesCompare.length>0&&(
+                <div style={{marginTop:"12px",paddingTop:"10px",borderTop:"1px solid #f0e8d6"}}>
+                  <div style={{fontSize:"12px",fontWeight:"700",color:"#6a4a2e",marginBottom:"8px"}}>各系列均價漲幅</div>
+                  {seriesCompare.map(s=>(
+                    <div key={s.series} style={{display:"flex",alignItems:"center",padding:"5px 0",fontSize:"12px"}}>
+                      <div style={{flex:1,color:"#4a3520"}}>{s.series}</div>
+                      <div style={{color:"#8a6a4a",fontSize:"11px"}}>${s.avgB}→${s.avgA}</div>
+                      <div style={{width:"70px",textAlign:"right",fontWeight:"700",color:s.diff>=0?"#c0392b":"#3a7a5a"}}>
+                        {s.diff>=0?"+":""}{s.diff}%{s.amt!==0?` ($${s.amt>=0?"+":""}${s.amt})`:""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 分頁 */}
+            <div style={{display:"flex",gap:"6px",marginBottom:"12px"}}>
+              {[["trend","趨勢對照"],["repeat","常客排行"],["dishes","熱賣餐點"],["hourly","時段分布"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:"8px",borderRadius:"8px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"700",background:tab===k?"#b07840":"#e0d2bc",color:tab===k?"#fff":"#6a4a2e"}}>{l}</button>
+              ))}
+            </div>
+
+            {tab==="trend"&&(
+              weekTotals?(
+              <div>
+                {/* 三大指標週對週 */}
+                <div style={{display:"flex",gap:"8px",marginBottom:"12px"}}>
+                  <div style={{flex:1,background:"#fff",borderRadius:"10px",padding:"10px",border:"1px solid #e0d5c0",textAlign:"center"}}>
+                    <div style={{fontSize:"10px",color:"#8a6a4a"}}>本週營業額</div>
+                    <div style={{fontSize:"16px",fontWeight:"900",color:"#6a4a2e"}}>${weekTotals.twRev.toLocaleString()}</div>
+                    {weekTotals.revDiff!==null&&<div style={{fontSize:"11px",fontWeight:"700",color:weekTotals.revDiff>=0?"#2a8a4a":"#c0392b"}}>{weekTotals.revDiff>=0?"▲":"▼"} {Math.abs(weekTotals.revDiff)}%</div>}
+                  </div>
+                  <div style={{flex:1,background:"#fff",borderRadius:"10px",padding:"10px",border:"1px solid #e0d5c0",textAlign:"center"}}>
+                    <div style={{fontSize:"10px",color:"#8a6a4a"}}>本週來客</div>
+                    <div style={{fontSize:"16px",fontWeight:"900",color:"#6a4a2e"}}>{weekTotals.twCnt}</div>
+                    {weekTotals.cntDiff!==null&&<div style={{fontSize:"11px",fontWeight:"700",color:weekTotals.cntDiff>=0?"#2a8a4a":"#c0392b"}}>{weekTotals.cntDiff>=0?"▲":"▼"} {Math.abs(weekTotals.cntDiff)}%</div>}
+                  </div>
+                  <div style={{flex:1,background:"#fff",borderRadius:"10px",padding:"10px",border:"1px solid #e0d5c0",textAlign:"center"}}>
+                    <div style={{fontSize:"10px",color:"#8a6a4a"}}>本週客單價</div>
+                    <div style={{fontSize:"16px",fontWeight:"900",color:"#6a4a2e"}}>${weekTotals.twTicket.toLocaleString()}</div>
+                    {weekTotals.ticketDiff!==null&&<div style={{fontSize:"11px",fontWeight:"700",color:weekTotals.ticketDiff>=0?"#2a8a4a":"#c0392b"}}>{weekTotals.ticketDiff>=0?"▲":"▼"} {Math.abs(weekTotals.ticketDiff)}%</div>}
+                  </div>
+                </div>
+                <div style={{fontSize:"10px",color:"#b0a090",textAlign:"center",marginBottom:"10px"}}>本週 vs 上週（與上週同期比較）</div>
+                {/* 每日對照表 */}
+                <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0"}}>
+                  <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e",marginBottom:"10px"}}>📈 每日營業額對照</div>
+                  <div style={{display:"flex",fontSize:"10px",color:"#8a6a4a",fontWeight:"700",paddingBottom:"6px",borderBottom:"1px solid #e0d5c0"}}>
+                    <div style={{width:"36px"}}>星期</div>
+                    <div style={{flex:1,textAlign:"right"}}>本週</div>
+                    <div style={{flex:1,textAlign:"right"}}>上週</div>
+                    <div style={{width:"54px",textAlign:"right"}}>差異</div>
+                  </div>
+                  {trendRows.map(r=>(
+                    <div key={r.ymd} style={{display:"flex",fontSize:"12px",padding:"7px 0",borderBottom:"1px solid #f5efe3",alignItems:"center",opacity:r.hasData?1:0.4}}>
+                      <div style={{width:"36px",color:"#6a4a2e",fontWeight:"700"}}>{r.day}</div>
+                      <div style={{flex:1,textAlign:"right",color:"#3a2a1a",fontWeight:"700"}}>{r.thisRev>0?`$${(r.thisRev/10000).toFixed(1)}萬`:"—"}</div>
+                      <div style={{flex:1,textAlign:"right",color:"#8a6a4a"}}>{r.lastRev>0?`$${(r.lastRev/10000).toFixed(1)}萬`:"—"}</div>
+                      <div style={{width:"54px",textAlign:"right",fontWeight:"700",color:r.diffLW===null?"#b0a090":r.diffLW>=0?"#2a8a4a":"#c0392b"}}>
+                        {r.diffLW===null?"—":`${r.diffLW>=0?"+":""}${r.diffLW}%`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* 異常提醒:連續下滑 */}
+                {(()=>{
+                  const declines=trendRows.filter(r=>r.diffLW!==null&&r.diffLW<0).length;
+                  const dataRows=trendRows.filter(r=>r.diffLW!==null).length;
+                  if(dataRows>=3&&declines>=dataRows*0.6){
+                    return <div style={{marginTop:"12px",background:"#fbe0e0",borderRadius:"10px",padding:"12px",border:"1px solid #e0a0a0"}}>
+                      <div style={{fontSize:"12px",color:"#c0392b",fontWeight:"700"}}>⚠ 注意：本週 {dataRows} 天有 {declines} 天較上週衰退</div>
+                      <div style={{fontSize:"11px",color:"#a05050",marginTop:"4px",lineHeight:"1.5"}}>建議追查是「來客數」還是「客單價」下滑。對照上方三大指標：來客掉→客人變少（競爭/季節/行銷）；客單價掉→點得少（菜單/套餐吸引力）。</div>
+                    </div>;
+                  }
+                  return null;
+                })()}
+              </div>
+              ):(
+                <div style={{textAlign:"center",padding:"30px",color:"#8a6a4a",fontSize:"12px"}}>需要至少兩週的資料才能對照<br/>多匯入幾個月的結帳單後就會顯示</div>
+              )
+            )}
+            {tab==="repeat"&&(
+              <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e",marginBottom:"10px"}}>🏆 常客排行（來訪次數）</div>
+                {topCust.length===0?<div style={{fontSize:"12px",color:"#b0a090",textAlign:"center",padding:"12px"}}>還沒有回頭客資料</div>:
+                topCust.map((p,i)=>(
+                  <div key={p} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:i<topCust.length-1?"1px solid #f0e8d6":"none"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <span style={{fontSize:"13px",fontWeight:"700",color:i<3?"#c0392b":"#8a6a4a",minWidth:"20px"}}>{i+1}</span>
+                      <span style={{fontSize:"13px",color:"#4a3520"}}>{p}</span>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <span style={{fontSize:"14px",fontWeight:"700",color:"#3a7a5a"}}>{customers[p].visits}次</span>
+                      <span style={{fontSize:"10px",color:"#b0a090",marginLeft:"6px"}}>${customers[p].total.toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab==="dishes"&&(
+              <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e",marginBottom:"10px"}}>🍽 熱賣餐點 TOP15</div>
+                {topDishes.map(([name,n],i)=>(
+                  <div key={name} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:i<topDishes.length-1?"1px solid #f0e8d6":"none"}}>
+                    <span style={{fontSize:"12px",color:"#4a3520"}}><b style={{color:i<3?"#c0392b":"#8a6a4a",marginRight:"6px"}}>{i+1}</b>{name}</span>
+                    <span style={{fontSize:"13px",fontWeight:"700",color:"#b07840",whiteSpace:"nowrap"}}>{n}份</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab==="hourly"&&(
+              <div style={{background:"#fff",borderRadius:"12px",padding:"12px",border:"1px solid #e0d5c0"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e",marginBottom:"4px"}}>⏰ 時段分布（每30分鐘）</div>
+                <div style={{fontSize:"10px",color:"#b0a090",marginBottom:"10px"}}>{hasOrderSlots?"依入單檔「下訂時間」統計（準確）":"依結帳單時間統計，匯入單檔更準"}</div>
+                <div style={{background:"#fff8ec",borderRadius:"8px",padding:"8px 10px",marginBottom:"10px",border:"1px solid #f0e0c0"}}>
+                  <div style={{fontSize:"11px",color:"#a07030",fontWeight:"700",marginBottom:"2px"}}>⏱ 出餐時間參考</div>
+                  <div style={{fontSize:"10px",color:"#b08040",lineHeight:"1.6"}}>常客 10 分鐘內 ・ 新客 4 人以下 20 分鐘內 ・ 新客 5 人以上 30 分鐘內</div>
+                </div>
+                {Object.keys(hourly).sort().map(h=>(
+                  <div key={h} style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
+                    <span style={{fontSize:"11px",color:"#8a6a4a",minWidth:"42px"}}>{h}</span>
+                    <div style={{flex:1,background:"#f0e8d6",borderRadius:"4px",height:"18px",overflow:"hidden"}}>
+                      <div style={{width:`${hourly[h]/maxHour*100}%`,height:"100%",background:"#b07840"}}/>
+                    </div>
+                    <span style={{fontSize:"11px",color:"#6a4a2e",fontWeight:"700",minWidth:"30px",textAlign:"right"}}>{hourly[h]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RefundSection({ group, S, onSaveSig }) {
+  const [showRefund, setShowRefund] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pinErr, setPinErr] = useState("");
+  const [pinOk, setPinOk] = useState(false);
+  const [sigType, setSigType] = useState(null);
+  const [sigs, setSigs] = useState({staff:null, customer:null});
+
+  if(!showRefund) return (
+    <div style={{padding:"8px 16px 12px",background:"#f5efe2"}}>
+      <button onClick={()=>setShowRefund(true)}
+        style={{width:"100%",padding:"8px 6px",borderRadius:"10px",background:"#e4ecf4",border:"1px solid #3a5a7a",color:"#2a5a8a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
+        💰 退款簽名(需員工密碼)
+      </button>
+    </div>
+  );
+
+  if(!pinOk) return (
+    <div style={{padding:"14px 16px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
+      <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"8px"}}>輸入員工密碼</div>
+      <input value={pin} onChange={e=>{setPin(e.target.value);setPinErr("");}} type="password" placeholder="員工密碼"
+        style={{width:"100%",background:"#ffffff",border:"1px solid #d0c0a8",borderRadius:"10px",padding:"11px 14px",color:"#3a2a1a",fontSize:"14px",fontFamily:"'Noto Sans TC',sans-serif",marginBottom:"8px"}}/>
+      {pinErr&&<div style={{fontSize:"11px",color:"#e87a5a",marginBottom:"8px"}}>{pinErr}</div>}
+      <div style={{display:"flex",gap:"8px"}}>
+        <button onClick={()=>{setShowRefund(false);setPin("");}} style={{flex:1,padding:"10px",borderRadius:"10px",background:"#ffffff",border:"1px solid #d8c8b0",color:"#7a5c3e",fontSize:"12px",cursor:"pointer"}}>取消</button>
+        <button onClick={()=>{if(pin==="9015"){setPinOk(true);}else setPinErr("密碼錯誤");}}
+          style={{flex:1,padding:"10px",borderRadius:"10px",background:"#b07840",border:"none",color:"#fff",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{padding:"14px 16px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
+      <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"12px"}}>💰 退款簽名</div>
+      <div style={{background:"#fdfaf4",borderRadius:"10px",padding:"10px 12px",marginBottom:"12px",fontSize:"12px",color:"#aa8060",lineHeight:"1.8"}}>
+        <div><b style={{color:"#8a5210"}}>姓名：</b>{group.name}</div>
+        <div><b style={{color:"#8a5210"}}>訂位：</b>{group.date} {group.time}</div>
+        <div><b style={{color:"#8a5210"}}>電話：</b>{group.phone}</div>
+        <div><b style={{color:"#8a5210"}}>退還訂金：</b>${group.deposit||"—"}</div>
+      </div>
+      <div style={{display:"flex",gap:"8px",marginBottom:"12px"}}>
+        <button onClick={()=>setSigType("staff")}
+          style={{flex:1,padding:"12px",borderRadius:"12px",border:`1px solid ${sigs.staff?"#7ab87a":"#3a5a7a"}`,
+            background:sigs.staff?"#dfeadf":"#e4ecf4",color:sigs.staff?"#2a7a4a":"#2a5a8a",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>
+          {sigs.staff?"✓ ":""}員工簽名
+        </button>
+        <button onClick={()=>setSigType("customer")}
+          style={{flex:1,padding:"12px",borderRadius:"12px",border:`1px solid ${sigs.customer?"#7ab87a":"#7a5a3a"}`,
+            background:sigs.customer?"#dfeadf":"#ffffff",color:sigs.customer?"#2a7a4a":"#c4924a",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>
+          {sigs.customer?"✓ ":""}客人簽名
+        </button>
+      </div>
+      {sigs.staff&&sigs.customer&&(
+        <div style={{fontSize:"12px",color:"#2a7a4a",textAlign:"center",padding:"8px",background:"#0d1a0d",borderRadius:"8px",marginBottom:"8px"}}>
+          ✓ 雙方均已簽名完成
+        </div>
+      )}
+      <button onClick={()=>{setShowRefund(false);setPin("");setPinOk(false);}}
+        style={{width:"100%",padding:"11px",borderRadius:"12px",background:"transparent",border:"1px solid #e0d5c0",color:"#5a3a28",fontSize:"12px",fontWeight:"600",cursor:"pointer",marginTop:"4px"}}>
+        關閉
+      </button>
+      {sigType&&(
+        <SignatureModal group={group} sigType={sigType}
+          onSave={(dataUrl,type)=>{
+            setSigs(p=>({...p,[type]:dataUrl}));
+            setSigType(null);
+            const now=new Date();
+            const t=`${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+            if(onSaveSig) onSaveSig(type, dataUrl, t);
+          }}
+          onClose={()=>setSigType(null)}/>
+      )}
+    </div>
+  );
+}
+
+
+// ─── HUADAN (夥伴劃單) ───────────────────────────────────────────────────────
+function HuadanPage({ group, onMark, onClose }) {
+  const served = group.served||{};
+  // 收集餐點(排除飲料);套餐另立一筆「套餐」項
+  const mains=[];   // 主餐本體
+  const setItems=[]; // 套餐(先出)
+  (group.orders||[]).forEach(o=>{
+    (o.lines||[]).forEach((line,li)=>{
+      const baseKey=`${o.num}-${li}`;
+      if(line.custom){ // 員工自訂餐點(素湯以外的加點)也要能劃單
+        mains.push({key:baseKey,num:o.num,guest:o.guestName,name:`🖊 ${line.name}${line.qty>1?` ×${line.qty}`:""}`,setId:null,section:"主餐"});
+        return;
+      }
+      const item=findItem(line.itemId);
+      if(!item){
+        // 找不到對應品項 → 仍列出(避免主餐憑空消失),放「其他」讓夥伴看得到
+        if(line.itemId||line.name) mains.push({key:baseKey,num:o.num,guest:o.guestName,name:`⚠ ${line.name||line.itemId||"未知餐點"}`,setId:null,section:"其他"});
+        return;
+      }
+      if(isDrink(item)) return;
+      const cat=getItemCategory(item);
+      const setId=line.setMeal?line.setMeal.id:null;
+      if(setId){
+        // 套餐先出(湯品/麵包/甜點),用 key 加 -set
+        const setLabel = setId==="A"?"A套":setId==="B"?"B套":"C套";
+        setItems.push({key:baseKey+"-set",num:o.num,guest:o.guestName,setId,setLabel,
+          desc:setId==="B"?"甜點":setId==="A"?"湯品+麵包":"湯品"});
+      }
+      // 主餐本體(B套無主餐,只有甜點;B套不列主餐)
+      if(setId!=="B"){
+        let section;
+        if(isMainDish(item)||(setId&&setId!=="B")) section="主餐"; // 套餐(A/C)主餐一律歸主餐
+        else if(["甜點","小品"].includes(cat)) section="餐後";
+        else section="前菜";                        // 沙拉/前菜/其他
+        const catTag=isMainDish(item)?cat:"";        // 義大利麵/燉飯/披薩/早午餐
+        mains.push({key:baseKey,num:o.num,guest:o.guestName,name:`${item.name}${(line.qty||1)>1?` ×${line.qty}`:""}`,cat:catTag,setId,section});
+      }
+    });
+  });
+  const setCount={A:0,B:0,C:0};
+  setItems.forEach(r=>{ setCount[r.setId]=(setCount[r.setId]||0)+1; });
+  const allRows=[...setItems,...mains];
+  const doneCount=allRows.filter(r=>served[r.key]).length;
+
+  // 甜點倒數計時器(兩段獨立:已喊甜點、製作時間)
+  const DessertTimer=({label,color})=>{
+    const [remain,setRemain]=useState(0); // 剩餘秒數
+    const [running,setRunning]=useState(false);
+    const [inputMin,setInputMin]=useState("");
+    const intervalRef=useRef(null);
+    useEffect(()=>{
+      if(running&&remain>0){
+        intervalRef.current=setInterval(()=>{setRemain(r=>{if(r<=1){setRunning(false);return 0;}return r-1;});},1000);
+      }
+      return ()=>{ if(intervalRef.current) clearInterval(intervalRef.current); };
+    },[running,remain>0]);
+    const start=()=>{ const m=parseInt(inputMin); if(!m||m<=0) return; setRemain(m*60); setRunning(true); setInputMin(""); };
+    const stop=()=>{ setRunning(false); setRemain(0); };
+    const mm=Math.floor(remain/60), ss=remain%60;
+    const done=!running&&remain===0;
+    return (
+      <div style={{flex:1,background:"#fff",borderRadius:"10px",padding:"10px",border:`2px solid ${color}`,textAlign:"center"}}>
+        <div style={{fontSize:"11px",color:color,fontWeight:"700",marginBottom:"6px"}}>{label}</div>
+        {!running&&remain===0?(
+          <div style={{display:"flex",gap:"4px",alignItems:"center",justifyContent:"center"}}>
+            <input type="number" value={inputMin} onChange={e=>setInputMin(e.target.value)} placeholder="分鐘"
+              style={{width:"56px",padding:"7px 4px",fontSize:"14px",textAlign:"center",border:"1px solid #c8b89c",borderRadius:"8px",background:"#fff",color:"#2e2010"}}/>
+            <button onClick={start} style={{padding:"7px 12px",borderRadius:"8px",border:"none",background:color,color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>開始</button>
+          </div>
+        ):(
+          <div onClick={stop} style={{cursor:"pointer"}}>
+            <div style={{fontSize:"26px",fontWeight:"900",color:remain>0?color:"#c0392b",letterSpacing:"0.05em"}}>
+              {remain>0?`${mm}:${String(ss).padStart(2,"0")}`:"時間到"}
+            </div>
+            <div style={{fontSize:"9px",color:"#a08060",marginTop:"2px"}}>{remain>0?"點一下停止":"點一下重設"}</div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // 號碼晶片:未劃在前、已劃沉底
+  const NumChips=({items})=>{
+    const undone=items.filter(r=>!served[r.key]).sort((a,b)=>a.num-b.num);
+    const done=items.filter(r=>served[r.key]).sort((a,b)=>a.num-b.num);
+    return (
+      <div style={{display:"flex",flexWrap:"wrap",gap:"8px",alignItems:"center"}}>
+        {undone.map(r=>(
+          <button key={r.key} onClick={()=>onMark(r.key)}
+            style={{padding:"11px 16px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"15px",fontWeight:"700",background:"#f0e8d6",color:"#5a3a28",minWidth:"54px"}}>
+            {r.num}號
+          </button>
+        ))}
+        {done.length>0&&undone.length>0&&<div style={{width:"100%",height:"1px",background:"#e0d5c0",margin:"2px 0"}}/>}
+        {done.map(r=>(
+          <button key={r.key} onClick={()=>onMark(r.key)}
+            style={{padding:"9px 14px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"700",background:"#dff0df",color:"#5a9a5a",textDecoration:"line-through",minWidth:"50px"}}>
+            ✓{r.num}號
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  // 套餐區:依 A/C/B 分組
+  const SetSection=()=>{
+    if(setItems.length===0) return null;
+    const order=["A","C","B"];
+    const colors={A:"#3a6a8a",C:"#6a8a3a",B:"#8a5a8a"};
+    return (
+      <div style={{marginBottom:"18px"}}>
+        <div style={{fontSize:"15px",fontWeight:"900",color:"#6a4a2e",padding:"6px 2px",borderBottom:"2px solid #d0c0a8",marginBottom:"10px"}}>
+          🍲 套餐先出（{setItems.filter(r=>served[r.key]).length}/{setItems.length}）
+        </div>
+        {order.filter(s=>setItems.some(r=>r.setId===s)).map(s=>{
+          const list=setItems.filter(r=>r.setId===s);
+          const sample=list[0];
+          return (
+            <div key={s} style={{marginBottom:"12px",background:"#fff",borderRadius:"12px",padding:"10px 12px",border:"1px solid #e0d5c0"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}}>
+                <span style={{fontSize:"12px",fontWeight:"700",color:"#fff",background:colors[s],borderRadius:"8px",padding:"3px 12px"}}>{s}套</span>
+                <span style={{fontSize:"12px",color:"#8a6a4a"}}>{sample.desc}　×{list.length}（已出 {list.filter(r=>served[r.key]).length}）</span>
+              </div>
+              <NumChips items={list}/>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // 主餐區:同品項合併,各自列號碼
+  const MainSection=({title,items,emoji})=>{
+    if(items.length===0) return null;
+    const byItem={};
+    items.forEach(r=>{ (byItem[r.name]=byItem[r.name]||[]).push(r); });
+    return (
+      <div style={{marginBottom:"18px"}}>
+        <div style={{fontSize:"15px",fontWeight:"900",color:"#6a4a2e",padding:"6px 2px",borderBottom:"2px solid #d0c0a8",marginBottom:"10px"}}>
+          {emoji} {title}（{items.filter(r=>served[r.key]).length}/{items.length}）
+        </div>
+        {Object.entries(byItem).map(([name,list])=>(
+          <div key={name} style={{marginBottom:"10px",background:"#fff",borderRadius:"12px",padding:"10px 12px",border:"1px solid #e0d5c0"}}>
+            <div style={{fontSize:"14px",fontWeight:"700",color:"#3a2a1a",marginBottom:"8px"}}>
+              {list[0].cat?<span style={{fontSize:"11px",color:"#8a6a3a",background:"#f0e6d2",borderRadius:"5px",padding:"1px 6px",marginRight:"6px",fontWeight:"700"}}>{list[0].cat}</span>:null}
+              {name} <span style={{fontSize:"12px",color:"#8a6a4a"}}>×{list.length}（已出 {list.filter(r=>served[r.key]).length}）</span>
+            </div>
+            <NumChips items={list}/>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:400,background:"#f5f0e8",display:"flex",flexDirection:"column",overflowX:"hidden",fontFamily:"'Noto Sans TC',sans-serif"}}>
+      <div style={{padding:"10px 14px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <button onClick={onClose} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>🍽 夥伴劃單</div>
+          <div style={{fontSize:"10px",color:"#8a6a4a"}}>{group.name}・{group.date} {group.time}</div>
+        </div>
+        <div style={{fontSize:"13px",fontWeight:"700",color:doneCount===allRows.length&&allRows.length>0?"#2a6a2a":"#b05a10"}}>{doneCount}/{allRows.length}</div>
+      </div>
+      <div style={{padding:"8px 14px",background:"#faf4e8",display:"flex",gap:"8px",flexShrink:0,flexWrap:"wrap",alignItems:"center"}}>
+        {["A","B","C"].map(s=>setCount[s]>0&&(
+          <span key={s} style={{fontSize:"11px",fontWeight:"700",color:"#fff",background:s==="A"?"#3a6a8a":s==="C"?"#6a8a3a":"#8a5a8a",borderRadius:"8px",padding:"3px 10px"}}>{s}套 ×{setCount[s]}</span>
+        ))}
+        {doneCount===allRows.length&&allRows.length>0&&<span style={{fontSize:"12px",fontWeight:"700",color:"#2a6a2a"}}>✓ 全部出餐完成！</span>}
+      </div>
+
+      <div style={{flex:1,overflowY:"auto",overflowX:"hidden",padding:"12px 14px",width:"100%",boxSizing:"border-box"}}>
+        <SetSection/>
+        <MainSection title="前菜" emoji="🥗" items={mains.filter(r=>r.section==="前菜")}/>
+        <MainSection title="主餐" emoji="🍝" items={mains.filter(r=>r.section==="主餐")}/>
+        <MainSection title="其他" emoji="📋" items={mains.filter(r=>r.section==="其他")}/>
+        {mains.filter(r=>r.section==="餐後").length>0&&(
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"15px",fontWeight:"900",color:"#6a4a2e",padding:"6px 2px",borderBottom:"2px solid #d0c0a8",marginBottom:"10px"}}>🍰 甜點計時</div>
+            <div style={{display:"flex",gap:"8px"}}>
+              <DessertTimer label="已喊甜點" color="#b07840"/>
+              <DessertTimer label="製作時間" color="#8a5ab4"/>
+            </div>
+          </div>
+        )}
+        <MainSection title="餐後甜點" emoji="🍰" items={mains.filter(r=>r.section==="餐後")}/>
+      </div>
+    </div>
+  );
+}
+
+// ─── GROUP SUMMARY PAGE ───────────────────────────────────────────────────────
+function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onToggleVeggie, fromStaff, onArchiveMenu, onEditLineNote, onDeleteLine, onSetLineQty }) {
+  const [huadan, setHuadan] = useState(false);
+  const [hdPin, setHdPin] = useState(null); // null=關閉 ""=輸入中
+  const [addOpen, setAddOpen] = useState(false);   // 員工新增訂單彈窗
+  const [addPin, setAddPin] = useState(null);
+  const [addMode, setAddMode] = useState("new");   // new | merge
+  const [addNum, setAddNum] = useState("");
+  const [addName, setAddName] = useState("");
+  const [addLines, setAddLines] = useState([{name:"",price:"",qty:1}]);
+  const [addCat, setAddCat] = useState("brunch");
+  const [staffMode, setStaffMode] = useState(false);
+  const [smPin, setSmPin] = useState(null);
+  // 餐點封存(員工開啟時) —— 跟大訂追蹤表同一份資料,自動連動
+  const [gArchModal,setGArchModal]=useState(false);
+  const [gArchTime,setGArchTime]=useState("");
+  const [gArchPhoto,setGArchPhoto]=useState(null);
+  const [gArchBusy,setGArchBusy]=useState(false);
+  const [gArchPick,setGArchPick]=useState(false);
+  const [gArchPending,setGArchPending]=useState(null);
+  const [gStaffList,setGStaffList]=useState(null);
+  useEffect(()=>{ if(fromStaff) FS.loadDoc("staff").then(v=>{ if(Array.isArray(v)&&v.length>0) setGStaffList(v); }); },[fromStaff]);
+  const gNowStamp=()=>{ const d=new Date(); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const gPickPhoto=async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; setGArchBusy(true); try{ setGArchPhoto(await compressImage(f)); }catch(err){ window.alert("照片處理失敗，請再試一次"); } setGArchBusy(false); e.target.value=""; };
+  const gConfirmArch=async()=>{ setGArchBusy(true); let photoId=null; if(gArchPhoto){ photoId=`${group.id}_${Date.now()}`; await FS.saveDoc(`arch_${photoId}`,{img:gArchPhoto}); } setGArchPending({time:gArchTime||gNowStamp(),photoId}); setGArchBusy(false); setGArchModal(false); setGArchPhoto(null); setGArchPick(true); };
+  const gFinalizeArch=(operator)=>{ if(onArchiveMenu&&gArchPending) onArchiveMenu({...gArchPending,operator}); setGArchPick(false); setGArchPending(null); };
+  const isMember = group.memberType !== "none";
+  const allOrders = group.orders || [];
+  const [confirmCancel, setConfirmCancel] = useState(null); // {num, guestName}
+  const [noteOpen, setNoteOpen] = useState({});             // 第1項:哪幾號的備註欄展開了(預設全收起)
+  const grandTotal = allOrders.reduce((s, order) => s + orderTotal(order.lines || [], isMember), 0);
+  const allLines = allOrders.flatMap(o => o.lines || []);
+  const memberFeeInfo = calcMemberFee(allLines, group.memberType);
+  const grandSubtotal = grandTotal + memberFeeInfo.fee;
+  // 入會費 $100 不收 10% 服務費 → 餐點先加服務費,再加入會費
+  const grandTotalWithService = Math.round(grandTotal * 1.1) + memberFeeInfo.fee;
+
+  return (
+    <div style={S.page}>
+      {isLockedNow(group)&&(
+        <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
+          <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（{lockReason(group)}）</span>
+        </div>
+      )}
+      <style>{GS}</style>
+      <div style={{...S.header, paddingBottom:"10px"}}>
+        <button onClick={onBack} style={S.backBtn}>← 返回</button>
+        <div style={S.logo}>✦ 全組訂單總覽{fromStaff&&<span style={{fontSize:"11px",fontWeight:"800",background:"#b07840",color:"#fff",borderRadius:"6px",padding:"2px 8px",marginLeft:"8px",verticalAlign:"middle"}}>員工版</span>}</div>
+        <div style={{fontSize:"12px",color:"#aa8060",marginTop:"2px"}}>{group.name} · {group.date} {group.time}</div>
+        {(()=>{
+          const mt=group.memberType;
+          const mColor=mt==="new"?"#3f8f63":mt==="existing"?"#a86a20":mt==="private"?"#a85ab4":"#8a7a60";
+          const mBg=mt==="new"?"#e2f4ea":mt==="existing"?"#f6e8d2":mt==="private"?"#f2e4f6":"#f0eadf";
+          const mLabel=mt==="new"?"入會":mt==="existing"?"會員":mt==="private"?"包場":"非會員";
+          const MIcon = mt==="new"?IcoStar:mt==="existing"?IcoCrown:mt==="private"?IcoParty:IcoUser;
+          const chipS={display:"inline-flex",alignItems:"center",gap:"4px",borderRadius:"7px",padding:"4px 9px",fontSize:"12px",fontWeight:"800"};
+          return (
+            <div style={{display:"flex",gap:"6px",marginTop:"7px",flexWrap:"wrap"}}>
+              {group.code&&<span style={{...chipS,background:"#eef3f8",color:"#2a5a7a",border:"1px solid #bcd2e4"}}><IcoTag size={13} color="#2a5a7a"/>{group.code}</span>}
+              <span style={{...chipS,background:mBg,color:mColor,border:`1px solid ${mColor}55`}}><MIcon size={13} color={mColor}/>{mLabel}</span>
+              {group.headcount&&<span style={{...chipS,background:"#f0eadf",color:"#6a4a2e",border:"1px solid #d8c8b0"}}><IcoPeople size={13} color="#6a4a2e"/>{group.headcount}</span>}
+              {group.isVip&&<span style={{...chipS,background:"#f2e4f6",color:"#a85ab4",border:"1px solid #c88ad0"}}><IcoDoor size={13} color="#a85ab4"/>包廂</span>}
+              {(()=>{
+                const isBox=!!group.isVip;
+                // 包廂:金額低消 $6,000(不含服務費、不含入會費);一般:每位大人一份
+                const need=isBox?VIP_MIN_SPEND:adultsOfG(group);
+                if(need<=0) return null;
+                const got=isBox?grandTotal:lowConsumeCount(allOrders.flatMap(o=>o.lines||[]));
+                const ok=got>=need;
+                const fmt=(v)=>isBox?`$${v.toLocaleString()}`:`${v}`;
+                return (
+                  <div style={{width:"100%",marginTop:"6px",background:ok?"#eef8f0":"#fdf0f0",border:`2px solid ${ok?"#7ab88a":"#c02020"}`,borderRadius:"11px",padding:"10px 12px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap",marginBottom:"7px"}}>
+                      <span className={ok?"":"blinkTag"} style={{fontSize:"17px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>
+                        {ok?(isBox?"✓ 包廂低消已達標":"✓ 低消已達標"):(isBox?`⚠ 包廂低消還差 $${(need-got).toLocaleString()}`:`⚠ 低消還差 ${need-got} 份`)}
+                      </span>
+                      <span style={{flex:1}}/>
+                      <span style={{fontSize:"16px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>{fmt(got)} / {fmt(need)}</span>
+                    </div>
+                    <div style={{height:"11px",background:"#e8e0d8",borderRadius:"6px",overflow:"hidden"}}>
+                      <div className={ok?"":"blinkBar"} style={{width:`${Math.min(100,got/need*100)}%`,height:"100%",background:ok?"#2a8a5a":"#c02020",borderRadius:"6px",transition:"width .3s"}}/>
+                    </div>
+                    <div style={{fontSize:"13px",color:ok?"#3a7a5a":"#a03020",marginTop:"6px",lineHeight:"1.6",fontWeight:"700"}}>
+                      {isBox
+                        ? <>包廂低消 <b>${VIP_MIN_SPEND.toLocaleString()}</b>（餐點小計，不含 10% 服務費）</>
+                        : <>每位大人需一份<b>單點主餐</b>或<b>單點飲料</b>（{need} 位大人）</>}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })()}
+      </div>
+      {!fromStaff&&group.date&&!group.locked&&<DeadlineBar dateStr={group.date} compact/>}
+      <div style={{overflowY:"auto",flex:1,padding:"14px"}}>
+        {fromStaff&&group.archiveType==="menu"&&(
+          <div style={{background:"#f3ecfa",border:"1px solid #6a4a8a",borderRadius:"14px",padding:"12px 14px",marginBottom:"14px"}}>
+            <div style={{fontSize:"14px",color:"#6a3a8a",fontWeight:"800",marginBottom:"3px"}}>📦 餐點已封存</div>
+            {group.archiveTime&&<div style={{fontSize:"11px",color:"#7a6a8a"}}>🕒 {group.archiveTime}</div>}
+            {group.archiveBy&&<div style={{fontSize:"11px",color:"#7a6a8a"}}>👤 {group.archiveBy}</div>}
+            {(group.archiveSnaps||[]).length>0&&(group.archiveSnaps[group.archiveSnaps.length-1].photoId)&&(
+              <div style={{marginTop:"8px"}}><ArchivePhoto photoId={group.archiveSnaps[group.archiveSnaps.length-1].photoId}/></div>
+            )}
+          </div>
+        )}
+        {fromStaff&&(
+          <button onClick={()=>{setGArchTime(gNowStamp());setGArchPhoto(null);setGArchModal(true);}}
+            style={{width:"100%",padding:"12px",borderRadius:"12px",background:"#efe4f8",border:"1px solid #7a5a9a",color:"#6a3a8a",fontSize:"13px",fontWeight:"700",cursor:"pointer",marginBottom:"14px"}}>
+            📦 {group.archiveType==="menu"?"重新封存餐點（再拍一張）":"餐點封存（拍 POS 照片）"}
+          </button>
+        )}
+        {allOrders.length > 0 && (
+          <div style={{background:"#fff1e0",border:"2px solid #e87a30",borderRadius:"14px",padding:"16px 18px",marginBottom:"14px",boxShadow:"0 2px 12px rgba(232,122,48,0.3)"}}>
+            <div style={{fontSize:"15px",color:"#c05a10",fontWeight:"900",marginBottom:"8px"}}>⚠ 重要注意事項</div>
+            <div style={{fontSize:"13px",color:"#7a4a10",lineHeight:"2.0",fontWeight:"500"}}>
+              確認後訂單將<span style={{color:"#d04a10",fontWeight:"700"}}>鎖住無法改單</span>，需要更改餐點請提前告知，並在截止日期前修正完畢。
+            </div>
+            <div style={{fontSize:"13px",color:"#7a4a10",lineHeight:"2.0",fontWeight:"500",marginTop:"6px",paddingTop:"6px",borderTop:"1px solid #e8c8a0"}}>
+              因人力吃緊，<span style={{color:"#d04a10",fontWeight:"700"}}>用餐當天不會核單</span>，改單務必主動提早告知。
+            </div>
+            <div style={{fontSize:"13px",color:"#7a4a10",lineHeight:"2.0",fontWeight:"500",marginTop:"6px",paddingTop:"6px",borderTop:"1px solid #e8c8a0"}}>
+              ⏳ 現場加點會依照<span style={{color:"#d04a10",fontWeight:"700"}}>入單順序</span>排單製作，建議想吃的餐點先一次點齊。
+            </div>
+          </div>
+        )}
+        {allOrders.length > 0 && (()=>{
+          const mt=group.memberType;
+          const isNew=mt==="new", isOld=mt==="existing", isPrv=mt==="private";
+          const fee=isNew?100:0;
+          const label=isNew?"入會":isOld?"舊會員":isPrv?"包場":"不加入會員";
+          const MIcon=isNew?IcoStar:isOld?IcoCrown:isPrv?IcoParty:IcoUser;
+          const col=isNew?"#2a7a4a":isOld?"#a86a20":isPrv?"#a85ab4":"#8a7a60";
+          const bg =isNew?"#e6f4ec":isOld?"#f9efdc":isPrv?"#f5e8f8":"#f4efe6";
+          return (
+            <div style={{background:bg,borderRadius:"12px",padding:"11px 14px",marginBottom:"10px",border:`1.5px solid ${col}55`,display:"flex",alignItems:"center",gap:"9px"}}>
+              <MIcon size={19} color={col}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"14px",fontWeight:"800",color:col}}>{label}</div>
+                {isNew&&<div style={{fontSize:"10px",color:"#3a6a48",marginTop:"2px",lineHeight:"1.6"}}>整組一次收 $100，<b>不加10%服務費</b><br/>結帳時若有點<b>前菜</b>或<b>酒類</b>，此 $100 可折抵</div>}
+              </div>
+              <div style={{fontSize:"17px",fontWeight:"900",color:fee>0?col:"#a09070"}}>${fee}</div>
+            </div>
+          );
+        })()}
+        {allOrders.length === 0 ? (
+          <div style={{textAlign:"center",padding:"40px",color:"#5a3a28"}}>尚無人點餐</div>
+        ) : (
+          allOrders.map((order, oi) => {
+            const orderAmt = orderTotal(order.lines || [], isMember);
+            const orderAmtWithService = Math.round(orderAmt * 1.1);
+            return (
+              <div key={oi} style={{background:"#fdfaf4",borderRadius:"14px",padding:"14px",marginBottom:"10px",border:"1px solid #d8c8b0"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
+                    <span style={{fontSize:"25px",fontWeight:"800",color:"#8a5210"}}>{order.num}號</span>
+                    <span style={{fontSize:"21px",color:"#4a3520",fontWeight:"700"}}>{order.guestName}</span>
+                    {order.sentAt&&(()=>{
+                      const eds=order.editLog||[];
+                      const latest=eds.length>0?eds[eds.length-1]:order.sentAt;
+                      // 封存/已KEY 之後客人又改單 → POS 裡的單跟現在不一樣了,要閃
+                      const afterLock=editedAfterLock(group,order);
+                      return (
+                        <span style={{display:"inline-flex",alignItems:"center",gap:"5px",flexWrap:"wrap"}}>
+                          <span className={afterLock?"blinkTag":""}
+                            title={eds.length>0?`送單 ${order.sentAt}\n改單紀錄：\n${eds.join("\n")}`:""}
+                            style={{fontSize:afterLock?"13px":"12px",fontWeight:afterLock?"900":"700",whiteSpace:"nowrap",borderRadius:"5px",padding:"3px 8px",
+                              cursor:eds.length>0?"help":"default",
+                              color:eds.length>0?"#fff":"#7a6a58",
+                              background:eds.length>0?"#c06030":"#f2ece0"}}>
+                            {afterLock ? `⚠ 已封存後改單　${latest}`
+                              : eds.length>0 ? `最後更新 ${latest}　改過 ${eds.length} 次`
+                              : `送單 ${order.sentAt}`}
+                          </span>
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"14px",color:"#8a5210",fontWeight:"700"}}>${orderAmtWithService}</span>
+                    {fromStaff&&!group.locked&&(()=>{
+                      const on=!!noteOpen[order.num];
+                      const n=(order.lines||[]).filter(l=>!l.custom&&String(l.note||"").trim()).length;
+                      return (
+                        <button onClick={()=>setNoteOpen(p=>({...p,[order.num]:!on}))}
+                          title="展開這一組每道菜的備註輸入框"
+                          style={{padding:"4px 10px",borderRadius:"8px",fontSize:"11px",cursor:"pointer",fontWeight:"800",
+                            border:`1px solid ${n>0?"#c9752a":"#8a6a4a"}`,
+                            background:n>0?"#fff6ec":"none",
+                            color:n>0?"#a04010":"#c8a880"}}>
+                          {on?"收起備註":`備註${n>0?` (${n})`:""}`}
+                        </button>
+                      );
+                    })()}
+                    {onCancelOrder&&!group.locked&&(
+                      <button onClick={()=>setConfirmCancel({num:order.num,guestName:order.guestName})}
+                        style={{padding:"4px 10px",borderRadius:"8px",border:"1px solid #7a3030",background:"none",color:"#e87a5a",fontSize:"11px",cursor:"pointer"}}>
+                        取消
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {(order.lines || []).map((line, li) => {
+                  if (line.custom) {
+                    return (
+                      <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
+                        <div style={{fontSize:"12px",color:"#c89a5a",fontWeight:"700"}}>[客製]</div>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
+                          <span style={{color:"#5a4530"}}>{line.name}{line.qty>1?` ×${line.qty}`:""}</span>
+                          <span style={{color:"#9a7c5a"}}>${(Number(line.price)||0)*(line.qty||1)}</span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const item = findItem(line.itemId);
+                  if (!item) return null;
+                  const cat = getItemCategory(item);
+                  const price = linePrice(line, isMember);
+                  return (
+                    <div key={li} style={{marginBottom:"6px",paddingBottom:"6px",borderBottom:"1px solid #ffffff"}}>
+                      <div style={{fontSize:"12px",color:"#2a7a4a",fontWeight:"700"}}>{"["+cat+"]"}</div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:"15px"}}>
+                        <span style={{color:"#5a4530"}}>{item.name}{(line.qty||1)>1?<b style={{color:"#a04010"}}> ×{line.qty}</b>:null}</span>
+                        <span style={{color:"#9a7c5a"}}>${getItemPrice(item,isMember)}</span>
+                      </div>
+                      {(()=>{
+                        const it2=findItem(line.itemId);
+                        const parts=[];
+                        if(line.dressing) parts.push(`醬料:${line.dressing}`);
+                        if(line.ice) parts.push(`冰量:${line.ice}`);
+                        if(line.sugar) parts.push(`甜度:${line.sugar}`);
+                        if(line.mascot) parts.push(`造型:${mascotIco(line.mascot)} ${line.mascot}`);
+                        if(line.toggles&&line.toggles.length) parts.push(line.toggles.join("、"));
+                        return parts.length>0?<div style={{fontSize:"14px",fontWeight:"800",color:"#1a6a4a",marginTop:"4px",lineHeight:"1.5",
+                          background:"#eef7f0",border:"1.5px solid #8ac4a0",borderRadius:"7px",padding:"5px 9px"}}>{parts.join(" · ")}</div>:null;
+                      })()}
+                      {/* 特殊需求:只有夥伴能寫(客人在 LINE 說,我們幫他記) */}
+                      {fromStaff ? (
+                        noteOpen[order.num] ? (
+                        <div style={{marginTop:"5px"}}>
+                          <div style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"5px",flexWrap:"wrap"}}>
+                            {line.custom&&(
+                              <>
+                                <span style={{fontSize:"11px",color:"#8a7a60",fontWeight:"700"}}>數量</span>
+                                <button onClick={()=>onSetLineQty&&onSetLineQty(order.num,li,(line.qty||1)-1)}
+                                  style={{width:"28px",height:"28px",borderRadius:"7px",border:"1.5px solid #c8b89c",background:"#fff",color:"#6a4a2e",fontWeight:"900",cursor:"pointer"}}>−</button>
+                                <b style={{fontSize:"14px",color:"#6a4a2e",minWidth:"20px",textAlign:"center"}}>{line.qty||1}</b>
+                                <button onClick={()=>onSetLineQty&&onSetLineQty(order.num,li,(line.qty||1)+1)}
+                                  style={{width:"28px",height:"28px",borderRadius:"7px",border:"1.5px solid #c8b89c",background:"#fff",color:"#6a4a2e",fontWeight:"900",cursor:"pointer"}}>＋</button>
+                              </>
+                            )}
+                            <span style={{flex:1}}/>
+                            <button onClick={()=>{
+                                const nm=line.custom?line.name:((findItem(line.itemId)||{}).name||"這道");
+                                const who=window.prompt(`要刪掉「${nm}」?\n\n請輸入你的名字（會記進改單紀錄）`);
+                                if(who===null||!who.trim()) return;
+                                onDeleteLine&&onDeleteLine(order.num,li,who.trim());
+                              }}
+                              style={{fontSize:"11px",padding:"5px 11px",borderRadius:"7px",border:"1.5px solid #e0a0a0",background:"#fff",color:"#a03020",fontWeight:"800",cursor:"pointer"}}>🗑 刪除這道</button>
+                          </div>
+                          <input value={line.note||""} placeholder="特殊需求（例如：不要蔥、加飯）"
+                            onChange={e=>onEditLineNote&&onEditLineNote(order.num,li,e.target.value)}
+                            style={{width:"100%",boxSizing:"border-box",padding:"7px 9px",borderRadius:"8px",
+                              border:`1.5px solid ${line.note?"#c9752a":"#e0d5c0"}`,background:line.note?"#fff6ec":"#fffdf8",
+                              color:"#3a2a18",fontSize:"13px",fontWeight:line.note?"700":"400",fontFamily:"inherit",outline:"none"}}/>
+                          {line.note&&<div style={{fontSize:"11px",color:"#a04010",fontWeight:"800",marginTop:"2px",lineHeight:"1.5"}}>⚠ 客製化要先問過師傅可不可以做</div>}
+                        </div>
+                        ) : (line.note&&(
+                          <div style={{fontSize:"13px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"7px",padding:"5px 8px",marginTop:"4px"}}>⚠ 特殊需求：{line.note}</div>
+                        ))
+                      ) : (line.note&&(
+                        <div style={{fontSize:"13px",color:"#a04010",fontWeight:"800",background:"#fdf0e4",borderRadius:"7px",padding:"5px 8px",marginTop:"4px"}}>⚠ 特殊需求：{line.note}</div>
+                      ))}
+                      {line.setMeal && (()=>{
+                        const sm = SET_MEALS.find(s=>s.id===line.setMeal.id);
+                        const drinkPrice = line.setMeal.drink?.price || 0;
+                        const extra = Math.max(0, drinkPrice - 80);
+                        const dk = line.setMeal.drink;
+                        const dkParts = [];
+                        if(dk?.ice) dkParts.push(dk.ice);
+                        if(dk?.sugar) dkParts.push(dk.sugar);
+                        if(dk?.mascot) dkParts.push(`${mascotIco(dk.mascot)} ${dk.mascot}`);
+                        const hasSoup = ["A","C"].includes(line.setMeal.id);
+                        const veg = line.setMeal.veggieSoup;
+                        return (
+                          <div style={{fontSize:"15px",fontWeight:"800",color:"#1a6a3a",marginTop:"5px",lineHeight:"1.6",
+                            background:"#e6f6ea",border:"2px solid #3a9a5a",borderRadius:"8px",padding:"6px 9px"}}>
+                            🍱 {sm?.label}
+                            {hasSoup&&veg&&<span style={{color:"#dfeadf",fontWeight:"800",background:"#5fe08a",borderRadius:"4px",padding:"1px 7px",marginLeft:"5px"}}>🌿 素湯</span>}
+                            {dk && ` · ${dk.name}`}
+                            {!dk && group.setDrinkOnsite && <>
+                              {` (+$${sm?.price||0})`}
+                              <span style={{color:"#8a5210",background:"#ffe9c8",borderRadius:"4px",padding:"1px 7px",marginLeft:"5px",fontWeight:"900"}}>🥤 飲料現場點</span>
+                              <div style={{fontSize:"12px",fontWeight:"700",color:"#b06010",marginTop:"2px"}}>不含補差價飲料金額（依現場點的飲料為主）</div>
+                            </>}
+                            {dkParts.length>0 && ` · ${dkParts.join(" · ")}`}
+                            {dk && ` (+$${sm?.price||0} +$${extra})`}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  );
+                })}
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#7a5c3e",marginTop:"4px",borderTop:"1px solid #e0d5c0",paddingTop:"4px"}}>
+                  <span>小計</span><span style={{color:"#aa8060"}}>${orderAmt}</span>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#8a5210",fontWeight:"700",marginTop:"2px"}}>
+                  <span>含10%服務費</span><span>${orderAmtWithService}</span>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+      {/* Confirm cancel dialog */}
+      {confirmCancel&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+          <div style={{background:"#fdfaf4",borderRadius:"20px",padding:"24px",width:"100%",maxWidth:"300px",border:"1px solid #7a3030",textAlign:"center"}}>
+            <div style={{fontSize:"20px",marginBottom:"12px"}}>⚠️</div>
+            <div style={{fontSize:"15px",color:"#8a5210",fontWeight:"700",marginBottom:"8px"}}>確認取消訂單？</div>
+            <div style={{fontSize:"13px",color:"#aa8060",marginBottom:"20px"}}>
+              {confirmCancel.num}號 {confirmCancel.guestName} 的訂單將被取消，此動作無法復原。
+            </div>
+            <div style={{display:"flex",gap:"10px"}}>
+              <button onClick={()=>setConfirmCancel(null)}
+                style={{flex:1,padding:"12px",borderRadius:"12px",background:"#ffffff",border:"1px solid #c8b89c",color:"#aa8060",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>
+                不取消
+              </button>
+              <button onClick={()=>{onCancelOrder(confirmCancel.num);setConfirmCancel(null);}}
+                style={{flex:1,padding:"12px",borderRadius:"12px",background:"#fbdcdc",border:"none",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>
+                確認取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {huadan&&<HuadanPage group={group} onClose={()=>setHuadan(false)}
+        onMark={(lineKey)=>{ if(onCancelOrder) onCancelOrder(-98,{lineKey}); }}/>}
+      {hdPin!==null&&(
+        <div style={{position:"fixed",inset:0,zIndex:350,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.8)"}} onClick={()=>setHdPin(null)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #c8b89c",borderRadius:"16px",padding:"18px",width:"240px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"10px",textAlign:"center"}}>輸入員工密碼</div>
+            <input type="password" autoFocus value={hdPin} onChange={e=>setHdPin(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&hdPin==="9015"){setHdPin(null);setHuadan(true);}}}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",textAlign:"center",marginBottom:"10px"}}/>
+            <button onClick={()=>{if(hdPin==="9015"){setHdPin(null);setHuadan(true);}}}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+          </div>
+        </div>
+      )}
+      <div style={{padding:"10px 16px 0",background:"#f5efe2",display:"grid",gridTemplateColumns:fromStaff?"1fr 1fr":"1fr",gap:"8px"}}>
+        {!fromStaff&&(
+          <button onClick={()=>setHdPin("")}
+            style={{padding:"9px 6px",borderRadius:"10px",background:"#e2f0e2",border:"1px solid #9ac09a",color:"#2a6a3a",fontSize:"13px",fontWeight:"800",cursor:"pointer",lineHeight:"1.3"}}>
+            🍽 夥伴劃單<div style={{fontSize:"9px",fontWeight:"400",opacity:0.75}}>需員工密碼</div>
+          </button>
+        )}
+        {fromStaff&&(
+          <button onClick={()=>setAddOpen(true)}
+            style={{padding:"10px 6px",borderRadius:"10px",background:"#f0e4f4",border:"1px solid #c0a0d0",color:"#6a3a8a",fontSize:"13px",fontWeight:"800",cursor:"pointer",lineHeight:"1.3"}}>
+            ➕ 員工新增訂單<div style={{fontSize:"9px",fontWeight:"400",opacity:0.75}}>客製餐點</div>
+          </button>
+        )}
+      </div>
+      {smPin!==null&&(
+        <div style={{position:"fixed",inset:0,zIndex:350,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.8)"}} onClick={()=>setSmPin(null)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #c8b89c",borderRadius:"16px",padding:"18px",width:"240px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"10px",textAlign:"center"}}>輸入員工密碼</div>
+            <input type="password" autoFocus value={smPin} onChange={e=>setSmPin(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&smPin==="9015"){setSmPin(null);setStaffMode(true);}}}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",textAlign:"center",marginBottom:"10px",boxSizing:"border-box"}}/>
+            <button onClick={()=>{if(smPin==="9015"){setSmPin(null);setStaffMode(true);}}}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"none",background:"#3a7a5a",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+          </div>
+        </div>
+      )}
+      {addPin!==null&&(
+        <div style={{position:"fixed",inset:0,zIndex:350,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.8)"}} onClick={()=>setAddPin(null)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #c8b89c",borderRadius:"16px",padding:"18px",width:"240px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"10px",textAlign:"center"}}>輸入員工密碼</div>
+            <input type="password" autoFocus value={addPin} onChange={e=>setAddPin(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&addPin==="9015"){setAddPin(null);setAddOpen(true);}}}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",textAlign:"center",marginBottom:"10px",boxSizing:"border-box"}}/>
+            <button onClick={()=>{if(addPin==="9015"){setAddPin(null);setAddOpen(true);}}}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>確認</button>
+          </div>
+        </div>
+      )}
+      {gArchModal&&(
+        <div style={{position:"fixed",inset:0,zIndex:355,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.85)",padding:"16px"}} onClick={()=>!gArchBusy&&setGArchModal(false)}>
+          <div style={{background:"#f5efe2",borderRadius:"18px",padding:"18px",width:"100%",maxWidth:"340px",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"15px",color:"#6a3a8a",fontWeight:"800",textAlign:"center",marginBottom:"4px"}}>📦 封存這筆訂單</div>
+            <div style={{fontSize:"11px",color:"#7a5c3e",textAlign:"center",marginBottom:"12px"}}>{group.name}（{group.date} {group.time}）</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",fontWeight:"700",marginBottom:"6px"}}>封存日期時間</div>
+            <input value={gArchTime} onChange={e=>setGArchTime(e.target.value)}
+              style={{width:"100%",padding:"11px",borderRadius:"10px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"14px",marginBottom:"4px",boxSizing:"border-box"}}/>
+            <div style={{fontSize:"11px",color:"#c06030",marginBottom:"12px",fontWeight:"700"}}>⚠ 請改成「POS 照片上」的時間，不是現在時間</div>
+            <div style={{fontSize:"12px",color:"#7a5c3e",fontWeight:"700",marginBottom:"6px"}}>POS 照片（選填）</div>
+            {gArchPhoto?(
+              <div style={{position:"relative",marginBottom:"12px"}}>
+                <img src={gArchPhoto} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
+                <button onClick={()=>setGArchPhoto(null)} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
+              </div>
+            ):(
+              <label style={{display:"block",textAlign:"center",padding:"14px",borderRadius:"8px",border:"1.5px dashed #c0a880",background:"#faf4e8",color:"#9a6a30",fontSize:"13px",fontWeight:"700",cursor:"pointer",marginBottom:"12px"}}>
+                📷 拍照 / 選照片
+                <input type="file" accept="image/*" onChange={gPickPhoto} style={{display:"none"}}/>
+              </label>
+            )}
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setGArchModal(false)} disabled={gArchBusy}
+                style={{flex:1,padding:"11px",borderRadius:"10px",background:"transparent",border:"1px solid #ddd0bc",color:"#5a3a28",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={gConfirmArch} disabled={gArchBusy}
+                style={{flex:2,padding:"11px",borderRadius:"10px",background:gArchBusy?"#b0a088":"#8a6a4a",border:"none",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:gArchBusy?"default":"pointer"}}>{gArchBusy?"處理中…":"確認封存 →"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {gArchPick&&<StaffPicker staffList={gStaffList} onSelect={n=>gFinalizeArch(n)} onClose={()=>{setGArchPick(false);setGArchPending(null);}}/>}
+      {addOpen&&(
+        <div style={{position:"fixed",inset:0,zIndex:360,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.85)",padding:"16px"}} onClick={()=>setAddOpen(false)}>
+          <div style={{background:"#fdfaf4",border:"1px solid #c8b89c",borderRadius:"16px",padding:"18px",width:"100%",maxWidth:"340px",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:"15px",color:"#8a5210",fontWeight:"700",marginBottom:"12px",textAlign:"center"}}>➕ 員工新增客人訂單</div>
+            <div style={{display:"flex",gap:"8px",marginBottom:"12px"}}>
+              <button onClick={()=>setAddMode("new")} style={{flex:1,padding:"9px",borderRadius:"8px",border:`1.5px solid ${addMode==="new"?"#2a7a4a":"#3a2a1a"}`,background:addMode==="new"?"#dff0e6":"transparent",color:addMode==="new"?"#1a6a3a":"#aa8060",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>開新訂單</button>
+              <button onClick={()=>setAddMode("merge")} style={{flex:1,padding:"9px",borderRadius:"8px",border:`1.5px solid ${addMode==="merge"?"#2a7a4a":"#3a2a1a"}`,background:addMode==="merge"?"#dff0e6":"transparent",color:addMode==="merge"?"#1a6a3a":"#aa8060",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>加入現有號碼</button>
+            </div>
+            {addMode==="merge"
+              ? <input value={addNum} onChange={e=>setAddNum(e.target.value.replace(/\D/g,""))} placeholder="輸入客人號碼（例：3）" inputMode="numeric" style={{width:"100%",padding:"10px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",marginBottom:"10px",boxSizing:"border-box"}}/>
+              : <input value={addName} onChange={e=>setAddName(e.target.value)} placeholder="客人姓名（不填就顯示：JINHER 夥伴幫點）" style={{width:"100%",padding:"10px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"14px",marginBottom:"10px",boxSizing:"border-box"}}/>}
+            <div style={{fontSize:"12px",color:"#aa8060",fontWeight:"700",marginBottom:"6px"}}>餐點（菜單沒有的自己打，例：素湯）</div>
+            {/* 從菜單選(有金額自動帶入);系統沒有的才用下面自己打 */}
+            <div style={{background:"#faf6ee",borderRadius:"9px",padding:"9px",marginBottom:"9px"}}>
+              <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",marginBottom:"6px"}}>從菜單選（點一下加入，金額自動帶）</div>
+              <select value={addCat} onChange={e=>setAddCat(e.target.value)}
+                style={{width:"100%",boxSizing:"border-box",padding:"8px",borderRadius:"8px",border:"1px solid #c8b89c",background:"#fff",color:"#2e2010",fontSize:"13px",fontWeight:"700",marginBottom:"7px"}}>
+                {[...FOOD_CATS,...DRINK_CATS].map(c=><option key={c} value={c}>{MENU[c]?.label||c}</option>)}
+              </select>
+              <div style={{display:"flex",gap:"5px",flexWrap:"wrap",maxHeight:"188px",overflowY:"auto"}}>
+                {(MENU[addCat]?.items||[]).map(it=>{
+                  const pr=getItemPrice(it, group.memberType==="existing"||group.memberType==="new");
+                  return (
+                    <button key={it.id} onClick={()=>setAddLines(p=>{
+                        const idx=p.findIndex(x=>x.name===it.name);
+                        if(idx>=0) return p.map((x,j)=>j!==idx?x:{...x,qty:(x.qty||1)+1});
+                        const blank=p.findIndex(x=>!x.name.trim());
+                        const row={itemId:it.id,name:it.name,price:String(pr),qty:1};   // 帶 itemId → 低消/入會費折抵才判得出主餐、飲料、酒
+                        return blank>=0 ? p.map((x,j)=>j===blank?row:x) : [...p,row];
+                      })}
+                      style={{padding:"7px 10px",borderRadius:"8px",border:"1.5px solid #d8c8b0",background:"#fff",color:"#5a4030",fontSize:"12px",fontWeight:"700",cursor:"pointer",textAlign:"left"}}>
+                      {it.name}<span style={{color:"#9c5a1c",marginLeft:"5px",fontWeight:"800"}}>${pr}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{fontSize:"11px",color:"#a08a70",marginBottom:"5px"}}>菜單沒有的，在下面自己打名稱和金額：</div>
+            {addLines.map((ln,i)=>(
+              <div key={i} style={{marginBottom:"6px"}}>
+              <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+                <input value={ln.name} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,name:e.target.value,itemId:undefined}))} placeholder="餐點名稱" style={{flex:2,padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",minWidth:0,boxSizing:"border-box"}}/>
+                <input value={ln.price} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,price:e.target.value.replace(/\D/g,"")}))} placeholder="$" inputMode="numeric" style={{width:"56px",padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",boxSizing:"border-box"}}/>
+                <input value={ln.qty} onChange={e=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,qty:Math.max(1,parseInt(e.target.value)||1)}))} inputMode="numeric" style={{width:"40px",padding:"8px",borderRadius:"8px",border:"1px solid #d0c0a8",background:"#ffffff",color:"#3a2a1a",fontSize:"13px",boxSizing:"border-box"}}/>
+                {addLines.length>1&&<button onClick={()=>setAddLines(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#e87a5a",cursor:"pointer",fontSize:"16px"}}>✕</button>}
+              </div>
+              {ln.name.trim()&&(
+                ln.itemId
+                  ? <div style={{fontSize:"11px",color:"#2a7a4a",fontWeight:"700",marginTop:"4px",paddingLeft:"2px"}}>✓ 菜單品項，低消自動計算</div>
+                  : <div style={{display:"flex",alignItems:"center",gap:"7px",marginTop:"4px",paddingLeft:"2px"}}>
+                      <button onClick={()=>setAddLines(p=>p.map((x,j)=>j!==i?x:{...x,lcSkip:!x.lcSkip}))}
+                        style={{padding:"4px 9px",borderRadius:"7px",fontSize:"11px",fontWeight:"800",cursor:"pointer",
+                          border:`1.5px solid ${ln.lcSkip?"#c8b89c":"#3a7a5a"}`,
+                          background:ln.lcSkip?"#f2ece0":"#dff0e6",
+                          color:ln.lcSkip?"#a08a70":"#1a6a3a"}}>
+                        {ln.lcSkip?"✕ 不算低消":"✓ 算低消"}
+                      </button>
+                      <span style={{fontSize:"10px",color:"#a08a70"}}>{ln.lcSkip?"加購、配料類":"主餐或飲料"}</span>
+                    </div>
+              )}
+              </div>
+            ))}
+            <div style={{marginBottom:"10px",background:"#f2f8f2",border:"1.5px solid #a8ccae",borderRadius:"9px",padding:"8px 10px"}}>
+              <div style={{fontSize:"12px",color:"#2a6a3a",fontWeight:"800",marginBottom:"6px"}}>🍱 套餐升級（點一下加一行，數量自己改）</div>
+              <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                {SET_MEALS.map(sm=>(
+                  <button key={sm.id} title={sm.desc}
+                    onClick={()=>setAddLines(p=>{
+                      const i=p.findIndex(x=>x.name===sm.label);
+                      if(i>=0) return p.map((x,j)=>j===i?{...x,qty:(x.qty||1)+1}:x);   // 已經有就 +1
+                      const row={name:sm.label,price:String(sm.price),qty:1,lcSkip:true};  // 套餐不算低消
+                      const blank=p.findIndex(x=>!x.name.trim());
+                      return blank>=0 ? p.map((x,j)=>j===blank?row:x) : [...p,row];
+                    })}
+                    style={{padding:"7px 11px",borderRadius:"8px",border:"1.5px solid #3a9a5a",background:"#fff",color:"#1a6a3a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
+                    ＋{sm.label}<span style={{color:"#9c5a1c",marginLeft:"5px"}}>${sm.price}</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{fontSize:"10px",color:"#5a8a6a",marginTop:"5px",lineHeight:"1.6"}}>
+                只加套餐升級費，飲料不含在內（現場 POS 點）。套餐不算低消，已自動標「不算低消」。
+              </div>
+            </div>
+            <button onClick={()=>setAddLines(p=>[...p,{name:"",price:"",qty:1}])} style={{fontSize:"12px",background:"none",border:"1px dashed #6a4a2a",borderRadius:"8px",color:"#c89a5a",padding:"6px",width:"100%",cursor:"pointer",marginBottom:"12px"}}>+ 再加一道</button>
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>{setAddOpen(false);setAddLines([{name:"",price:"",qty:1}]);setAddNum("");setAddName("");}} style={{flex:1,padding:"11px",borderRadius:"10px",background:"#ffffff",border:"1px solid #c8b89c",color:"#aa8060",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{
+                const lines=addLines.filter(l=>l.name.trim()).map(l=>{
+                  const row={custom:true,name:l.name.trim(),price:parseInt(l.price)||0,qty:l.qty||1};
+                  if(l.itemId) row.itemId=l.itemId;     // 從菜單選的:靠 itemId 自動算低消
+                  else if(l.lcSkip) row.lcSkip=true;    // 自己打的:預設算低消,除非夥伴標「不算低消」
+                  return row;
+                });
+                if(lines.length===0) return;
+                if(addMode==="merge"&&!addNum.trim()) return;
+                onAddStaffOrder&&onAddStaffOrder({mode:addMode,num:addNum,guestName:addName.trim()||"JINHER 夥伴幫點",lines});
+                setAddOpen(false);setAddLines([{name:"",price:"",qty:1}]);setAddNum("");setAddName("");
+              }} style={{flex:2,padding:"11px",borderRadius:"10px",background:"#3a7a5a",border:"none",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>儲存</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {!fromStaff&&<RefundSection group={group} S={S} onSaveSig={(type,dataUrl,time)=>{
+        if(onCancelOrder) onCancelOrder(-99, {sigType:type, sig:dataUrl, time});
+      }}/>}
+      {allOrders.length > 0 && (
+        <div style={{padding:"14px 16px 24px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#7a5c3e",marginBottom:"4px"}}>
+            <span>全組小計（{allOrders.length}人）{memberFeeInfo.fee>0?<span style={{fontSize:"11px",fontWeight:"700",color:"#2a7a4a"}}>　含入會 $100</span>:null}</span>
+            <span style={{color:"#aa8060"}}>${grandSubtotal}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:"20px",color:"#8a5210",fontWeight:"700",marginTop:"4px"}}>
+            <span>全組含10%服務費{memberFeeInfo.fee>0?<span style={{fontSize:"11px",fontWeight:"600",color:"#2a7a4a"}}><br/>（含入會$100，入會費不收服務費）</span>:null}</span>
+            <span>${grandTotalWithService}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── INFO CARD ────────────────────────────────────────────────────────────────
+function InfoCard({ title, summary, detail }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:"#f5f0e8",borderRadius:"14px",marginBottom:"10px",overflow:"hidden",border:"1px solid #e0d5c0"}}>
+      <div onClick={()=>setOpen(p=>!p)}
+        style={{padding:"14px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:"14px",fontWeight:"700",color:"#a09070"}}>{title}</div>
+          <div style={{fontSize:"12px",color:"#7a5c3e",marginTop:"2px"}}>{summary}</div>
+        </div>
+        <div style={{fontSize:"16px",color:"#b07840",fontWeight:"700",marginLeft:"10px",flexShrink:0}}>
+          {open?"▲":"▼"}
+        </div>
+      </div>
+      {open&&(
+        <div style={{padding:"0 16px 14px",borderTop:"1px solid #e0d5c0"}}>
+          <div style={{fontSize:"13px",color:"#5a3a28",lineHeight:"1.8",whiteSpace:"pre-line",marginTop:"10px"}}>
+            {detail}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── HOME PAGE ────────────────────────────────────────────────────────────────
+function HomePage({ onEnterCode, onEnterOrder, onStaff }) {
+  const [code,setCode]=useState("");
+  const [num,setNum]=useState("");
+  const [mode,setMode]=useState("new");
+  const [err,setErr]=useState("");
+
+  const handleGo=()=>{
+    const c=code.trim();
+    if(!c){setErr("請輸入代碼");return;}
+    if(mode==="edit"){
+      const n=parseInt(num.trim());
+      if(!n){setErr("請輸入號碼");return;}
+      onEnterOrder(c,n,setErr);
+    } else if(mode==="summary"){
+      onEnterCode(c,setErr,true);
+    } else {
+      onEnterCode(c,setErr);
+    }
+  };
+
+  return(
+    <div style={S.page}>
+      <style>{GS}</style>
+      <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"32px 24px"}}>
+        <div style={{textAlign:"center",marginBottom:"32px"}}>
+          <div style={{fontSize:"11px",color:"#8b5e3c",letterSpacing:"0.25em",marginBottom:"12px"}}>✦  W E L C O M E  ✦</div>
+          <div style={{fontSize:"32px",fontFamily:"'Noto Serif TC',serif",fontWeight:"700",color:"#8a5210",letterSpacing:"0.06em",marginBottom:"6px"}}>今鶴 JINHER</div>
+          <div style={{fontSize:"12px",color:"#5a3a28",letterSpacing:"0.1em"}}>線上點餐系統</div>
+        </div>
+        <div style={{background:"#fff2e0",border:"2.5px solid #e08030",borderRadius:"14px",padding:"13px 15px",marginBottom:"18px"}}>
+          <div style={{fontSize:"14px",fontWeight:"900",color:"#c03a10",textAlign:"center",marginBottom:"6px"}}>⏰ 請務必在截止時間前完成點餐</div>
+          <div style={{fontSize:"12px",color:"#a05a10",lineHeight:"1.85",fontWeight:"700"}}>
+            ・<b>六、日用餐 → 該週五 12:00</b> 截止<br/>
+            ・其他日期用餐 → <b>用餐前一天 12:00</b> 截止<br/>
+            <span style={{color:"#c02020"}}>・逾時<u>無法線上點餐</u>,當天需<u>現場點餐、現場排單製作</u>,<b style={{fontSize:"13px"}}>等候約 40 分鐘以上</b></span>
+          </div>
+          <div style={{fontSize:"11px",color:"#8a6a4a",marginTop:"6px",textAlign:"center",lineHeight:"1.6"}}>
+            輸入代碼後會顯示您這組的<b>確切截止時間</b>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
+          {[["new","首次點餐"],["edit","查看／修改訂單"],["summary","全組訂單總覽"]].map(([m,l])=>(
+            <button key={m} onClick={()=>{setMode(m);setErr("");}}
+              style={{flex:1,padding:"10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"700",
+                background:mode===m?"#b07840":"#fdfaf4",color:mode===m?"#fff":"#7a5c3e"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+        {/* Info Sections - only show for new order mode */}
+        {mode==="new"&&[
+          {id:"1", title:"低消", summary:"單點主餐或飲料", detail:"5歲或以上需點單點主餐或飲料，套餐、前菜和甜點都不算低消。"},
+          {id:"2", title:"線上點餐用意", summary:"減少等待、提升用餐品質", detail:"是為了讓大組訂位減少等待餐點，如果覺得有困難，無法在截止時間前點完的話，可以更改為現場點餐，視現場狀況等待40-50分鐘。"},
+          {id:"3", title:"點餐截止時間", summary:"平日前一天12:00 / 假日週五12:00 / 國定假日前一天12:00", detail:"【平日訂位（週二至週五）】\n前一天中午12:00前完成點餐。\n\n【假日訂位（週六、週日）】\n該週禮拜五中午12:00前完成。\n\n【國定假日訂位】\n不論落在週一至週五哪一天，都需在用餐前一天中午12:00前完成。\n\n【其他說明】\n本店無客服，都是現場服務人員，為專注服務現場客人，無法隨時回訊息，收單後統一回覆。\n禮拜五17:00後至禮拜日無法回覆訊息，請見諒，感謝耐心等候！"},
+          {id:"4", title:"座位安排", summary:"依現場狀況安排，不可指定", detail:"座位依照現場狀況安排，不可指定位置。如需指定位置，須額外支付包場費用。"},
+        ].map(info=>(
+          <InfoCard key={info.id} title={info.title} summary={info.summary} detail={info.detail}/>
+        ))}
+        <div style={{background:"#fdfaf4",borderRadius:"18px",padding:"20px",border:"1px solid #8a6a3a"}}>
+          <div style={{fontSize:"14px",color:"#8a5210",fontWeight:"700",marginBottom:"4px"}}>
+            {mode==="new"?"輸入訂位點餐代碼":mode==="summary"?"輸入訂位代碼":"輸入代碼 + 您的號碼"}
+          </div>
+          <div style={{fontSize:"12px",color:"#8a6a4a",marginBottom:"12px"}}>
+            {mode==="new"?"由訂位負責人提供，共3碼數字":mode==="summary"?"查看全組所有人的餐點與總金額":"重新進入查看並修改您的訂單"}
+          </div>
+          <input value={code} onChange={e=>{setCode(e.target.value);setErr("");}}
+            placeholder="代碼（3碼）" maxLength={3}
+            style={{...S.input,fontSize:"22px",letterSpacing:"0.2em",textAlign:"center",marginBottom:"10px",background:"#fdf7ea",color:"#2e2010",border:"2px solid #c9a45c",fontWeight:"800"}}/>
+          {mode==="edit"&&(
+            <input value={num} onChange={e=>{setNum(e.target.value);setErr("");}}
+              placeholder="您的號碼（如：1）" type="number"
+              style={{...S.input,fontSize:"16px",textAlign:"center",marginBottom:"10px"}}/>
+          )}
+          {mode==="summary"&&(
+            <div style={{fontSize:"12px",color:"#2a7a4a",marginBottom:"10px",padding:"8px 12px",background:"#e2f2e8",borderRadius:"8px",border:"1px solid #7ab88a"}}>
+              📋 輸入代碼即可查看全組所有人的點餐
+            </div>
+          )}
+          {err&&<div style={{fontSize:"13px",color:"#c04040",marginBottom:"8px",fontWeight:"600"}}>{err}</div>}
+          <button disabled={!code.trim()} onClick={handleGo}
+            style={{...S.primaryBtn,opacity:!code.trim()?0.35:1}}>
+            {mode==="new"?"進入點餐 →":mode==="summary"?"查看全組訂單 →":"查看訂單 →"}
+          </button>
+        </div>
+      </div>
+      <div style={{padding:"0 24px 28px"}}>
+        <button onClick={onStaff} style={S.ghostBtn}>員工入口</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [page,setPage]=useState("home");
+  const [groups,setGroupsState]=useState([]);
+  const [loaded,setLoaded]=useState(false);
+  const [activeGroup,setActiveGroup]=useState(null);
+  const [summaryFromStaff,setSummaryFromStaff]=useState(false);
+  const [existingOrder,setExistingOrder]=useState(null);
+  const [staffPin,setStaffPin]=useState("");
+  const [showPin,setShowPin]=useState(false);
+  const [pinErr,setPinErr]=useState("");
+  const [syncStatus,setSyncStatus]=useState("連線中...");
+  const unsubRef = useRef(null);
+
+  // Load initial data + subscribe to real-time updates
+  useEffect(()=>{
+    FS.loadGroups().then(data=>{
+      if(data&&Array.isArray(data)&&data.length>0) setGroupsState(data);
+      else setGroupsState(DEMO);
+      setLoaded(true);
+      setSyncStatus("已連線 🔥");
+    }).catch(()=>{
+      setGroupsState(DEMO);
+      setLoaded(true);
+      setSyncStatus("離線模式");
+    });
+
+    // Real-time listener
+    try {
+      unsubRef.current = FS.subscribeGroups((data,pending)=>{
+        if(data&&Array.isArray(data)) {
+          // 別讓即時同步把「剛在本機按下、還沒存完」的修改蓋掉(例如轉入追蹤表)
+          if(pending) return;                                   // 自己樂觀寫入的回音,本機已有資料
+          if(Date.now()-lastLocalEdit.current < 2500) return;   // 剛改過,先別被伺服器舊資料覆蓋
+          setGroupsState(data);
+          setSyncStatus("即時同步 ✓");
+        }
+      });
+    } catch(e) {}
+
+    return ()=>{ if(unsubRef.current) unsubRef.current(); };
+  },[]);
+
+  // Save to Firestore whenever groups change (debounced)
+  const saveTimer = useRef(null);
+  const lastLocalEdit = useRef(0);
+  const setGroups = (updater) => {
+    lastLocalEdit.current = Date.now();   // 標記剛在本機改過,讓即時同步暫時別覆蓋
+    setGroupsState(prev=>{
+      const next = typeof updater==="function" ? updater(prev) : updater;
+      // Debounce saves
+      if(saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(()=>{
+        FS.saveGroups(next).catch(()=>{});
+        try { localStorage.setItem("jinher_groups", JSON.stringify(next)); } catch(e) {}
+      }, 500);
+      return next;
+    });
+  };
+
+  const enterCode=(code,setErr,isSummary=false)=>{
+    const g=groups.find(x=>x.code===code);
+    if(!g){setErr("找不到此代碼，請確認後重試");return;}
+    if(g.cancelled){setErr("此訂位已取消");return;}
+    if(!isSummary && isLockedNow(g)){
+      setErr(`⚠ 訂單已鎖定（${lockReason(g)}），如需協助請洽現場夥伴`);
+      return;
+    }
+    setActiveGroup(g);
+    setExistingOrder(null);
+    setSummaryFromStaff(false);
+    setPage(isSummary?"summary":"order");
+  };
+
+  const openStaffSummary=(g)=>{ setActiveGroup(g); setExistingOrder(null); setSummaryFromStaff(true); setPage("summary"); };
+
+  const enterOrder=(code,num,setErr)=>{
+    const g=groups.find(x=>x.code===code);
+    if(!g){setErr("找不到此代碼");return;}
+    if(g.cancelled){setErr("此訂位已取消");return;}
+    if(isLockedNow(g)){setErr(`⚠ 訂單已鎖定（${lockReason(g)}），如需協助請洽現場夥伴`);return;}
+    const order=g.orders.find(o=>o.num===num);
+    if(!order){setErr(`找不到 ${num} 號訂單，請確認號碼`);return;}
+    setActiveGroup(g);
+    setExistingOrder(order);
+    setPage("order");
+  };
+
+  const submitOrder=(orderData)=>{
+    const _now=new Date();
+    const _stamp=`${_now.getMonth()+1}/${_now.getDate()} ${String(_now.getHours()).padStart(2,"0")}:${String(_now.getMinutes()).padStart(2,"0")}`;
+    setGroups(prev=>prev.map(g=>{
+      if(g.id!==activeGroup.id) return g;
+      const existing=g.orders.find(o=>o.num===orderData.num);
+      if(existing) {
+        // 改單:記錄每次修改的時間
+        return {...g,orders:g.orders.map(o=>o.num!==orderData.num?o:{...o,...orderData,
+          sentAt:o.sentAt||_stamp,
+          editLog:[...(o.editLog||[]),_stamp]})};
+      }
+      // New order: use max num + 1 to avoid duplicates even after deletions
+      const maxNum = g.orders.reduce((max, o) => Math.max(max, o.num || 0), 0);
+      const correctNum = maxNum + 1;
+      const finalOrder = {...orderData, num: correctNum, orderLocked: false, sentAt:_stamp, editLog:[]};
+      return {...g,orders:[...g.orders,finalOrder]};
+    }));
+    // Update existingOrder so user can view/edit after submit
+    setExistingOrder(orderData);
+  };
+
+  if(!loaded) return(
+    <div style={{minHeight:"100vh",background:"#f5efe2",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"12px"}}>
+      <style>{GS}</style>
+      <div style={{fontSize:"24px",color:"#8a5210",fontFamily:"'Noto Serif TC',serif"}}>今鶴 JINHER</div>
+      <div style={{fontSize:"12px",color:"#5a3a28"}}>連線中...</div>
+    </div>
+  );
+
+  if(page==="staff") return <StaffPage onBack={()=>setPage("home")} groups={groups} setGroups={setGroups} onOpenSummary={openStaffSummary}/>;
+  if(page==="summary"&&activeGroup) {
+    const liveGroup = groups.find(g=>g.id===activeGroup.id) || activeGroup;
+    return <GroupSummaryPage group={liveGroup} fromStaff={summaryFromStaff} onBack={()=>setPage(summaryFromStaff?"staff":"home")}
+      onDeleteLine={(orderNum,lineIdx,who)=>{
+        const now=new Date();
+        const stamp=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+        setGroups(prev=>prev.map(g=>g.id!==liveGroup.id?g:{...g,
+          orders:(g.orders||[]).map(o=>{
+            if(o.num!==orderNum) return o;
+            const ln=(o.lines||[])[lineIdx];
+            const nm=ln?(ln.custom?ln.name:((findItem(ln.itemId)||{}).name||ln.itemId)):"";
+            return {...o,
+              lines:(o.lines||[]).filter((_,i)=>i!==lineIdx),
+              editLog:[...(o.editLog||[]),`${stamp} ${who||"夥伴"} 刪除「${nm}」`]};
+          })}));
+      }}
+      onSetLineQty={(orderNum,lineIdx,qty)=>{
+        setGroups(prev=>prev.map(g=>g.id!==liveGroup.id?g:{...g,
+          orders:(g.orders||[]).map(o=>o.num!==orderNum?o:{...o,
+            lines:(o.lines||[]).map((l,i)=>i!==lineIdx?l:{...l,qty:Math.max(1,parseInt(qty)||1)})})}));
+      }}
+      onEditLineNote={(orderNum,lineIdx,note)=>{
+        setGroups(prev=>prev.map(g=>g.id!==liveGroup.id?g:{...g,
+          orders:(g.orders||[]).map(o=>o.num!==orderNum?o:{...o,
+            lines:(o.lines||[]).map((l,i)=>i!==lineIdx?l:{...l,note})})}));
+      }}
+      onArchiveMenu={({time,photoId,operator})=>{
+        const snap={id:`${Date.now()}`, time, photoId:photoId||null, by:operator};
+        setGroups(prev=>prev.map(x=>x.id!==liveGroup.id?x:{...x, archived:false, archiveType:"menu", archiveTime:time, archiveBy:operator, archiveSnaps:[...(x.archiveSnaps||[]), snap],
+          locked:true, unlockUntil:"",                                  // 封存＝已進 POS,自動鎖單
+          statusLog:{status:"餐點封存", operator, date:time}}));
+      }}
+      onToggleVeggie={(orderNum, lineIdx)=>{
+        setGroups(prev=>prev.map(g=>{
+          if(g.id!==liveGroup.id) return g;
+          const orders=(g.orders||[]).map(o=>{
+            if(String(o.num)!==String(orderNum)) return o;
+            const lines=(o.lines||[]).map((ln,i)=>{
+              if(i!==lineIdx||!ln.setMeal) return ln;
+              return {...ln, setMeal:{...ln.setMeal, veggieSoup:!ln.setMeal.veggieSoup}};
+            });
+            return {...o, lines};
+          });
+          return {...g, orders};
+        }));
+      }}
+      onAddStaffOrder={(payload)=>{
+        setGroups(prev=>prev.map(g=>{
+          if(g.id!==liveGroup.id) return g;
+          const orders=[...(g.orders||[])];
+          if(payload.mode==="merge"){
+            const idx=orders.findIndex(o=>String(o.num)===String(payload.num));
+            if(idx>=0) orders[idx]={...orders[idx],lines:[...(orders[idx].lines||[]),...payload.lines]};
+            else orders.push({num:parseInt(payload.num)||(orders.reduce((m,o)=>Math.max(m,o.num||0),0)+1),guestName:payload.guestName||"員工新增",lines:payload.lines,staffAdded:true});
+          } else {
+            const maxNum=orders.reduce((m,o)=>Math.max(m,o.num||0),0);
+            orders.push({num:maxNum+1,guestName:payload.guestName||"員工新增",lines:payload.lines,staffAdded:true});
+          }
+          return {...g,orders};
+        }));
+      }}
+      onCancelOrder={(num, sigData)=>{
+        if(num===-98&&sigData&&sigData.lineKey) {
+          // 劃單標記
+          setGroups(prev=>prev.map(g=>{
+            if(g.id!==liveGroup.id) return g;
+            const served={...(g.served||{})};
+            if(served[sigData.lineKey]) delete served[sigData.lineKey];
+            else served[sigData.lineKey]={at:sigData.at||"",by:sigData.by||""};
+            return {...g,served};
+          }));
+        } else if(sigData) {
+          // Saving signature
+          const key = sigData.sigType==="staff"?"refundStaffSig":"refundCustomerSig";
+          const timeKey = sigData.sigType==="staff"?"refundStaffSigTime":"refundCustomerSigTime";
+          setGroups(prev=>prev.map(g=>{
+            if(g.id!==liveGroup.id) return g;
+            return {...g,[key]:sigData.sig,[timeKey]:sigData.time,refundSigned:true};
+          }));
+        } else {
+          setGroups(prev=>prev.map(g=>{
+            if(g.id!==liveGroup.id) return g;
+            return {...g, orders: g.orders.filter(o=>o.num!==num)};
+          }));
+        }
+      }}/>;
+  }
+  if(page==="order"&&activeGroup) {
+    const liveGroup = groups.find(g=>g.id===activeGroup.id) || activeGroup;
+    const maxNum = (liveGroup.orders||[]).reduce((max, o) => Math.max(max, o.num || 0), 0);
+    const nextNum = existingOrder ? existingOrder.num : maxNum + 1;
+    return(
+      <OrderFlow group={liveGroup} existingOrder={existingOrder} onSubmit={submitOrder} nextNum={nextNum}
+        onUpdateGroup={(patch)=>setGroups(prev=>prev.map(g=>g.id===liveGroup.id?{...g,...patch}:g))}
+        onBack={(dest)=>{
+          if(dest==="summary"){setSummaryFromStaff(false);setPage("summary");}
+          else{setPage("home");setActiveGroup(null);setExistingOrder(null);}
+        }}/>
+    );
+  }
+
+  return(
+    <>
+      <HomePage onEnterCode={enterCode} onEnterOrder={enterOrder} onStaff={()=>setShowPin(true)}/>
+      {/* Sync status indicator */}
+      <div style={{position:"fixed",bottom:70,right:12,fontSize:"9px",color:"#a09070",background:"#f5efe2",padding:"3px 8px",borderRadius:"10px",border:"1px solid #fdfaf4"}}>
+        {syncStatus}
+      </div>
+      {showPin&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"24px",width:"280px",border:"1px solid #d0c0a8"}}>
+            <div style={{color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",fontFamily:"'Noto Serif TC',serif"}}>員工驗證</div>
+            <input value={staffPin} onChange={e=>{setStaffPin(e.target.value);setPinErr("");}}
+              placeholder="輸入員工密碼" type="password" style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",marginBottom:"8px"}}/>
+            {pinErr&&<div style={{fontSize:"11px",color:"#e87a5a",marginBottom:"8px"}}>{pinErr}</div>}
+            <div style={{display:"flex",gap:"8px",marginTop:"4px"}}>
+              <button onClick={()=>{setShowPin(false);setStaffPin("");setPinErr("");}} style={{flex:1,padding:"10px",borderRadius:"10px",border:"1px solid #d0c0a8",background:"transparent",color:"#a08060",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>取消</button>
+              <button onClick={()=>{if(staffPin==="9015"){setPage("staff");setShowPin(false);setStaffPin("");}else setPinErr("密碼錯誤");}} style={{flex:1,padding:"10px",borderRadius:"10px",border:"none",background:"#b07840",color:"#fff",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>進入</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+const GS=`
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{max-width:100%;overflow-x:hidden}
+  @keyframes blinkExcl{0%,100%{opacity:1}50%{opacity:0.12}}
+  @keyframes blinkStep{0%,100%{box-shadow:0 0 0 0 rgba(224,144,10,0.0);transform:scale(1)}50%{box-shadow:0 0 0 4px rgba(224,144,10,0.45);transform:scale(1.05)}}
+  .blinkStep{animation:blinkStep 0.9s ease-in-out infinite}
+  .blinkTag{animation:blinkExcl 0.8s ease-in-out infinite;display:inline-block;white-space:nowrap}
+  .blinkBar{animation:blinkExcl 0.8s ease-in-out infinite}
+  @keyframes blinkBox{0%,100%{box-shadow:0 0 0 0 rgba(192,32,32,0)}50%{box-shadow:0 0 0 4px rgba(192,32,32,0.35)}}
+  .blinkBox{animation:blinkBox 1s ease-in-out infinite}
+  .blinkExcl{display:inline-flex;align-items:center;justify-content:center;color:#fff;background:#e01010;border-radius:50%;width:18px;height:18px;font-size:13px;font-weight:900;margin-left:5px;animation:blinkExcl 0.8s ease-in-out infinite;box-shadow:0 0 0 2px rgba(224,16,16,0.35);vertical-align:middle}
+  body{background:#f5efe2}
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#c8b89c;border-radius:2px}
+  input::placeholder{color:#5a3a28}
+  input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+`;
+const TH={padding:"9px 6px",color:"#6a4a2e",fontWeight:"800",borderBottom:"3px solid #8a6a3a",borderRight:"1.5px solid #b8a684",textAlign:"center",fontSize:"14px",whiteSpace:"pre-line",background:"#e8ddd0"};
+// Light theme for the customer ordering flow (米白 + 放大)
+const LS={
+  page:      {minHeight:"100vh",background:"#fbf6ee",fontFamily:"'Noto Sans TC',sans-serif",color:"#4a3826",display:"flex",flexDirection:"column"},
+  header:    {padding:"20px 16px 12px",background:"linear-gradient(180deg,#f7efe2,#fbf6ee)",borderBottom:"1px solid #ead9be"},
+  logo:      {fontSize:"22px",fontFamily:"'Noto Serif TC',serif",fontWeight:"700",color:"#9c5a1c",letterSpacing:"0.06em",marginBottom:"2px"},
+  backBtn:   {background:"none",border:"none",color:"#a06a40",fontSize:"14px",fontWeight:"600",cursor:"pointer",padding:"0 0 6px 0"},
+  card:      {background:"#ffffff",border:"1px solid #ead9be",borderRadius:"16px",padding:"16px",margin:"14px 16px 0",boxShadow:"0 1px 3px rgba(120,90,50,0.06)"},
+  label:     {display:"block",fontSize:"13px",color:"#8a6e50",fontWeight:"600",letterSpacing:"0.06em",marginBottom:"8px",marginTop:"12px"},
+  input:     {width:"100%",background:"#fffdf8",border:"1px solid #d8c2a2",borderRadius:"12px",padding:"13px 16px",color:"#3a2a18",fontSize:"16px",fontFamily:"'Noto Sans TC',sans-serif"},
+  primaryBtn:{width:"100%",padding:"15px",borderRadius:"14px",background:"#b07840",border:"none",color:"#fff",fontSize:"16px",fontWeight:"700",cursor:"pointer",letterSpacing:"0.04em"},
+  ghostBtn:  {width:"100%",padding:"13px",borderRadius:"14px",background:"transparent",border:"1px solid #e0cdb0",color:"#9a7c58",fontSize:"14px",fontWeight:"600",cursor:"pointer",marginTop:"10px"},
+};
+const S={
+  page:      {minHeight:"100vh",background:"#f5efe2",fontFamily:"'Noto Sans TC',sans-serif",color:"#3a2a1a",display:"flex",flexDirection:"column"},
+  header:    {padding:"18px 16px 10px",background:"linear-gradient(180deg,#efe6d4,#f5efe2)",borderBottom:"1px solid #e0d5c0"},
+  staffHeader: {padding:"18px 16px 10px",background:"linear-gradient(180deg,#efe6d4,#e8dcc8)",borderBottom:"1px solid #c8b89c"},
+  logo:      {fontSize:"18px",fontFamily:"'Noto Serif TC',serif",fontWeight:"700",color:"#8a5210",letterSpacing:"0.06em",marginBottom:"2px"},
+  backBtn:   {background:"none",border:"none",color:"#8b5e3c",fontSize:"12px",fontWeight:"600",cursor:"pointer",padding:"0 0 6px 0"},
+  card:      {background:"#fdfaf4",border:"1px solid #e0d5c0",borderRadius:"14px",padding:"14px",margin:"12px 16px 0"},
+  label:     {display:"block",fontSize:"11px",color:"#7a5c3e",fontWeight:"600",letterSpacing:"0.08em",marginBottom:"6px",marginTop:"12px"},
+  input:     {width:"100%",background:"#ffffff",border:"1px solid #8a6a3a",borderRadius:"10px",padding:"11px 14px",color:"#2e2010",fontSize:"14px",fontFamily:"'Noto Sans TC',sans-serif"},
+  primaryBtn:{width:"100%",padding:"13px",borderRadius:"12px",background:"#b07840",border:"none",color:"#fff",fontSize:"14px",fontWeight:"700",cursor:"pointer",letterSpacing:"0.04em"},
+  ghostBtn:  {width:"100%",padding:"11px",borderRadius:"12px",background:"transparent",border:"1px solid #e0d5c0",color:"#5a3a28",fontSize:"12px",fontWeight:"600",cursor:"pointer",marginTop:"10px"},
+  smallBtn:  {padding:"5px 12px",borderRadius:"8px",border:"1px solid #c8b89c",background:"transparent",color:"#aa8060",fontSize:"11px",fontWeight:"600",cursor:"pointer"},
+};
