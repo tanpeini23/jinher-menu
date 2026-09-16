@@ -8,7 +8,7 @@ import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.2/package/xlsx.mjs";
 
 // ─── FIREBASE CONFIG ──────────────────────────────────────────────────────────
 const firebaseConfig = {
-  apiKey: "AIzaSyCrPvsmyPh8SIJ0sDExRFJfGAA-3kBOS5g",
+  apiKey: "AIzaSyCrPvsmyPh8SIJOsDExRFJfGAA-3kBOS5g",
   authDomain: "jinher-3a167.firebaseapp.com",
   projectId: "jinher-3a167",
   storageBucket: "jinher-3a167.firebasestorage.app",
@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v230";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v231";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
