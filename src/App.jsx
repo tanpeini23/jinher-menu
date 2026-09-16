@@ -313,7 +313,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v229";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v216";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1828,30 +1828,6 @@ function isLockedNow(g){
   if(u&&!isNaN(u)&&u>new Date()) return false;   // 還在解鎖時間窗內
   return true;
 }
-// v217:鎖單原因。提前鎖(封存進POS/夥伴確認點完)跟過截止是兩回事,
-// 不要一律講「已過點餐時間」。客人看得到的 3 個地方共用這一個(坑#1)。
-function lockReason(g){
-  return isPastDeadline(g&&g.date) ? "已過點餐時間" : "已點完餐，提早鎖單";
-}
-// v218:「單已進 POS 之後又被改」的判斷。原本只寫在總覽頁那一列裡(坑#1),
-// 現在待辦區也要用 → 抽出來共用,兩邊永遠一致。
-function stampToMin(s){
-  const m=String(s||"").match(/(\d+)\/(\d+)(?:\s+(\d+):(\d+))?/);
-  return m?((+m[1])*100000+(+m[2])*1440+(+(m[3]||0))*60+(+(m[4]||0))):0;
-}
-function isPosLocked(g){                      // 單已經進 POS(拍照封存 或 已KEY)
-  const st=(g&&g.statusLog&&g.statusLog.status)||"";
-  return ["餐點封存","已KEY需改單"].includes(st)||!!(g&&g.archiveType==="menu");
-}
-function editedAfterLock(g,order){            // 這一筆訂單在進 POS 之後有沒有被改
-  if(!isPosLocked(g)) return false;
-  const eds=(order&&order.editLog)||[];
-  if(eds.length===0) return false;
-  return stampToMin(eds[eds.length-1])>=stampToMin((g.statusLog&&g.statusLog.date)||"");
-}
-function ordersEditedAfterLock(g){            // 這一組裡所有被改過的訂單
-  return ((g&&g.orders)||[]).filter(o=>editedAfterLock(g,o));
-}
 function unlockLeft(g){
   if(!g||!g.unlockUntil) return "";
   const u=new Date(g.unlockUntil); if(isNaN(u)||u<=new Date()) return "";
@@ -2216,7 +2192,6 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
 
   const [archModal, setArchModal] = useState(false);
   const [cplOpen, setCplOpen] = useState(false); // 過期→客訴與建議
-  const [cplIdx, setCplIdx] = useState(null);     // v225:null=新增一筆;數字=正在編輯既有的第幾筆
   const [cpl, setCpl] = useState({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});
   const [archTime, setArchTime] = useState("");
   const [archPhoto, setArchPhoto] = useState(null);
@@ -2305,7 +2280,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
             {sl.status&&<div style={{fontSize:"10px",color:"#9a8a76",marginBottom:"3px"}}>{sl.status}</div>}
             <button onClick={(e)=>{e.stopPropagation();setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,archiveType:"booking"}));}}
               style={{fontSize:"12px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"6px",padding:"6px 12px",marginTop:"2px",fontWeight:"700",cursor:"pointer",display:"block",width:"100%"}}>直接封存</button>
-            <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplIdx(null);setCplOpen(true);}}
+            <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
               style={{fontSize:"12px",background:"#a05030",color:"#fff",border:"none",borderRadius:"6px",padding:"6px 12px",marginTop:"4px",fontWeight:"700",cursor:"pointer",display:"block",width:"100%"}}>客訴與建議</button>
           </div>
         ) : g.archiveType==="menu" ? (
@@ -2330,7 +2305,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
               );
             })()}
             {isPastMeal(g)&&!g.cancelled&&(<>
-              <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplIdx(null);setCplOpen(true);}}
+              <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
                 style={{fontSize:"10px",background:"#fdeae0",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"5px",padding:"2px 7px",marginTop:"4px",fontWeight:"800",cursor:"pointer"}}>⚠ 補寫客訴</button>
               {!g.cplDone&&(
                 <button onClick={(e)=>{e.stopPropagation();
@@ -2350,7 +2325,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
               borderRadius:"4px",padding:sl.status==="未KEY-需優先KEY"?"2px 4px":"0"
             }}>{sl.status}{sl.status==="未接"&&g.missedCount>1?` ×${g.missedCount}`:""}</div>
             {g.archived&&isPastMeal(g)&&!g.cancelled&&(<>
-              <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplIdx(null);setCplOpen(true);}}
+              <button onClick={(e)=>{e.stopPropagation();setCpl({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setCplOpen(true);}}
                 style={{fontSize:"10px",background:"#fdeae0",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer"}}>⚠ 補寫客訴</button>
               {!g.cplDone&&(
                 <button onClick={(e)=>{e.stopPropagation();
@@ -2426,49 +2401,15 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
               <button onClick={()=>{
                   const now=new Date(); const date=`${now.getMonth()+1}/${now.getDate()}`;
                   const hasContent=cpl.type||(cpl.kinds||[]).length>0||(cpl.dishes||[]).length>0||cpl.photo||cpl.reason.trim()||cpl.attitude.trim()||cpl.adjust.trim()||cpl.treat.trim();
-                  setGroups(p=>p.map(x=>{
-                    if(x.id!==g.id) return x;
-                    const old=x.complaints||[];
-                    // v225:cplIdx 有值 → 取代那一筆(保留原本日期);否則才是新增
-                    const next = !hasContent ? old
-                      : (cplIdx!=null&&old[cplIdx]
-                          ? old.map((c,i)=>i!==cplIdx?c:{...cpl,date:c.date,editedAt:date,source:c.source||"大訂餐評"})
-                          : [...old,{...cpl,date,source:"大訂餐評"}]);
-                    return {...x,
-                    complaints: next,
+                  setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,
+                    complaints: hasContent?[...(x.complaints||[]),{...cpl,date,source:"大訂餐評"}]:(x.complaints||[]),
                     archived:true, archiveType:x.archiveType==="menu"?"menu":"booking",
-                    cplDone:true};
-                  }));   // 記完客訴 → 從過期清單收起來(照片/客訴仍可查)
-                  setCplIdx(null); setCplOpen(false);
+                    cplDone:true}));   // 記完客訴 → 從過期清單收起來(照片/客訴仍可查)
+                  setCplOpen(false);
                 }}
-                style={{flex:2,padding:"13px",borderRadius:"10px",background:"#a05030",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{cplIdx!=null?"更新這筆客訴":(g.archived?"儲存客訴":"記錄並封存")}</button>
+                style={{flex:2,padding:"13px",borderRadius:"10px",background:"#a05030",border:"none",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>{g.archived?"儲存客訴":"記錄並封存"}</button>
             </div>
             {(g.complaints||[]).length>0&&(
-              <div style={{marginTop:"10px",borderTop:"1px solid #ddd0bc",paddingTop:"8px"}}>
-                <div style={{fontSize:"11px",fontWeight:"800",color:"#8a6a4a",marginBottom:"5px"}}>已記錄的客訴（點〔編輯〕可以改，不會再多一筆）</div>
-                {(g.complaints||[]).map((c,i)=>(
-                  <div key={i} style={{display:"flex",alignItems:"center",gap:"7px",background:cplIdx===i?"#fdeae0":"#faf6ee",
-                    border:`1px solid ${cplIdx===i?"#e0b0a0":"#e8ddc8"}`,borderRadius:"7px",padding:"6px 8px",marginBottom:"4px"}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:"11px",fontWeight:"800",color:"#6a4a2e"}}>
-                        {c.date}{c.editedAt?`（${c.editedAt} 改過）`:""}　{c.type||"未分類"}
-                        {(c.kinds||[]).length>0?`　${(c.kinds||[]).join("、")}`:""}
-                        {c.photo?"　📷":""}
-                      </div>
-                      {c.reason&&<div style={{fontSize:"11px",color:"#8a6a4a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.reason}</div>}
-                    </div>
-                    <button onClick={()=>{setCpl({type:c.type||"",kinds:c.kinds||[],dishes:c.dishes||[],photo:c.photo||null,
-                        reason:c.reason||"",attitude:c.attitude||"",adjust:c.adjust||"",treat:c.treat||""});setCplIdx(i);}}
-                      style={{fontSize:"11px",background:"#8a5210",color:"#fff",border:"none",borderRadius:"6px",padding:"5px 10px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>編輯</button>
-                    <button onClick={()=>{ if(!window.confirm("刪掉這一筆客訴紀錄?")) return;
-                        setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,complaints:(x.complaints||[]).filter((_,j)=>j!==i)}));
-                        setCplIdx(null); }}
-                      style={{fontSize:"11px",background:"transparent",color:"#a04020",border:"1px solid #e0b0a0",borderRadius:"6px",padding:"5px 8px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>刪</button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {(g.complaints||[]).length>0&&cplIdx==null&&(
               <button onClick={()=>{
                   setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,archived:true,cplDone:true,archiveType:x.archiveType||"booking"}));
                   setCplOpen(false);
@@ -2705,11 +2646,6 @@ function isHoliday(meal){
   const custom = (typeof window!=="undefined" && window.__customHolidays) || [];
   return custom.includes(k);
 }
-// v224:連假特例 —— 整段連假共用一個點餐截止,現行「前一天/該週週五」規則推不出來。
-// key = 用餐日(西元年-M/D)、value = 截止日(M/D,一律中午12:00)。過年沒營業所以不列。
-const DEADLINE_OVERRIDE = {
-  "2026-9/25":"9/24", "2026-9/26":"9/24", "2026-9/27":"9/24", "2026-9/28":"9/24",   // 中秋+教師節連假
-};
 function getOrderDeadline(dateStr) {
   // dateStr "M/D" → 回傳截止 Date 或 null
   if(!dateStr) return null;
@@ -2720,12 +2656,6 @@ function getOrderDeadline(dateStr) {
   let yr=now.getFullYear();
   let meal=new Date(yr,m-1,d);
   if(meal < new Date(now.getFullYear(),now.getMonth(),now.getDate()-180)) meal=new Date(yr+1,m-1,d);
-  const ov=DEADLINE_OVERRIDE[`${meal.getFullYear()}-${m}/${d}`];   // 連假特例優先於下面的一般規則
-  if(ov){
-    const om=+ov.split("/")[0], od=+ov.split("/")[1];
-    const oy=meal.getFullYear()-(om>m?1:0);      // 截止日落在前一年(跨年連假)
-    return new Date(oy,om-1,od,12,0,0);
-  }
   const dow=meal.getDay(); // 0=日 1=一 ... 6=六
   let deadline=new Date(meal);
   if(isHoliday(meal)){ // 國定假日視為平日:前一天12:00
@@ -3596,15 +3526,9 @@ function msgDepChase(g){
   const dep=depDeadlineOf(g);
   const amt=depositAmountOf(g);
   const over=dep&&(new Date()>dep.dl);
-  if(over) return `今鶴 JINHER
-${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
-
-您好～訂金匯款期限已過 🙏
-很抱歉，本次訂位已為您取消，座位不再保留
-
-如仍需用餐，歡迎重新訂位
-造成不便敬請見諒 🙇`;
-  const head=`您好～提醒您訂金匯款即將到期 ⏰`;
+  const head=over
+    ? `您好～提醒您訂金匯款期限已過 🙏\n目前尚未收到款項，座位暫時無法保留`
+    : `您好～提醒您訂金匯款即將到期 ⏰`;
   return `今鶴 JINHER
 ${g.name}${g.gender||""} ${g.date}${wdOf(g.date)} ${g.time}　${g.takeout?`外帶 ${g.takeoutQty} 份`:(g.headcount||"")}
 
@@ -3618,7 +3542,7 @@ ${BANK_INFO.bank}
 帳號：${BANK_INFO.acct}
 
 匯款後請回傳末5碼
-※ 逾時未收到訂金，訂位將取消、恕不保留座位`;
+${over?"如已完成匯款，請回覆我們核對；若需取消訂位也請告知，謝謝 🙇":"※ 逾時未收到訂金，恕不保留座位"}`;
 }
 function msgEarlyLock(g){
   return `今鶴 JINHER
@@ -3917,141 +3841,16 @@ function NoteCell({ g, setGroups, staffList }){
     </div>
   );
 }
-// v222:備用金(現金＋收據＝$20,000)。晚結和開早共用同一個元件,不要兩份。
-function ReserveCount({ rv, onChange }){
-  const r=rv||{};
-  const cash=+(r.cash||0), rcpt=+(r.rcpt||0);
-  const tot=cash+rcpt, df=tot-SAFE_TOTAL, ok=df===0;
-  const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
-  const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
-  return (
-    <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px",marginTop:"5px"}}>
-      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
-          <input value={r.cash||""} inputMode="numeric" placeholder="0"
-            onChange={e=>onChange({...r,cash:num(e.target.value)})} style={ipt}/>
-        </div>
-        <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
-          <input value={r.rcpt||""} inputMode="numeric" placeholder="0"
-            onChange={e=>onChange({...r,rcpt:num(e.target.value)})} style={ipt}/>
-        </div>
-        <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
-          <div style={{fontSize:"16px",fontWeight:"900",color:ok?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
-        </div>
-      </div>
-      {tot>0&&(
-        <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",
-          color:"#fff",background:ok?"#2a8a5a":"#c02020",borderRadius:"6px",padding:"5px"}}>
-          {ok?"✓ 備用金正確":(df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`)}
-        </div>
-      )}
-    </div>
-  );
-}
-// v222:跟昨晚晚結逐格對照。pairs=[[標籤,昨晚,今早],...]
-function NightRef({ pairs, at }){
-  const same=(l,n)=>String(+(l||0))===String(+(n||0));
-  const entered=pairs.some(([,,n])=>String(n||"")!=="");
-  const bad=pairs.filter(([,l,n])=>!same(l,n));
-  return (
-    <div style={{fontSize:"11px",color:"#8a7a5a",background:"#fdfaf3",border:"1px solid #e8dcc4",
-      borderRadius:"7px",padding:"6px 9px",marginTop:"5px",display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
-      <span style={{fontWeight:"800",color:"#a08050",whiteSpace:"nowrap"}}>上次清點{at?`（${at}）`:""}</span>
-      {pairs.map(([k,l,n],i)=>(
-        <span key={i} style={{whiteSpace:"nowrap",fontWeight:entered&&!same(l,n)?"900":"700",
-          color:entered&&!same(l,n)?"#c06030":"#8a9aaa"}}>{k}×{+(l||0)}</span>
-      ))}
-      <span style={{flex:1}}/>
-      {entered&&(bad.length===0
-        ? <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>✓ 跟上次一致</span>
-        : <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#c06030",borderRadius:"5px",padding:"2px 8px",whiteSpace:"nowrap"}}>⚠ {bad.length} 格不一樣</span>)}
-    </div>
-  );
-}
 // 金庫清點:紙鈔照清點表填張數，零錢只填袋數（每袋金額固定），合計要等於 $20,000
-// v226:金庫「上次清點」= 往回找最近一次真的有數字的紀錄,不分階段。
-// 一天內的先後是 開早 → 中間結算 → 晚結;只往回看,不會拿還沒發生的來比。
-// v227:交接資料的日期鍵一律「西元/月/日」。原本這規則散在 4 處(todayStr 含年份,
-// 兩處 yStr 和 lastSafeCount 卻寫成「月/日」)→ 永遠查不到,抽出來共用。
-function dayKey(d){ return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`; }
-function dayAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d; }
-const SAFE_STAGES=["open","mid","close"];
-function safeOfStage(day,st){
-  if(!day) return null;
-  if(st==="open") return day.openSafe||null;
-  if(st==="mid")  return day.midSafe||null;
-  return (day.close||{}).safe||null;
-}
-function safeHasData(sf){
-  if(!sf) return false;
-  return ["notes","bags","loose"].some(k=>Object.values(sf[k]||{}).some(v=>String(v??"")!==""));
-}
-function lastSafeCount(data,stage){
-  const mine=SAFE_STAGES.indexOf(stage);
-  const t=new Date();
-  for(let i=0;i<60;i++){
-    const d=dayAgo(i);
-    const k=dayKey(d);
-    const day=(data||{})[k]||(data||{})[`${d.getMonth()+1}/${d.getDate()}`]; if(!day) continue;
-    for(let j=SAFE_STAGES.length-1;j>=0;j--){
-      if(i===0&&j>=mine) continue;               // 今天:只看比自己早的階段
-      const sf=safeOfStage(day,SAFE_STAGES[j]);
-      if(safeHasData(sf)){
-        const lbl={open:"開早",mid:"中間結算",close:"晚結"}[SAFE_STAGES[j]];
-        const at=SAFE_STAGES[j]==="close"?((day.close||{}).s3||""):"";
-        return {safe:sf,label:`${d.getMonth()+1}/${d.getDate()} ${lbl}${at?` ${at}`:""}`};
-      }
-    }
-  }
-  return null;
-}
-// v229:金庫總額。sf=這次填的、prev=上次的(沒填的格子沿用上次)。
-// 這算式原本散在 4 個地方各寫一次(坑#1),抽出來共用,畫面和「數對自動劃掉」永遠一致。
-function safeVal(sf,prev,grp,d){
-  const a=((sf||{})[grp]||{})[d], b=((prev||{})[grp]||{})[d];
-  return String(a??"")!=="" ? (+a||0) : (+b||0);
-}
-function safeTotal(sf,prev){
-  return [1000,500,100].reduce((s,d)=>s+d*safeVal(sf,prev,"notes",d),0)
-       + COIN_BAGS.reduce((s,b)=>s+b.per*safeVal(sf,prev,"bags",b.d),0)
-       + COIN_BAGS.reduce((s,b)=>s+b.d*safeVal(sf,prev,"loose",b.d),0);
-}
-function SafeCount({ notes, bags, loose, prev, prevLabel, onChange }){
-  // v229:上次清點的數字直接帶進格子裡(金庫的錢不常動,只改動到的那格就好)。
-  // 淡棕斜體=沿用上次還沒動過;橘色=今天改過且跟上次不同;黑色=今天填的且跟上次一樣。
-  // 純顯示推導,不在畫面繪製期間寫入 state。
-  const has=(v)=>String(v??"")!=="";
-  const own={notes:notes||{}, bags:bags||{}, loose:loose||{}};
-  const pv  ={notes:(prev||{}).notes||{}, bags:(prev||{}).bags||{}, loose:(prev||{}).loose||{}};
-  const val =(g,d)=> has(own[g][d]) ? own[g][d] : (has(pv[g][d]) ? pv[g][d] : "");
-  const carried=(g,d)=> !has(own[g][d]) && has(pv[g][d]);
-  const changed=(g,d)=> has(own[g][d]) && has(pv[g][d]) && (+own[g][d]||0)!==(+pv[g][d]||0);
-  const anyCarried=[["notes",[1000,500,100]],["bags",COIN_BAGS.map(b=>b.d)],["loose",[50]]]
-    .some(([g,ds])=>ds.some(d=>carried(g,d)));
-  const sfNow={notes,bags,loose};
-  const noteSum=[1000,500,100].reduce((s,d)=>s+d*safeVal(sfNow,prev,"notes",d),0);
-  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*safeVal(sfNow,prev,"bags",b.d),0);
-  const looseSum=COIN_BAGS.reduce((s,b)=>s+b.d*safeVal(sfNow,prev,"loose",b.d),0);
-  const total=safeTotal(sfNow,prev), diff=total-SAFE_TOTAL, ok=diff===0;
+function SafeCount({ notes, bags, onChange }){
+  const noteSum=[1000,500,100].reduce((s,d)=>s+d*(+((notes||{})[d])||0),0);
+  const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((bags||{})[b.d])||0),0);
+  const total=noteSum+bagSum, diff=total-SAFE_TOTAL, ok=diff===0;
   const num=(v)=>String(v??"").replace(/[^0-9]/g,"");
-  const useLast=()=>onChange({
-    notes:{...pv.notes,...own.notes}, bags:{...pv.bags,...own.bags}, loose:{...pv.loose,...own.loose} });
   const ipt={width:"52px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"center",color:"#2a3a4a"};
   return (
     <div style={{background:"#f8fafc",borderRadius:"8px",padding:"8px",marginTop:"5px"}}>
-      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",marginBottom:"5px"}}>
-        <span style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</span>
-        {anyCarried&&(<>
-          <span style={{fontSize:"10.5px",color:"#a89070",fontStyle:"italic"}}>淡字＝沿用{prevLabel?`（${prevLabel}）`:"上次"}，數對就按右邊</span>
-          <span style={{flex:1}}/>
-          <button onClick={useLast} style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#8a7050",border:"none",borderRadius:"6px",padding:"4px 10px",cursor:"pointer",whiteSpace:"nowrap"}}>✓ 跟上次一樣</button>
-        </>)}
-      </div>
+      <div style={{fontSize:"11px",fontWeight:"800",color:"#3a5a7a",marginBottom:"5px"}}>🔐 金庫清點（應有 ${SAFE_TOTAL.toLocaleString()}）</div>
 
       <div style={{display:"flex",gap:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
         <div style={{flex:"1 1 0",minWidth:"142px",display:"flex",flexDirection:"column",gap:"5px"}}>
@@ -4059,9 +3858,8 @@ function SafeCount({ notes, bags, loose, prev, prevLabel, onChange }){
             <div key={d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
               <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${d}</span>
               <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-              <input value={val("notes",d)} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags,loose})} inputMode="numeric" placeholder="0"
-                style={{...ipt,...(carried("notes",d)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("notes",d)?{color:"#c06030",fontWeight:"900"}:{})}}/>
-              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+val("notes",d)||0)>0?`$${(d*(+val("notes",d)||0)).toLocaleString()}`:""}</span>
+              <input value={(notes||{})[d]||""} onChange={e=>onChange({notes:{...(notes||{}),[d]:num(e.target.value)},bags})} inputMode="numeric" placeholder="0" style={ipt}/>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((notes||{})[d])||0)>0?`$${(d*(+((notes||{})[d])||0)).toLocaleString()}`:""}</span>
             </div>
           ))}
         </div>
@@ -4070,20 +3868,9 @@ function SafeCount({ notes, bags, loose, prev, prevLabel, onChange }){
             <div key={b.d} style={{display:"flex",alignItems:"center",gap:"5px"}}>
               <span style={{fontSize:"12px",color:"#5a7a9a",width:"46px",textAlign:"right",fontWeight:"700"}}>${b.d}</span>
               <span style={{fontSize:"10px",color:"#a0b0c0"}}>×</span>
-              <input value={val("bags",b.d)} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)},loose})} inputMode="numeric" placeholder="0"
-                style={{...ipt,...(carried("bags",b.d)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("bags",b.d)?{color:"#c06030",fontWeight:"900"}:{})}}/>
+              <input value={(bags||{})[b.d]||""} onChange={e=>onChange({notes,bags:{...(bags||{}),[b.d]:num(e.target.value)}})} inputMode="numeric" placeholder="0" style={ipt}/>
               <span style={{fontSize:"10px",color:"#a08a70",width:"22px"}}>袋</span>
-              {b.d===50&&(<>
-                <span style={{fontSize:"10px",color:"#a0b0c0"}}>＋</span>
-                <input value={val("loose",50)} inputMode="numeric" placeholder="0"
-                  onChange={e=>onChange({notes,bags,loose:{...(loose||{}),50:num(e.target.value)}})}
-                  style={{...ipt,width:"40px",...(carried("loose",50)?{color:"#a89070",fontStyle:"italic",background:"#fdfaf3"}:changed("loose",50)?{color:"#c06030",fontWeight:"900"}:{})}}/>
-                <span style={{fontSize:"10px",color:"#a08a70",whiteSpace:"nowrap"}}>個$50</span>
-              </>)}
-              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1,textAlign:"right"}}>{(() => {
-                const v=b.per*(+val("bags",b.d)||0)+b.d*(+val("loose",b.d)||0);
-                return v>0?`$${v.toLocaleString()}`:`1袋$${b.per}`;
-              })()}</span>
+              <span style={{fontSize:"11px",color:"#8a9aaa",flex:1}}>{(+((bags||{})[b.d])||0)>0?`$${(b.per*(+((bags||{})[b.d])||0)).toLocaleString()}`:`1袋$${b.per}`}</span>
             </div>
           ))}
         </div>
@@ -4221,16 +4008,6 @@ const CLOSE_TITLES = {
   s13:{nov:"明天的預約大訂單",                    pro:"明天大訂單確認了",        hand:false,cam:false},
 };
 const CLOSE_ORDER = ["s1","s2","s3","s4","s5","s6","s7","s7b","s8","s9","s9b","s10","s11","s12","s13"];
-// v219:老手版只完整顯示這 4 步(3 金庫備用金 / 6 錢櫃 / 7 合計 / 15 明天大訂),
-// 其餘壓成小勾勾橫排,點一下才展開(步驟2/5/9/14 裡的按鈕和拍照還要用,不能真的拿掉)。
-const CLOSE_PRO_MAIN = ["s3","s6","s7","s13"];
-// 老手版打一個勾 = keys 裡那幾步一起打勾,所以進度照樣是 x/15,切回新手版也對得起來
-const CLOSE_PRO_GROUPS = {
-  s3 :{n:1, label:"支出、信用卡對完，金庫備用金導正", keys:["s1","s2","s3"]},
-  s6 :{n:2, label:"桌位清空、應包金額入袋，錢櫃算好截圖", keys:["s4","s5","s6"]},
-  s7 :{n:3, label:"合計金額、POS關班、印單釘好放金庫", keys:["s7","s7b","s8","s9","s9b"]},
-  s13:{n:4, label:"大麥數據、上鎖、傳LINE，明天大訂", keys:["s10","s11","s12","s13"]},
-};
 const CLOSE_HELP = {
   s1 :"【為什麼要做】\n支出沒 key，帳就對不起來，會計也查不到憑證。\n\n【記得備註】\n收據 / 發票號碼 / 蝦皮\n\n【多 key 了怎麼辦】\n到【現金支出】-【收入 A05 支出誤key】更正",
   s2 :"【怎麼算】\n信用卡 ＋ AMEX ＝ 總金額\n\n【查看方式】\nF1 管理 → 4. 總帳查詢\n\n【對不起來的話】\n先看兩邊筆數對不對，再一筆筆比金額",
@@ -4284,15 +4061,10 @@ const hhmm=()=>{const d=new Date();return `${String(d.getHours()).padStart(2,"0"
 function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
   const done=cl[doneKey];
   const meta=CLOSE_TITLES[doneKey]||{};
-  const pg = pro ? CLOSE_PRO_GROUPS[doneKey] : null;
-  const title = pg ? pg.label : (pro?(meta.pro||""):(meta.nov||""));
-  const num = pg ? pg.n : n;
+  const title=pro?(meta.pro||""):(meta.nov||"");
   const warn=CLOSE_WARN[doneKey];
   const cam=meta.cam;
   const [helpOpen,setHelpOpen]=useState(false);
-  // v220:老手版只留 4 大步,不是主步的整個不顯示(內容已搬進主步)
-  if(pro && !CLOSE_PRO_MAIN.includes(doneKey)) return null;
-  const grp = pg ? pg.keys : [doneKey];      // 老手版打一個勾 = 底下那幾步一起打
   // 老手版:一律展開(只有勾勾);新手版:只展開目前這步
   const show = pro ? true : open;
   const Icon = meta.hand?IcoHand:IcoScreen;
@@ -4301,8 +4073,7 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
       <div onClick={()=>{
           if(!pro&&!show){ onOpen&&onOpen(doneKey); return; }
           const nowDone=!done;
-          const t=done?null:hhmm();
-          saveCl(Object.fromEntries(grp.map(k=>[k,t])));   // 老手版:整組一起
+          saveCl({[doneKey]:done?null:hhmm()});
           if(!pro&&nowDone&&onOpen){                       // 新手版:打勾後自動跳下一步
             const i=CLOSE_ORDER.indexOf(doneKey);
             if(i>=0&&i<CLOSE_ORDER.length-1) onOpen(CLOSE_ORDER[i+1]);
@@ -4310,7 +4081,7 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
         }}
         style={{display:"flex",alignItems:"center",gap:"7px",cursor:"pointer"}}>
         <span style={{fontSize:"15px"}}>{done?"✅":"⬜"}</span>
-        <span style={{width:"18px",height:"18px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"10px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{num}</span>
+        <span style={{width:"18px",height:"18px",borderRadius:"50%",background:done?"#3a8a5a":"#8aa0b8",color:"#fff",fontSize:"10px",fontWeight:"900",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</span>
         {!pro&&<Icon size={13} color={done?"#8aaa9a":(meta.hand?"#b07840":"#5a7a9a")}/>}
         {cam&&<span title="要拍照/截圖" style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#e0862a",borderRadius:"4px",padding:"1px 5px",whiteSpace:"nowrap"}}>📷</span>}
         <span style={{fontSize:show&&!pro?"14px":"13px",fontWeight:"800",color:done?"#8aaa9a":"#2a3a5a",textDecoration:done?"line-through":"none",flex:1,lineHeight:"1.4"}}>{title}</span>
@@ -4322,7 +4093,7 @@ function CloseStep({ n, doneKey, cl, saveCl, pro, open, onOpen, children }){
         {!pro&&(
           <div style={{marginTop:"9px",display:"flex",gap:"7px",alignItems:"center"}}>
             <button onClick={(e)=>{e.stopPropagation();
-                const t=hhmm(); saveCl(Object.fromEntries(grp.map(k=>[k,t])));
+                const t=hhmm(); saveCl({[doneKey]:t});
                 const i=CLOSE_ORDER.indexOf(doneKey);
                 if(i>=0&&i<CLOSE_ORDER.length-1&&onOpen) onOpen(CLOSE_ORDER[i+1]);
               }}
@@ -4358,7 +4129,7 @@ function CloseMiniChecks({ items, cl, saveCl }){
   );
 }
 // 晚結流程:每天獨立存檔,可回看;分新手/老手版
-function CloseFlow({ day, save, bases, todayStr, groups, data }){
+function CloseFlow({ day, save, bases, todayStr, groups }){
   const pro = !!(day.close&&day.close._pro);    // 老手版(存在資料裡,跨裝置同步)
   const hint=!pro;                              // 老手版不顯示提示
   const cl = day.close||{};                     // 晚結資料存 day.close
@@ -4411,31 +4182,6 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
     const d=new Date(); d.setDate(d.getDate()+1); const tmr=`${d.getMonth()+1}/${d.getDate()}`;
     return (groups||[]).filter(g=>g.date===tmr && g.archiveType==="menu" && !g.cancelled);
   })();
-  // v220:這四塊在老手版要搬進 4 大步裡,所以抽成變數,兩邊共用(不要複製兩份)
-  const blkCardEq = (<>
-        <div style={{display:"flex",gap:"6px",marginTop:"3px"}}>
-          <button onClick={()=>saveCl({cardEqPos:true})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos?"#2a8a5a":"#c8d8e8"}`,background:cl.cardEqPos?"#2a8a5a":"#fff",color:cl.cardEqPos?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✓ 一致</button>
-          <button onClick={()=>saveCl({cardEqPos:false})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos===false?"#c02020":"#c8d8e8"}`,background:cl.cardEqPos===false?"#c02020":"#fff",color:cl.cardEqPos===false?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
-        </div>
-  </>);
-  const blkPack = (<>
-        <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",background:"#fdf6ea",borderRadius:"7px",padding:"7px 9px",marginBottom:"6px",lineHeight:"1.7"}}>
-          應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
-          <span style={{fontSize:"12px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
-          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="算出來的金額"
-            style={{width:"130px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
-        </div>
-        {photoBlock("pack","應包金額攤開照")}
-  </>);
-  const blkBill = (<>
-        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.75"}}>
-          ⚠ 有收訂金的話，<b>單上要手寫「訂金」和「應包金額」</b>
-          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"2px"}}>存錢對帳要用，沒寫之後對不出來</div>
-        </div>
-        {photoBlock("bill","清帳單 & 信用卡單")}
-  </>);
   // 分享文字
   const shareTxt=()=>{
     const d=new Date();const wd=["日","一","二","三","四","五","六"][d.getDay()];
@@ -4446,15 +4192,6 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
     t+=`應包金額 $${cl.shouldPack||"__"}\n信用卡=POS ${cel}\n━━━━━━━━━━\n結班：${cl.doneBy||"__"} ${cl.doneAt||""}`;
     return t;
   };
-  const blkShare = (<>
-        <button onClick={async()=>{
-            const txt=shareTxt();
-            if(navigator.share){ try{ await navigator.share({text:txt}); }catch(e){} }
-            else { try{ await navigator.clipboard.writeText(txt); window.alert("已複製結算內容,請貼到 LINE 群組"); }catch(e){ window.prompt("複製以下內容貼到 LINE:",txt); } }
-            saveCl({s12:hhmm()});
-          }}
-          style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:"#06c755",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>📤 分享結算到 LINE</button>
-  </>);
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",marginBottom:"8px"}}>
@@ -4477,28 +4214,65 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
         </div>
       </div>
 
-      {!pro&&<PhaseHead title="先對帳" steps={["s1","s2","s3"]} cl={cl}/>}
+      <PhaseHead title="先對帳" steps={["s1","s2","s3"]} cl={cl}/>
       <CloseStep n={1} doneKey="s1" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s1"} onOpen={setCurStep}/>
       <CloseStep n={2} doneKey="s2" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s2"} onOpen={setCurStep}>
-        {blkCardEq}
+        <div style={{display:"flex",gap:"6px",marginTop:"3px"}}>
+          <button onClick={()=>saveCl({cardEqPos:true})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos?"#2a8a5a":"#c8d8e8"}`,background:cl.cardEqPos?"#2a8a5a":"#fff",color:cl.cardEqPos?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✓ 一致</button>
+          <button onClick={()=>saveCl({cardEqPos:false})} style={{flex:1,padding:"7px",borderRadius:"7px",border:`1.5px solid ${cl.cardEqPos===false?"#c02020":"#c8d8e8"}`,background:cl.cardEqPos===false?"#c02020":"#fff",color:cl.cardEqPos===false?"#fff":"#5a7a9a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>✗ 不符</button>
+        </div>
       </CloseStep>
       <CloseStep n={3} doneKey="s3" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s3"} onOpen={setCurStep}>
         {(()=>{
           const sf=cl.safe||{};
-          const safeOk=safeTotal(sf,(lastSafeCount(data,"close")||{}).safe)===SAFE_TOTAL;
+          const noteSum=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0);
+          const bagSum =COIN_BAGS.reduce((s,b)=>s+b.per*(+((sf.bags||{})[b.d])||0),0);
+          const safeOk=(noteSum+bagSum)===SAFE_TOTAL;
           const safeId=(bases.filter(b=>b.label.includes("金庫"))[0]||{}).id;
           return (<>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"6px"}}>① 金庫（數紙鈔＋零錢袋數，數對就自動劃掉）</div>
-            <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose}
-              prev={(lastSafeCount(data,"close")||{}).safe} prevLabel={(lastSafeCount(data,"close")||{}).label}
-              onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
+            <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>saveCl({safe:{...sf,...nv}})}/>
             <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
-            <ReserveCount rv={cl.reserve} onChange={(nv)=>saveCl({reserve:nv})}/>
+            {(()=>{
+              const rv=cl.reserve||{};
+              const cash=+(rv.cash||0), rcpt=+(rv.rcpt||0);
+              const tot=cash+rcpt, df=tot-SAFE_TOTAL, ok2=df===0;
+              const ipt={width:"92px",padding:"6px 5px",borderRadius:"6px",border:"1px solid #c8d8e8",fontSize:"14px",fontWeight:"800",textAlign:"center",color:"#2a3a4a"};
+              return (
+                <div style={{background:"#f8fafc",borderRadius:"8px",padding:"9px",marginTop:"5px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",justifyContent:"center"}}>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>現金</div>
+                      <input value={rv.cash||""} inputMode="numeric" placeholder="0"
+                        onChange={e=>saveCl({reserve:{...rv,cash:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
+                    </div>
+                    <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＋</span>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>收據金額</div>
+                      <input value={rv.rcpt||""} inputMode="numeric" placeholder="0"
+                        onChange={e=>saveCl({reserve:{...rv,rcpt:e.target.value.replace(/[^0-9]/g,"")}})} style={ipt}/>
+                    </div>
+                    <span style={{fontSize:"16px",fontWeight:"900",color:"#a0b0c0"}}>＝</span>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:"10px",color:"#7a9ab8",fontWeight:"700"}}>合計</div>
+                      <div style={{fontSize:"16px",fontWeight:"900",color:ok2?"#1a6a3a":"#c02020"}}>${tot.toLocaleString()}</div>
+                    </div>
+                  </div>
+                  {tot>0&&(
+                    <div style={{marginTop:"7px",textAlign:"center",fontSize:"13px",fontWeight:"900",
+                      color:"#fff",background:ok2?"#2a8a5a":"#c02020",borderRadius:"6px",padding:"5px"}}>
+                      {ok2?"✓ 備用金正確":(df>0?`多 $${df.toLocaleString()}`:`少 $${(-df).toLocaleString()}`)}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>);
         })()}
         {bases.filter(b=>!b.label.includes("錢櫃")).map(b=>{
           const sf2=cl.safe||{}, rv2=cl.reserve||{};
-          const safeOk2 = safeTotal(sf2,(lastSafeCount(data,"close")||{}).safe)===SAFE_TOTAL;
+          const safeOk2 = ([1000,500,100].reduce((s,d)=>s+d*(+((sf2.notes||{})[d])||0),0)
+             +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf2.bags||{})[c.d])||0),0))===SAFE_TOTAL;
           const resOk2  = ((+(rv2.cash||0))+(+(rv2.rcpt||0)))===SAFE_TOTAL;
           const autoOk = b.label.includes("金庫") ? (safeOk2&&resOk2) : false;
           const st=autoOk ? "ok" : (cl.spotOk||{})[b.id];
@@ -4519,20 +4293,26 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
             </div>
           );
         })}
-        {pro&&blkCardEq}
       </CloseStep>
 
-      {!pro&&<PhaseHead title="數錢、收好" steps={["s4","s5","s6","s7","s7b","s8","s9","s9b"]} cl={cl}/>}
+      <PhaseHead title="數錢、收好" steps={["s4","s5","s6","s7","s7b","s8","s9","s9b"]} cl={cl}/>
       <CloseStep n={4} doneKey="s4" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s4"} onOpen={setCurStep}/>
       <CloseStep n={5} doneKey="s5" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s5"} onOpen={setCurStep}>
-        {blkPack}
+        <div style={{fontSize:"12px",fontWeight:"800",color:"#8a5210",background:"#fdf6ea",borderRadius:"7px",padding:"7px 9px",marginBottom:"6px",lineHeight:"1.7"}}>
+          應包金額 = 錢櫃 $10,000 ＋ 現金營業額 − 支出
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
+          <span style={{fontSize:"12px",fontWeight:"700",color:"#5a6a8a"}}>應包金額 $</span>
+          <input value={cl.shouldPack||""} onChange={e=>saveCl({shouldPack:e.target.value.replace(/[^0-9]/g,"")})} inputMode="numeric" placeholder="算出來的金額"
+            style={{width:"130px",padding:"7px 9px",borderRadius:"7px",border:"1px solid #c8d8e8",fontSize:"13px",fontWeight:"700",textAlign:"right",color:"#2a3a4a"}}/>
+        </div>
+        {photoBlock("pack","應包金額攤開照")}
       </CloseStep>
       <CloseStep n={6} doneKey="s6" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s6"} onOpen={setCurStep}>
         {bases.filter(b=>b.label.includes("錢櫃")).map(b=>(
           <div key={b.id}>{countTable(b.id,b.amt,b.label)}</div>
         ))}
         {photoBlock("count","錢櫃算錢截圖")}
-        {pro&&blkPack}
       </CloseStep>
       <CloseStep n={7} doneKey="s7" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7"} onOpen={setCurStep}>
         {(()=>{
@@ -4561,7 +4341,6 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
             </div>
           );
         })()}
-        {pro&&blkBill}
       </CloseStep>
       <CloseStep n={8} doneKey="s7b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s7b"} onOpen={setCurStep}>
         <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",lineHeight:"1.8"}}>
@@ -4571,14 +4350,18 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
         </div>
       </CloseStep>
       <CloseStep n={9} doneKey="s8" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s8"} onOpen={setCurStep}>
-        {blkBill}
+        <div style={{fontSize:"13px",color:"#c02020",fontWeight:"900",background:"#fbe4e4",border:"2px solid #e0a0a0",borderRadius:"9px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.75"}}>
+          ⚠ 有收訂金的話，<b>單上要手寫「訂金」和「應包金額」</b>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#a05040",marginTop:"2px"}}>存錢對帳要用，沒寫之後對不出來</div>
+        </div>
+        {photoBlock("bill","清帳單 & 信用卡單")}
       </CloseStep>
       {pro
-        ? null                                   // v220:已併進 4 大步
+        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s9","釘在一起","10"],["s9b","放金庫","11"]]}/>
         : <><CloseStep n={10} doneKey="s9" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9"} onOpen={setCurStep}/>
           <CloseStep n={11} doneKey="s9b" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s9b"} onOpen={setCurStep}/></>}
 
-      {!pro&&<PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>}
+      <PhaseHead title="收尾 & 明天準備" steps={["s10","s11","s12","s13"]} cl={cl}/>
       <CloseStep n={12} doneKey="s10" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s10"} onOpen={setCurStep}>
         <div style={{display:"flex",flexDirection:"column",gap:"7px"}}>
           {[["店家報表－營業銷售","桌數（新會員／舊會員）"],
@@ -4592,16 +4375,21 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
         </div>
       </CloseStep>
       {pro
-        ? null                                   // v220:已併進 4 大步
+        ? <CloseMiniChecks cl={cl} saveCl={saveCl} items={[["s11","金庫錢櫃上鎖","13"]]}/>
         : <CloseStep n={13} doneKey="s11" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s11"} onOpen={setCurStep}/>}
 
       <CloseStep n={14} doneKey="s12" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s12"} onOpen={setCurStep}>
-        {blkShare}
+        <button onClick={async()=>{
+            const txt=shareTxt();
+            if(navigator.share){ try{ await navigator.share({text:txt}); }catch(e){} }
+            else { try{ await navigator.clipboard.writeText(txt); window.alert("已複製結算內容,請貼到 LINE 群組"); }catch(e){ window.prompt("複製以下內容貼到 LINE:",txt); } }
+            saveCl({s12:hhmm()});
+          }}
+          style={{width:"100%",padding:"11px",borderRadius:"9px",border:"none",background:"#06c755",color:"#fff",fontSize:"14px",fontWeight:"800",cursor:"pointer"}}>📤 分享結算到 LINE</button>
       </CloseStep>
 
       <CloseStep n={15} doneKey="s13" cl={cl} saveCl={saveCl} pro={pro} open={curStep==="s13"} onOpen={setCurStep}>
-        {!pro&&<div style={{fontSize:"12px",fontWeight:"800",color:"#2a3a5a",marginBottom:"5px"}}>明天大訂（已封存 {tmrBig.length} 組）</div>}
-        {!pro&&(   /* v221:印的時候/暫時桌號 是教學,老手版不顯示 */
+        <div style={{fontSize:"12px",fontWeight:"800",color:"#2a3a5a",marginBottom:"5px"}}>明天大訂（已封存 {tmrBig.length} 組）</div>
         <div style={{fontSize:"12px",color:"#3a4a5a",background:"#f6f9fc",border:"1.5px solid #b8d0e8",borderRadius:"8px",padding:"9px 11px",marginBottom:"7px",lineHeight:"1.85"}}>
           <div style={{fontWeight:"900",color:"#1a4a7a",marginBottom:"3px"}}>📋 印的時候</div>
           ・<b>11:30 以前</b> → 照訂位表上的桌號印<br/>
@@ -4613,7 +4401,7 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
             <span style={{color:"#8a9aaa"}}>（發 mic 叫號才不會聽錯）</span>
             <div style={{fontSize:"11px",color:"#5a7a9a",marginTop:"3px"}}>可用：特殊A/B/C　大訂A/B/C　預訂A/B/C</div>
           </div>
-        </div>)}
+        </div>
         {(()=>{
           // 13:30 以後訂包廂 → 要先確認前面時段有沒有大訂被放進包廂(散包)
           const lateVip=tmrBig.filter(g=>{
@@ -4661,7 +4449,6 @@ function CloseFlow({ day, save, bases, todayStr, groups, data }){
           }}
           disabled={tmrBig.length===0}
           style={{width:"100%",marginTop:"7px",padding:"9px",borderRadius:"8px",border:"1.5px solid #8aa0c0",background:"#fff",color:"#3a5a8a",fontSize:"12px",fontWeight:"800",cursor:tmrBig.length?"pointer":"not-allowed",opacity:tmrBig.length?1:0.5}}>🖨 需要列印的話按這裡</button>
-        {pro&&blkShare}
       </CloseStep>
 
       {/* 結束晚結:記夥伴 */}
@@ -4816,7 +4603,7 @@ function PdCell({ value, onCommit, style }) {
   );
 }
 
-function PrintDingwePage({ onClose, groups, onImported }) {
+function PrintDingwePage({ onClose, groups }) {
   const [preview, setPreview] = useState(false);     // 預覽:把控制欄和工具列藏起來,看到就是印出來的樣子
   const [rows, setRows]   = useState([]);
   const [busy, setBusy]   = useState(false);
@@ -4854,7 +4641,6 @@ function PrintDingwePage({ onClose, groups, onImported }) {
       rawRef.current = raw;
       setRows(res.rows);
       setMsg(`✅ 讀進 ${res.count} 筆${res.skipped ? `,略過 ${res.skipped} 筆已取消/未到` : ""}。每一格都可以直接點下去改字。`);
-      if (onImported) onImported();   // v225:匯入成功 → 交接的「印訂位表」自動劃掉
     } catch (err) {
       setMsg("❌ 讀檔失敗:" + (err && err.message ? err.message : String(err)));
     }
@@ -4940,52 +4726,23 @@ function PrintDingwePage({ onClose, groups, onImported }) {
   };
 
   // ── 匯出 Excel:格式比照你手工整理的那份，欄寬列高先設好 ──────────────────
-  const exportXlsx = async () => {
+  const exportXlsx = () => {
     if (!rows.length) return;
-    // v227:社群版 SheetJS 寫不進儲存格樣式(對齊/框線都會被丟掉)。
-    // 只有「匯出」這一支改用 xlsx-js-style;讀大麥檔仍用原本的 XLSX,不受影響。
-    // 載不到就自動退回原本的匯出(只是沒有對齊),不會讓匯出整個壞掉。
-    let X = XLSX, styled = false;
-    try {
-      const m = await import("https://esm.sh/xlsx-js-style@1.2.0");
-      const cand = m.utils ? m : (m.default && m.default.utils ? m.default : null);
-      if (cand) { X = cand; styled = true; }
-    } catch (err) { X = XLSX; styled = false; }
-    const head = [oneDay ? dayHdr : "日期", "時間", "姓名", "性別", "聯絡電話", "訂位人數", "店家備註"];
+    const head = [oneDay ? dayHdr : "日期", "訂位時間", "訂位人名稱", "性別", "聯絡電話", "訂位人數", "店家備註"];
     const body = rows.map(r => [
       r.room ? "包廂" : (oneDay ? "" : r.date),
       r.name ? r.time : "", r.name || "", r.name ? r.sex : "",
       r.name ? r.tel : "", r.name ? r.pax : "", noteOf(r),
     ]);
-    const ws = X.utils.aoa_to_sheet([head, ...body]);
+    const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
     // 尺寸照你手工整理那份的實際數值（用像素，Excel 打開就是一樣的寬度）
-    // v224:依內容自動算寬度。中日文字算 2 個字寬,備註可能換行 → 取最長那一行
-    const wOf = (v) => String(v??"").split("\n").reduce((mx,line)=>Math.max(mx,
-      line.split("").reduce((n,ch)=>n+(/[\u2e80-\u9fff\uff00-\uffef]/.test(ch)?2:1),0)),0);
-    ws["!cols"] = head.map((h,i)=>{
-      const w = Math.max(wOf(h), ...[head,...body].map(r=>wOf(r[i])));
-      return { wpx: Math.min(460, Math.max(56, w*9+18)) };   // 下限56上限460,避免太窄或撐爆一頁
-    });
+    ws["!cols"] = [{ wpx:69 }, { wpx:96 }, { wpx:153 }, { wpx:96 }, { wpx:148 }, { wpx:175 }, { wpx:420 }];
     ws["!rows"] = [head, ...body].map(() => ({ hpt:20 }));
-    // v227:姓名(第3欄)靠左,其餘置中。載不到樣式版就跳過,不影響資料本身
-    if (styled) {
-      const NAME_COL = 2;
-      for (let r = 0; r <= body.length; r++) {
-        for (let c = 0; c < head.length; c++) {
-          const ref = X.utils.encode_cell({ r, c });
-          if (!ws[ref]) ws[ref] = { t:"s", v:"" };
-          ws[ref].s = {
-            alignment: { horizontal: c===NAME_COL ? "left" : "center", vertical:"center", wrapText:false },
-          };
-        }
-      }
-    }
-    // 邊界＋頁首頁尾全部 0（框線仍要在 Excel 按 Ctrl+A → 所有框線）
+    // 邊界＋頁首頁尾全部 0（框線 SheetJS 免費版寫不進去，要在 Excel 按 Ctrl+A → 所有框線）
     ws["!margins"] = { left:0, right:0, top:0, bottom:0, header:0, footer:0 };
-    const wb = X.utils.book_new();
-    X.utils.book_append_sheet(wb, ws, "訂位表");
-    X.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
-    if (!styled) setMsg("⚠ 已匯出，但樣式函式庫載入失敗，這次沒有套用對齊");
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "訂位表");
+    XLSX.writeFile(wb, `訂位表_${String(dayHdr).replace(/[\/\\:]/g, "-")}.xlsx`);
   };
 
   const BD   = "1px solid #000";
@@ -5035,6 +4792,8 @@ function PrintDingwePage({ onClose, groups, onImported }) {
           <button style={{ ...btn, background:"#1a6a3a", color:"#fff", border:"1.5px solid #1a6a3a", opacity:rows.length ? 1 : 0.4 }}
             disabled={!rows.length} onClick={exportXlsx}
             title="匯出成 Excel，欄寬列高已設好，可自己再調整後從 Excel 列印">📊 匯出 Excel</button>
+          <button style={{ ...btn, background:"#2a7a4a", color:"#fff", border:"1.5px solid #2a7a4a", opacity:rows.length ? 1 : 0.4 }}
+            disabled={!rows.length} onClick={() => window.print()}>🖨 列印 A4</button>
         </div>
 
         {rows.length > 0 && !preview && (
@@ -5171,7 +4930,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
   const day = data[todayStr]||{cash:{},printed:false,notes:[],openChk:{},closeChk:{}};
   const bases = data._bases || [{id:"b1",label:"錢櫃",amt:"10000"},{id:"b2",label:"金庫・備用金",amt:"20000"}];
   const saveBases=(bs)=>{ const nd={...data,_bases:bs}; setData(nd); FS.saveDoc("handover",nd); };
-  const yStr=dayKey(dayAgo(1));   // v227:要跟 todayStr 同格式,否則查不到昨天
+  const yStr=(()=>{ const d=new Date(); d.setDate(d.getDate()-1); return `${d.getMonth()+1}/${d.getDate()}`; })();
   const yUndone=((data[yStr]||{}).notes||[]).filter(n=>!n.done);   // 昨天沒做完的交接事項
   useEffect(()=>{
     FS.loadDoc("handover").then(v=>{ if(v) setData(v); });
@@ -5256,36 +5015,6 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
               <div style={{fontSize:"9px",color:"#b09070",marginTop:"4px"}}>做完點紅點打勾。若今天也沒做完,明天不會再自動帶過來(避免累積)。</div>
             </div>
           )}
-          {/* v222:開早算錢 — 金庫、備用金、錢櫃都實際清點,並跟昨晚晚結逐格對照 */}
-          {(()=>{
-            const yc=((data[yStr]||{}).close)||{};
-            const prev=lastSafeCount(data,"open");        // v226:最近一次金庫清點,不分階段
-            const hasY=!!prev;
-            const os=day.openSafe||{}, orv=day.openReserve||{}, oc=day.openCounts||{};
-            const drawer=bases.filter(b=>b.label.includes("錢櫃"))[0];
-            const ySafe=yc.safe||{}, yCnt=(yc.counts||{});
-            return (
-              <div style={{background:"#fff",border:"2px solid #c9a45c",borderRadius:"10px",padding:"10px 11px",marginBottom:"9px"}}>
-                <div style={{fontSize:"13px",fontWeight:"900",color:"#8a5210",marginBottom:"6px"}}>💵 開早算錢</div>
-                {!hasY&&<div style={{fontSize:"11.5px",fontWeight:"800",color:"#a04010",background:"#fdf0e8",border:"1.5px solid #e8c0a0",borderRadius:"7px",padding:"7px 9px",marginBottom:"7px"}}>找不到之前的清點紀錄，沒得對照 —— 這三項請照實數，數完跟夥伴確認</div>}
-
-                <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"4px"}}>① 金庫</div>
-                <SafeCount notes={os.notes} bags={os.bags} loose={os.loose}
-                  prev={(prev||{}).safe} prevLabel={(prev||{}).label}
-                  onChange={(nv)=>save({openSafe:{...os,...nv}})}/>
-
-                <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>② 備用金（現金 ＋ 買東西的收據 ＝ $20,000）</div>
-                <ReserveCount rv={orv} onChange={(nv)=>save({openReserve:nv})}/>
-
-                {drawer&&(<>
-                  <div style={{fontSize:"12px",fontWeight:"900",color:"#1a3a5a",marginTop:"11px"}}>③ {drawer.label}</div>
-                  <CountTable counts={oc[drawer.id]||{}} baseAmt={drawer.amt} label={drawer.label}
-                    onChange={(nc)=>save({openCounts:{...oc,[drawer.id]:nc}})}/>
-                  {hasY&&<NightRef at={yc.s6||""} pairs={CASH_DENOM.map(d=>[`$${d}`,(yCnt[drawer.id]||{})[d],(oc[drawer.id]||{})[d]])}/>}
-                </>)}
-              </div>
-            );
-          })()}
           <div style={{background:"#fff",border:"1.5px solid #e8d0a0",borderRadius:"10px",padding:"10px 11px"}}>
             <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"6px"}}>
               <span style={{fontSize:"12px",fontWeight:"800",color:"#a06a10"}}>☀️ 開店準備</span>
@@ -5308,7 +5037,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
         </>)}
 
         {/* 🌙 晚結:打烊結算清單 */}
-        {phase==="close"&&<CloseFlow day={day} save={save} bases={bases} todayStr={todayStr} groups={groups} data={data}/>}
+        {phase==="close"&&<CloseFlow day={day} save={save} bases={bases} todayStr={todayStr} groups={groups}/>}
 
         {phase==="mid"&&(<>
         {/* 中間結算:做成步驟,跟晚結一樣的操作習慣 */}
@@ -5318,7 +5047,8 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             <span style={{fontSize:"13px",fontWeight:"800",color:"#1a3a5a"}}>金庫清點</span>
             {(()=>{
               const sf=day.midSafe||{};
-              const tot=safeTotal(sf,(lastSafeCount(data,"mid")||{}).safe);
+              const tot=CASH_DENOM.reduce((s,d)=>s+d*(+((sf.notes||{})[d])||0),0)
+                       +COIN_BAGS.reduce((s,c)=>s+c.per*(+((sf.bags||{})[c.d])||0),0);
               if(tot!==SAFE_TOTAL) return null;
               return <span style={{fontSize:"11px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"5px",padding:"2px 8px"}}>🔐 金庫正確</span>;
             })()}
@@ -5346,12 +5076,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
           </div>
           {(()=>{
             const sf=day.midSafe||{};
-            const pv=lastSafeCount(data,"mid");
-            return (<>
-              <SafeCount notes={sf.notes} bags={sf.bags} loose={sf.loose}
-                prev={(pv||{}).safe} prevLabel={(pv||{}).label}
-                onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>
-            </>);
+            return <SafeCount notes={sf.notes} bags={sf.bags} onChange={(nv)=>save({midSafe:{...sf,...nv}})}/>;
           })()}
         </div>
 
@@ -5502,8 +5227,7 @@ function HandoverBox({ todayStr, open, setOpen, groups }) {
             style={{width:"100%",marginTop:"8px",fontSize:"13px",color:"#fff",background:"#2a7a4a",border:"none",borderRadius:"8px",padding:"11px 10px",cursor:"pointer",fontWeight:"900",minHeight:"42px"}}>
             🖨 上傳 Excel 直接印<span style={{fontSize:"11px",fontWeight:"700",opacity:0.85}}>　(不用自己整理格式)</span>
           </button>
-          {pdOpen&&<PrintDingwePage groups={groups} onClose={()=>setPdOpen(false)}
-            onImported={()=>{ if(!day.printed) save({printed:true,printedAt:now()}); }}/>}
+          {pdOpen&&<PrintDingwePage groups={groups} onClose={()=>setPdOpen(false)}/>}
           <div style={{fontSize:"12px",color:"#c02020",fontWeight:"800",background:"#fbe4e4",border:"1.5px solid #e0a0a0",borderRadius:"8px",padding:"8px 10px",marginTop:"7px",lineHeight:"1.7"}}>
             ⚠ 印出來看到有時段 <b>20 位以上</b> → 一定要去確認<b>訂位關了沒</b>
             <div style={{fontSize:"11px",fontWeight:"600",color:"#a05040",marginTop:"2px"}}>這個最常忘記，忘了訂位就會爆掉</div>
@@ -5695,7 +5419,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
     setTodoChecks(nn); FS.saveDoc("todo",nn); return true;
   };
   const toggleTodo=(key)=>{ saveTodo({...todoChecks,[key]:!todoChecks[key]}); };
-  const todayStr=dayKey(new Date());
+  const todayStr=(()=>{const d=new Date();return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;})();
   useEffect(()=>{
     const unsub=FS.subscribeDoc("dingwe",d=>{ if(d&&d.lastImport!==undefined) setLastResvImport(d.lastImport); });
     FS.loadDoc("todo").then(d=>{ if(d!==undefined){ if(d) setTodoChecks(d); todoLoaded.current=true; } });
@@ -5905,7 +5629,9 @@ const rowBg=(g)=>{
   const pendingMai = groups.filter(g=>g.fromMai&&g.memberType&&g.memberType!=="private"&&!g.cancelled);
   const leaveGuard = (go) => {
     if(pendingMai.length===0){ go(); return; }
-    if(window.confirm(`還有 ${pendingMai.length} 筆麥訂沒按「轉入追蹤表」\n\n確定＝回去處理　取消＝直接離開`)) return;
+    const list=pendingMai.slice(0,6).map(g=>`　・${g.date} ${g.time} ${g.name}（代碼 ${g.code}）`).join("\n");
+    const more=pendingMai.length>6?`\n　…還有 ${pendingMai.length-6} 筆`:"";
+    if(window.confirm(`⚠ 有 ${pendingMai.length} 筆已經確認會員、代碼也出來了，但還沒按「轉入追蹤表」：\n\n${list}${more}\n\n沒轉入追蹤表就不會開始追訂金、催點餐、算低消。\n\n要先回去處理嗎？\n\n【確定】＝留下來處理　【取消】＝仍要離開`)) return;
     go();
   };
 
@@ -6008,7 +5734,7 @@ const rowBg=(g)=>{
         <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
           <button title={TIP_TXT.dingwe} onClick={()=>leaveGuard(()=>setShowDingwe(true))} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:"#dce8f4",color:"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>人數統計表{(()=>{const t=new Date();const cd=(t.getMonth()+1)<9?true:[1,3,5].includes(t.getDay());if(!cd)return null;return todoChecks[`close_${todayStr}`]?null:<span className="blinkExcl">!</span>;})()}</button>
           <button title={TIP_TXT.mai} onClick={()=>setShowMaiOnly(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showMaiOnly?"#1a4a6a":"#dce8f4",color:showMaiOnly?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap",position:"relative"}}>📥 麥訂【大訂未加LINE】{showMaiOnly?" ✓":""}{(()=>{const n=groups.filter(g=>g.fromMai&&!g.cancelled).length;return n>0?<> ({n})<span className="blinkExcl">!</span></>:"";})()}</button>
-          <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單（詢問餐評）"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
+          <button title={TIP_TXT.past} onClick={()=>setShowPast(v=>!v)} style={{padding:"11px 16px",borderRadius:"9px",border:"1.5px solid #a8c4dc",background:showPast?"#1a4a6a":"#dce8f4",color:showPast?"#fff":"#1a4a6a",fontSize:"15px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{showPast?"隱藏過期":"⏰ 過期訂單"}{(()=>{const all=groups.filter(g=>!g.fromMai&&!g.cancelled&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&isPastMeal(g));const n=all.length;const urgent=all.filter(isPastMeal2d).length;return n>0?<> ({n}){urgent>0?<span className="blinkExcl">!</span>:null}</>:"";})()}</button>
           <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="🔍 搜 日期/姓名/電話/代碼/標籤/備註/大麥備註"
             style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",flex:1,padding:"8px 12px",fontSize:"12px"}}/>
           {filter&&<button onClick={()=>setFilter("")} style={{background:"none",border:"none",color:"#b07840",fontSize:"16px",cursor:"pointer"}}>✕</button>}
@@ -6123,7 +5849,7 @@ const rowBg=(g)=>{
                   const ot=hoData._openTasks||OPEN_TASKS;
                   const oc=day.openChk||{};
                   items=[{t:"開店準備",done:ot.length>0&&ot.every(x=>oc[x])}];
-                  const yStr=dayKey(dayAgo(1));   // v227:同上
+                  const yStr=(()=>{const d=new Date();d.setDate(d.getDate()-1);return `${d.getMonth()+1}/${d.getDate()}`;})();
                   const yU=((hoData[yStr]||{}).notes||[]).filter(n=>!n.done);
                   if(yU.length>0) items.push({t:`昨天沒做完 ${yU.length} 件`,done:false});
                 } else if(_phase.k==="mid"){
@@ -6249,35 +5975,6 @@ const rowBg=(g)=>{
                   );
                 })()}
                 {(()=>{
-                  // v218:單已進 POS 之後客人又改單 → POS 裡的內容跟系統不一樣了
-                  const changed=groups.filter(g=>{
-                    if(g.cancelled) return false;
-                    if(!g.date||isPastMeal(g)) return false;          // 跟「要 KEY 單」同一把尺
-                    return ordersEditedAfterLock(g).length>0;
-                  });
-                  if(changed.length===0) return null;
-                  return (
-                    <div style={{background:"#fff",border:"2px solid #c02020",borderRadius:"9px",padding:"7px 9px"}}>
-                      <div className="blinkTag" style={{fontSize:"12px",color:"#c02020",fontWeight:"900",marginBottom:"3px"}}>⚠ 已封存後改單 {changed.length} 組<span title="單已經進 POS 之後客人又改了，POS 裡的內容跟系統不一樣。進去對照後記得改 POS" style={{fontSize:"10px",fontWeight:"700",color:"#a08070",marginLeft:"5px",cursor:"help"}}>(?)</span></div>
-                      {changed.map(g=>{
-                        const eo=ordersEditedAfterLock(g);
-                        return (
-                          <div key={g.id} style={{fontSize:"11px",color:"#5a3020",lineHeight:"1.7",borderTop:"1px solid #f0d8d8",paddingTop:"3px",marginTop:"3px"}}>
-                            <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
-                              <span><b>{g.date} {g.time} {g.name}</b>　{g.headcount}
-                                <span style={{color:"#c02020",fontWeight:"800",marginLeft:"6px"}}>{eo.map(o=>`${o.num}號`).join("、")} 改過</span>
-                              </span>
-                              <span style={{flex:1}}/>
-                              <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
-                                style={{fontSize:"11px",background:"#c02020",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>看全組訂單 →</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-                {(()=>{
                   // 已鎖(過點餐截止)但還沒封存餐點 → 還沒 KEY 單
                   const needKey=groups.filter(g=>{
                     if(g.fromMai||g.cancelled||g.archived) return false;
@@ -6352,9 +6049,6 @@ const rowBg=(g)=>{
                               padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>
                             {copiedId===`lock_${g.id}`?"✓ 已複製":<><IcoLine size={12} color="#fff"/>問可否鎖單</>}
                           </button>
-                          <button onClick={()=>onOpenSummary&&onOpenSummary(g)}
-                            style={{fontSize:"11px",background:"#3a7a5a",color:"#fff",border:"none",borderRadius:"6px",
-                              padding:"7px 11px",cursor:"pointer",fontWeight:"800",whiteSpace:"nowrap",minHeight:"32px"}}>看全組訂單 →</button>
                           <button onClick={()=>{
                               const d=new Date();
                               setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,noEarlyLock:true,noEarlyLockAt:`${d.getMonth()+1}/${d.getDate()}`}));
@@ -9437,7 +9131,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
     <div style={S.page}>
       {isLockedNow(group)&&(
         <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
-          <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（{lockReason(group)}）</span>
+          <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（已過點餐時間）</span>
         </div>
       )}
       <style>{GS}</style>
@@ -9557,7 +9251,10 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
                       const eds=order.editLog||[];
                       const latest=eds.length>0?eds[eds.length-1]:order.sentAt;
                       // 封存/已KEY 之後客人又改單 → POS 裡的單跟現在不一樣了,要閃
-                      const afterLock=editedAfterLock(group,order);
+                      const st=(group.statusLog&&group.statusLog.status)||"";
+                      const locked2=["餐點封存","已KEY需改單"].includes(st)||group.archiveType==="menu";
+                      const toMin=(s)=>{const m=String(s||"").match(/(\d+)\/(\d+)(?:\s+(\d+):(\d+))?/);return m?((+m[1])*100000+(+m[2])*1440+(+(m[3]||0))*60+(+(m[4]||0))):0;};
+                      const afterLock=locked2&&eds.length>0&&toMin(latest)>=toMin((group.statusLog&&group.statusLog.date)||"");
                       return (
                         <span style={{display:"inline-flex",alignItems:"center",gap:"5px",flexWrap:"wrap"}}>
                           <span className={afterLock?"blinkTag":""}
@@ -10121,7 +9818,7 @@ export default function App() {
     if(!g){setErr("找不到此代碼，請確認後重試");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
     if(!isSummary && isLockedNow(g)){
-      setErr(`⚠ 訂單已鎖定（${lockReason(g)}），如需協助請洽現場夥伴`);
+      setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");
       return;
     }
     setActiveGroup(g);
@@ -10136,7 +9833,7 @@ export default function App() {
     const g=groups.find(x=>x.code===code);
     if(!g){setErr("找不到此代碼");return;}
     if(g.cancelled){setErr("此訂位已取消");return;}
-    if(isLockedNow(g)){setErr(`⚠ 訂單已鎖定（${lockReason(g)}），如需協助請洽現場夥伴`);return;}
+    if(isLockedNow(g)){setErr("⚠ 已過點餐時間，訂單已鎖定，如需協助請洽現場夥伴");return;}
     const order=g.orders.find(o=>o.num===num);
     if(!order){setErr(`找不到 ${num} 號訂單，請確認號碼`);return;}
     setActiveGroup(g);
