@@ -25,6 +25,21 @@ const auth = getAuth(firebaseApp);
 let _authReady = null;
 const FSTAT = { auth:"連線中…", err:null, lastSave:null, listeners:new Set() };
 function fstatSet(patch){ Object.assign(FSTAT, patch); FSTAT.listeners.forEach(fn=>{ try{fn();}catch(e){} }); }
+// v234:量 groups 整份的實際大小(Firestore 單一文件上限 1,048,576 bytes),以及圖片佔多少
+function measureGroups(groups){
+  try{
+    const s=JSON.stringify(groups||[]);
+    const bytes=new TextEncoder().encode(s).length;
+    let img=0, n=0;
+    const walk=(v)=>{
+      if(typeof v==="string"){ if(v.startsWith("data:image")){ img+=v.length; n++; } }
+      else if(Array.isArray(v)) v.forEach(walk);
+      else if(v&&typeof v==="object") for(const k in v) walk(v[k]);
+    };
+    walk(groups);
+    fstatSet({size:{bytes,img,n,at:new Date().toLocaleTimeString("zh-TW",{hour12:false})}});
+  }catch(e){}
+}
 function ensureAuth() {
   if (_authReady) return _authReady;
   _authReady = new Promise((resolve) => {
@@ -107,7 +122,7 @@ const FS = {
       //       現在跟 saveDoc 一樣回報到 FSTAT,狀態燈會變紅並顯示錯誤原因。
       console.error("儲存失敗 groups", e);
       fstatSet({err:`訂單儲存失敗:${e.code||e.message}`,
-        lastGroupSave:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜❌存檔失敗｜${e.code||e.message}`});
+        lastGroupSave:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜❌存檔失敗｜${e.code||""}｜${e.message||""}`});
       try { localStorage.setItem("jinher_groups", JSON.stringify(groups)); } catch(e2) {}
     }
   },
@@ -322,7 +337,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v233";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v234";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5563,6 +5578,20 @@ function FsStatus(){
     <div>
       <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
         color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
+      {FSTAT.size&&(()=>{
+        const LIMIT=1048576, b=FSTAT.size.bytes;
+        const kb=(x)=>Math.round(x/1024).toLocaleString();
+        const pct=Math.round(b/LIMIT*100), over=b>LIMIT, warn=pct>=85;
+        return (
+          <div style={{fontSize:"11px",lineHeight:"1.7",marginTop:"5px",borderRadius:"6px",padding:"6px 8px",whiteSpace:"normal",
+            color:over?"#fff":warn?"#7a4a00":"#1a4a2a", background:over?"#c02020":warn?"#fff0c8":"#e8f5ec",
+            border:`1px solid ${over?"#8a1010":warn?"#d8a840":"#a8d0b4"}`}}>
+            <b>訂位資料大小</b>　{kb(b)} KB / 上限 1,024 KB（<b>{pct}%</b>）{over?"　⚠ 已超過,新訂單存不進去":warn?"　⚠ 快滿了":""}
+            <br/>其中圖片 {FSTAT.size.n} 張,佔 {kb(FSTAT.size.img)} KB（{b?Math.round(FSTAT.size.img/b*100):0}%）
+            <span style={{opacity:0.7}}>　量測 {FSTAT.size.at}</span>
+          </div>
+        );
+      })()}
       {FSTAT.lastSubmit&&(
         <div style={{fontSize:"11px",color:"#1a3a5a",background:"#eef4fa",border:"1px solid #b8d0e8",borderRadius:"6px",padding:"6px 8px",marginTop:"5px",lineHeight:"1.7",whiteSpace:"normal",wordBreak:"break-all"}}>
           <b>送單診斷(依順序)</b><br/>
@@ -9996,7 +10025,7 @@ export default function App() {
   // Load initial data + subscribe to real-time updates
   useEffect(()=>{
     FS.loadGroups().then(data=>{
-      if(data&&Array.isArray(data)&&data.length>0) setGroupsState(data);
+      if(data&&Array.isArray(data)&&data.length>0) { setGroupsState(data); measureGroups(data); }
       else setGroupsState(DEMO);
       setLoaded(true);
       setSyncStatus("已連線 🔥");
@@ -10017,6 +10046,7 @@ export default function App() {
           try { const _g=data.find(x=>x.id===window.__diagGid);
             if(_g) fstatSet({lastRemote:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜雲端覆蓋本機｜雲端那組只有${(_g.orders||[]).length}筆`}); } catch(e){}
           setGroupsState(data);
+          measureGroups(data);
           setSyncStatus("即時同步 ✓");
         }
       });
@@ -10038,6 +10068,7 @@ export default function App() {
         // v233 診斷:計時器真的觸發了嗎?當下記憶體裡那組有幾筆?
         try { if(window.__diagGid){ const _g=next.find(x=>x.id===window.__diagGid);
           fstatSet({lastSaveStart:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜開始存檔｜記憶體那組${_g?(_g.orders||[]).length:"找不到"}筆`}); } } catch(e){}
+        measureGroups(next);
         FS.saveGroups(next).catch(()=>{});
         try { localStorage.setItem("jinher_groups", JSON.stringify(next)); } catch(e) {}
       }, 500);
