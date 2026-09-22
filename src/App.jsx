@@ -60,6 +60,11 @@ const FS = {
     try { await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) }); fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})}); }
     catch(e) { console.error("儲存失敗", name, e); fstatSet({err:`儲存失敗(${name}):${e.code||e.message}`}); }
   },
+  // v235:跟 saveDoc 一樣,但失敗會丟出錯誤。搬照片時要確定每張真的存進去,不能被吞掉
+  async saveDocStrict(name, obj) {
+    await ensureAuth();
+    await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) });
+  },
   async loadDoc(name) {
     await ensureAuth();
     try {
@@ -337,7 +342,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v234";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v235";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1924,13 +1929,13 @@ function ComplaintPanel({ g, setGroups, groups, walkin, onAdd }) {
             return (
               <div key={j} style={{fontSize:"11px",color:"#8a4a10",lineHeight:"1.6",marginBottom:"4px"}}>
                 🍽 <b>{nm}</b>{dk.length>0?`　${dk.join("、")}`:""}{nt?`　—「${nt}」`:""}
-                {(typeof dd==="object"&&dd.photo)&&<img src={dd.photo} style={{display:"block",width:"100%",maxWidth:"180px",borderRadius:"7px",border:"1px solid #e0c0b0",marginTop:"3px"}}/>}
+                {(typeof dd==="object"&&dd.photo)&&<CplPhoto src={dd.photo} style={{display:"block",width:"100%",maxWidth:"180px",borderRadius:"7px",border:"1px solid #e0c0b0",marginTop:"3px"}}/>}
               </div>
             );
           })}
         </div>
       )}
-      {it.photo&&<img src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
+      {it.photo&&<CplPhoto src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
       <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 8px",fontSize:"11px",color:"#5a4030",lineHeight:"1.5"}}>
         <span style={{color:"#a08070"}}>原因</span><span>{it.reason||"—"}</span>
         <span style={{color:"#a08070"}}>如何調整</span><span>{it.adjust||it.note||"—"}</span>
@@ -2022,6 +2027,124 @@ function compressImage(file, maxW=1080, quality=0.55){
 }
 
 // 封存照片:存在獨立的一筆紀錄(arch_xxx),需要時才載入,點縮圖可放大
+// v235:客訴照片。src 可能是舊的 data:image(還沒搬的)或新的「cplimg:編號」(存在獨立文件)
+//       照抄 ArchivePhoto 的讀法。兩種格式都要能顯示,搬移前後都不會破圖
+function CplPhoto({ src, style }){
+  const isRef = typeof src==="string" && src.startsWith("cplimg:");
+  const [img,setImg]=useState(isRef?null:(src||null));
+  const [err,setErr]=useState(false);
+  useEffect(()=>{
+    if(!isRef){ setImg(src||null); setErr(false); return; }
+    let alive=true; setErr(false); setImg(null);
+    FS.loadDoc(`cplimg_${src.slice(7)}`).then(d=>{ if(alive){ if(d&&d.img) setImg(d.img); else setErr(true); } }).catch(()=>{ if(alive) setErr(true); });
+    return ()=>{ alive=false; };
+  },[src]);
+  if(!src) return null;
+  if(err) return <span style={{fontSize:"10px",color:"#c06030"}}>照片載入失敗</span>;
+  if(!img) return <span style={{display:"block",width:"100%",maxWidth:(style&&style.maxWidth)||"180px",height:"60px",borderRadius:"7px",background:"#e8e0d0"}}/>;
+  return <img src={img} style={style}/>;
+}
+// v235:上傳客訴照片 → 存成獨立文件 → 回傳編號。失敗會丟錯,呼叫端要跳提醒(不會偷偷塞回訂位裡)
+async function uploadCplPhoto(file){
+  const img=await compressImage(file);
+  const id=`${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  await FS.saveDocStrict(`cplimg_${id}`, {img});
+  return `cplimg:${id}`;
+}
+// v235:一次性搬移現有圖片,讓 groups 降到 1 MB 以下
+//   1. 先下載備份檔(全部圖片,含退款簽名)
+//   2. 每張客訴照片存成獨立文件 → 讀回來比對內容一模一樣 → 才換成編號
+//      任何一張沒驗證成功,那張保留原圖不動,不會弄丟
+//   3. 退款簽名圖清掉(功能已移除,備份檔裡有)
+//   用 prev 套用,搬移期間有新訂單進來也不會被蓋掉
+const isDataImg=(v)=>typeof v==="string"&&v.startsWith("data:image");
+function collectImages(groups){
+  const items=[];
+  (groups||[]).forEach(g=>{
+    const base={gid:g.id,name:g.name||"",date:g.date||"",time:g.time||""};
+    if(isDataImg(g.refundStaffSig))    items.push({...base,kind:"退款簽名-員工",src:g.refundStaffSig});
+    if(isDataImg(g.refundCustomerSig)) items.push({...base,kind:"退款簽名-客人",src:g.refundCustomerSig});
+    (g.complaints||[]).forEach(c=>{
+      if(c&&isDataImg(c.photo)) items.push({...base,kind:"客訴照片",src:c.photo});
+      ((c&&c.dishes)||[]).forEach(d=>{ if(d&&typeof d==="object"&&isDataImg(d.photo)) items.push({...base,kind:"客訴菜色照片",src:d.photo}); });
+    });
+  });
+  return items;
+}
+async function migrateImages(groups, setGroups, onProgress){
+  const items=collectImages(groups);
+  if(!items.length) return {moved:0,kept:0,sigs:0};
+  // 1. 備份
+  const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),count:items.length,items},null,1)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`今鶴照片備份_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  // 2. 搬客訴照片:存 → 讀回驗證 → 成功才記下編號
+  const refOf=new Map();
+  const cpl=items.filter(i=>i.kind.startsWith("客訴"));
+  let moved=0, kept=0, n=0;
+  for(const it of cpl){
+    n++; onProgress&&onProgress(n,cpl.length);
+    if(refOf.has(it.src)) continue;                      // 同一張圖出現兩次,只存一次
+    try{
+      const id=`${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      await FS.saveDocStrict(`cplimg_${id}`,{img:it.src});
+      const back=await FS.loadDoc(`cplimg_${id}`);
+      if(back&&back.img===it.src){ refOf.set(it.src,`cplimg:${id}`); moved++; }
+      else kept++;
+    }catch(e){ kept++; }
+  }
+  const sigs=items.filter(i=>i.kind.startsWith("退款")).length;
+  // 3. 套用(只換驗證成功的;退款簽名圖清掉;其他欄位原封不動)
+  const swap=(v)=>(isDataImg(v)&&refOf.has(v))?refOf.get(v):v;
+  setGroups(prev=>prev.map(g=>{
+    const hasSig=isDataImg(g.refundStaffSig)||isDataImg(g.refundCustomerSig);
+    const hasCpl=(g.complaints||[]).some(c=>c&&(refOf.has(c.photo)||((c.dishes)||[]).some(d=>d&&typeof d==="object"&&refOf.has(d.photo))));
+    if(!hasSig&&!hasCpl) return g;
+    const ng={...g};
+    if(isDataImg(ng.refundStaffSig))    delete ng.refundStaffSig;
+    if(isDataImg(ng.refundCustomerSig)) delete ng.refundCustomerSig;
+    if(Array.isArray(g.complaints)) ng.complaints=g.complaints.map(c=>{
+      if(!c) return c;
+      const nc={...c};
+      if(c.photo!==undefined) nc.photo=swap(c.photo);
+      if(Array.isArray(c.dishes)) nc.dishes=c.dishes.map(d=>(d&&typeof d==="object"&&d.photo!==undefined)?{...d,photo:swap(d.photo)}:d);
+      return nc;
+    });
+    return ng;
+  }));
+  return {moved,kept,sigs};
+}
+// v235:搬移按鈕。訂位裡沒有圖片就不出現;搬完顯示結果,有失敗的可以再按一次
+function ImageMigrateButton({ groups, setGroups }){
+  const [busy,setBusy]=useState(false);
+  const [prog,setProg]=useState("");
+  const [result,setResult]=useState(null);
+  const count=collectImages(groups).length;
+  if(!count&&!result) return null;
+  return (
+    <div style={{marginTop:"6px"}}>
+      {count>0&&(
+        <button disabled={busy} onClick={async()=>{
+            if(!window.confirm(`要搬移 ${count} 張圖片嗎?\n\n1. 先下載一份備份檔到這台裝置\n2. 客訴照片搬到獨立文件(照片保留)\n3. 退款簽名圖清掉(功能已移除)\n\n每張照片都會確認存好才換掉,不會弄丟。\n搬完請所有裝置重新整理。`)) return;
+            setBusy(true); setResult(null); setProg("準備中…");
+            try{ const r=await migrateImages(groups,setGroups,(d,t)=>setProg(`搬移中 ${d}/${t}`)); setResult(r); }
+            catch(e){ setResult({error:e.message||String(e)}); }
+            setBusy(false); setProg("");
+          }}
+          style={{width:"100%",fontSize:"12px",fontWeight:"900",color:"#fff",background:busy?"#8a9aaa":"#1a6a3a",border:"none",borderRadius:"7px",padding:"9px",cursor:busy?"default":"pointer"}}>
+          {busy?prog:`⬇ 備份並搬移 ${count} 張圖片`}
+        </button>
+      )}
+      {result&&(
+        <div style={{fontSize:"11px",marginTop:"5px",lineHeight:"1.6",fontWeight:"700",color:(result.error||result.kept)?"#a03020":"#1a6a3a"}}>
+          {result.error ? `❌ 失敗:${result.error}(資料沒有被改動)`
+            : `✅ 客訴照片搬好 ${result.moved} 張　退款簽名清掉 ${result.sigs} 張${result.kept?`\n⚠ ${result.kept} 張沒搬成功,已保留原圖,可以再按一次`:""}`}
+        </div>
+      )}
+    </div>
+  );
+}
 function ArchivePhoto({ photoId, size=54 }){
   const [img,setImg]=useState(null);
   const [big,setBig]=useState(false);
@@ -2111,7 +2234,7 @@ function CplDetail({ val, onChange }) {
     set({dishes:[...dishes,{id,kinds:[],note:""}]});
   };
   const pickPhoto = async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; setBusy(true);
-    try{ set({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } setBusy(false); e.target.value=""; };
+    try{ set({photo: await uploadCplPhoto(f)}); }catch(err){ window.alert("照片上傳失敗，請再試一次（這張照片沒有加上去）"); } setBusy(false); e.target.value=""; };
   const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
   return (
     <div style={{marginBottom:"12px"}}>
@@ -2178,14 +2301,14 @@ function CplDetail({ val, onChange }) {
                 <div style={{marginTop:"7px"}}>
                   {d.photo?(
                     <div style={{position:"relative"}}>
-                      <img src={d.photo} style={{width:"100%",borderRadius:"7px",border:"1px solid #d0c0a8"}}/>
+                      <CplPhoto src={d.photo} style={{width:"100%",borderRadius:"7px",border:"1px solid #d0c0a8"}}/>
                       <button onClick={()=>upd({photo:null})} style={{position:"absolute",top:"5px",right:"5px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"3px 8px",fontSize:"11px",cursor:"pointer"}}>移除</button>
                     </div>
                   ):(
                     <label style={{display:"block",textAlign:"center",padding:"8px",borderRadius:"7px",border:"1.5px dashed #c0a880",background:"#fff",color:"#9a6a30",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>
                       📷 這道的照片（選填）
                       <input type="file" accept="image/*" style={{display:"none"}}
-                        onChange={async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ upd({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } e.target.value=""; }}/>
+                        onChange={async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ upd({photo: await uploadCplPhoto(f)}); }catch(err){ window.alert("照片上傳失敗，請再試一次（這張照片沒有加上去）"); } e.target.value=""; }}/>
                     </label>
                   )}
                 </div>
@@ -2199,7 +2322,7 @@ function CplDetail({ val, onChange }) {
         <div style={{marginTop:"4px"}}>
           {v.photo?(
             <div style={{position:"relative"}}>
-              <img src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
+              <CplPhoto src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
               <button onClick={()=>set({photo:null})} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
             </div>
           ):(
@@ -5876,7 +5999,6 @@ const rowBg=(g)=>{
     {key:"deposit",    label:"訂金",    w:74, text:true},
     {key:"depositDate",label:"付訂日",  w:66, text:true},
     {key:"collector",  label:"收款人",  w:48, text:true},
-    {key:"refundSigned",label:"退款\n簽名",w:44,chk:true,color:"#e87a5a"},
     {key:"cancelled",  label:"取消",   w:38, chk:true,color:"#c05050"},
     {key:"note",       label:"備註",   w:220,text:true},
   ];
@@ -5905,7 +6027,7 @@ const rowBg=(g)=>{
                     <button key={t} onClick={()=>{fn();setGearOpen(false);}}
                       style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderRadius:"7px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"9px 11px",cursor:"pointer"}}>{t}</button>
                   ))}
-                  <div style={{borderTop:"1px solid #e0e8f0",marginTop:"4px",paddingTop:"6px",paddingLeft:"11px",paddingBottom:"3px"}}><FsStatus/></div>
+                  <div style={{borderTop:"1px solid #e0e8f0",marginTop:"4px",paddingTop:"6px",paddingLeft:"11px",paddingBottom:"3px"}}><FsStatus/><ImageMigrateButton groups={groups} setGroups={setGroups}/></div>
                 </div>
               )}
             </div>
@@ -9869,9 +9991,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
           </div>
         </div>
       )}
-      {!fromStaff&&<RefundSection group={group} S={S} onSaveSig={(type,dataUrl,time)=>{
-        if(onCancelOrder) onCancelOrder(-99, {sigType:type, sig:dataUrl, time});
-      }}/>}
+      {/* v235:退款簽名功能已移除(簽名圖曾塞進訂位資料,讓 groups 撐破 1 MB)。RefundSection 元件保留未刪,只是不再顯示 */}
       {allOrders.length > 0 && (
         <div style={{padding:"14px 16px 24px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#7a5c3e",marginBottom:"4px"}}>
