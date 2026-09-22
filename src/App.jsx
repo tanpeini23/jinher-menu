@@ -99,11 +99,15 @@ const FS = {
     try {
       await setDoc(doc(db, "jinher", "groups"), { data: JSON.stringify(groups) });
       fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})});
+      // v233 診斷:記錄這次存到雲端的,送單那組有幾筆
+      try { const _g=(groups||[]).find(x=>x.id===window.__diagGid);
+        if(_g) fstatSet({lastGroupSave:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜✅存檔成功｜那組存了${(_g.orders||[]).length}筆`}); } catch(e){}
     } catch(e) {
       // v232:訂單存檔失敗以前完全不顯示(畫面燈號還是綠的),全部客人的單存不進去也沒人知道。
       //       現在跟 saveDoc 一樣回報到 FSTAT,狀態燈會變紅並顯示錯誤原因。
       console.error("儲存失敗 groups", e);
-      fstatSet({err:`訂單儲存失敗:${e.code||e.message}`});
+      fstatSet({err:`訂單儲存失敗:${e.code||e.message}`,
+        lastGroupSave:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜❌存檔失敗｜${e.code||e.message}`});
       try { localStorage.setItem("jinher_groups", JSON.stringify(groups)); } catch(e2) {}
     }
   },
@@ -318,7 +322,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v232";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v233";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5556,8 +5560,19 @@ function FsStatus(){
           : noAuth ? {bg:"#fdf0d0",fg:"#8a5210",bd:"1px solid #d8b860",t:"⚠ 未登入模式"}
           : {bg:"#e2f2e8",fg:"#2a7a4a",bd:"none",t:"🔥 即時同步"};
   return (
-    <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
-      color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
+    <div>
+      <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
+        color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
+      {FSTAT.lastSubmit&&(
+        <div style={{fontSize:"11px",color:"#1a3a5a",background:"#eef4fa",border:"1px solid #b8d0e8",borderRadius:"6px",padding:"6px 8px",marginTop:"5px",lineHeight:"1.7",whiteSpace:"normal",wordBreak:"break-all"}}>
+          <b>送單診斷(依順序)</b><br/>
+          <b>①送單</b> {FSTAT.lastSubmit}<br/>
+          <b>②開始存檔</b> {FSTAT.lastSaveStart||<span style={{color:"#c02020",fontWeight:"900"}}>沒有觸發</span>}<br/>
+          <b>③存檔結果</b> {FSTAT.lastGroupSave||<span style={{color:"#c02020",fontWeight:"900"}}>沒有結果</span>}<br/>
+          <b>④雲端覆蓋</b> {FSTAT.lastRemote||<span style={{color:"#2a7a4a"}}>沒發生</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -9998,6 +10013,9 @@ export default function App() {
           // 別讓即時同步把「剛在本機按下、還沒存完」的修改蓋掉(例如轉入追蹤表)
           if(pending) return;                                   // 自己樂觀寫入的回音,本機已有資料
           if(Date.now()-lastLocalEdit.current < 2500) return;   // 剛改過,先別被伺服器舊資料覆蓋
+          // v233 診斷:雲端資料整份蓋過本機 —— 這是唯一會自動刪掉記憶體中訂單的地方
+          try { const _g=data.find(x=>x.id===window.__diagGid);
+            if(_g) fstatSet({lastRemote:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜雲端覆蓋本機｜雲端那組只有${(_g.orders||[]).length}筆`}); } catch(e){}
           setGroupsState(data);
           setSyncStatus("即時同步 ✓");
         }
@@ -10017,6 +10035,9 @@ export default function App() {
       // Debounce saves
       if(saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(()=>{
+        // v233 診斷:計時器真的觸發了嗎?當下記憶體裡那組有幾筆?
+        try { if(window.__diagGid){ const _g=next.find(x=>x.id===window.__diagGid);
+          fstatSet({lastSaveStart:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜開始存檔｜記憶體那組${_g?(_g.orders||[]).length:"找不到"}筆`}); } } catch(e){}
         FS.saveGroups(next).catch(()=>{});
         try { localStorage.setItem("jinher_groups", JSON.stringify(next)); } catch(e) {}
       }, 500);
@@ -10055,6 +10076,15 @@ export default function App() {
   const submitOrder=(orderData)=>{
     const _now=new Date();
     const _stamp=`${_now.getMonth()+1}/${_now.getDate()} ${String(_now.getHours()).padStart(2,"0")}:${String(_now.getMinutes()).padStart(2,"0")}`;
+    // v233 診斷:送單當下把實際狀況記進 FSTAT(只顯示在員工 ⚙ 選單,客人看不到)
+    try {
+      window.__diagGid = activeGroup && activeGroup.id;   // v233:讓存檔/同步的診斷知道要追哪一組
+      const _t=groups.find(g=>g.id===(activeGroup&&activeGroup.id));
+      const _same=groups.filter(g=>g.code===(activeGroup&&activeGroup.code)).length;
+      const _before=_t?(_t.orders||[]).length:"-";
+      const _isEdit=!!(_t&&(_t.orders||[]).some(o=>o.num===orderData.num));
+      fstatSet({lastSubmit:`${_stamp}｜代碼${activeGroup&&activeGroup.code}｜找到訂位:${_t?"是":"否"}｜同代碼共${_same}組｜送出前${_before}筆｜號碼${orderData.num}｜${_isEdit?"當成改單":"當成新增"}｜品項${(orderData.lines||[]).length}道`});
+    } catch(e){ fstatSet({lastSubmit:`診斷失敗:${e.message}`}); }
     setGroups(prev=>prev.map(g=>{
       if(g.id!==activeGroup.id) return g;
       const existing=g.orders.find(o=>o.num===orderData.num);
