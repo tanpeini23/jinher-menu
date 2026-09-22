@@ -98,7 +98,12 @@ const FS = {
     await ensureAuth();
     try {
       await setDoc(doc(db, "jinher", "groups"), { data: JSON.stringify(groups) });
+      fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})});
     } catch(e) {
+      // v232:訂單存檔失敗以前完全不顯示(畫面燈號還是綠的),全部客人的單存不進去也沒人知道。
+      //       現在跟 saveDoc 一樣回報到 FSTAT,狀態燈會變紅並顯示錯誤原因。
+      console.error("儲存失敗 groups", e);
+      fstatSet({err:`訂單儲存失敗:${e.code||e.message}`});
       try { localStorage.setItem("jinher_groups", JSON.stringify(groups)); } catch(e2) {}
     }
   },
@@ -313,7 +318,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v231";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v232";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
