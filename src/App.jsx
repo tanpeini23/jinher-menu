@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.2/package/xlsx.mjs";
 
@@ -25,27 +25,13 @@ const auth = getAuth(firebaseApp);
 let _authReady = null;
 const FSTAT = { auth:"連線中…", err:null, lastSave:null, listeners:new Set() };
 function fstatSet(patch){ Object.assign(FSTAT, patch); FSTAT.listeners.forEach(fn=>{ try{fn();}catch(e){} }); }
-// v234:量 groups 整份的實際大小(Firestore 單一文件上限 1,048,576 bytes),以及圖片佔多少
-function measureGroups(groups){
-  try{
-    const s=JSON.stringify(groups||[]);
-    const bytes=new TextEncoder().encode(s).length;
-    let img=0, n=0;
-    const walk=(v)=>{
-      if(typeof v==="string"){ if(v.startsWith("data:image")){ img+=v.length; n++; } }
-      else if(Array.isArray(v)) v.forEach(walk);
-      else if(v&&typeof v==="object") for(const k in v) walk(v[k]);
-    };
-    walk(groups);
-    fstatSet({size:{bytes,img,n,at:new Date().toLocaleTimeString("zh-TW",{hour12:false})}});
-  }catch(e){}
-}
 function ensureAuth() {
   if (_authReady) return _authReady;
   _authReady = new Promise((resolve) => {
     let done=false;
     const fin=(u,msg)=>{ if(done) return; done=true; fstatSet({auth:msg}); resolve(u); };
-    onAuthStateChanged(auth, (u) => { if (u) fin(u, "已連線"); });
+    // v232:登入就算晚於 8 秒逾時才成功,也要把狀態更新成已連線(原本會一直卡在「登入逾時」)
+    onAuthStateChanged(auth, (u) => { if (u) { fstatSet({auth:"已連線"}); fin(u, "已連線"); } });
     signInAnonymously(auth).catch((e) => { fin(null, `登入失敗:${e.code||e.message}`); });
     setTimeout(()=>fin(null, "登入逾時"), 8000);   // 不讓它永遠卡住
   });
@@ -53,17 +39,41 @@ function ensureAuth() {
 }
 ensureAuth();
 
+// v232:訂位資料(groups)是「整份覆蓋」寫法。還沒成功從雲端讀過一次之前就寫,
+// 會拿手機裡的舊暫存或示範資料把雲端全部蓋掉 → 一律擋下,並顯示紅字。
+const GROUPS_CLOUD = { readOK:false };
+// v232:讓子元件(轉入追蹤表那顆按鈕)也能用「關鍵存檔」,由 App 掛上來
+const GROUPS_API = { commit:null, busy:false };
+// v232:轉入追蹤表(兩顆按鈕共用,不要各寫一份)。雲端找不到這筆(匯入時沒存成功)→ 用本機這份補回去
+async function commitTransfer(g, changes, setGroups){
+  if(!GROUPS_API.commit){ setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,...changes})); return; }
+  const patch=(arr)=>{
+    if(arr.some(x=>x.id===g.id)) return arr.map(x=>x.id!==g.id?x:{...x,...changes});
+    const code=arr.some(x=>x.code===g.code)?makeCode(arr.map(x=>x.code)):g.code;   // 補回時代碼撞到就換
+    return [...arr,{...g,...changes,code}];
+  };
+  const r=await GROUPS_API.commit(patch);
+  if(!r.ok){ window.alert(`⚠ 轉入失敗，這筆還沒存進雲端 —— 代碼先不要給客人。請再按一次。\n\n（${r.err}）`); return; }
+  if((r.created||[]).includes(g.id)){
+    const sv=(r.data||[]).find(x=>x.id===g.id);
+    window.alert(`注意：這筆原本不在雲端（之前沒存成功），已經補存進去了。\n代碼：${sv?sv.code:g.code}`);
+  }
+}
+// 只把雲端那份裡「這次動到的組」換進本機那份,其他不碰
+function upsertById(local, fresh, ids){
+  const want=new Set(ids||[]);
+  const byId=new Map((fresh||[]).map(g=>[g.id,g]));
+  const out=(local||[]).map(g=>want.has(g.id)&&byId.has(g.id)?byId.get(g.id):g);
+  want.forEach(id=>{ if(!out.some(g=>g.id===id)&&byId.has(id)) out.push(byId.get(id)); });
+  return out;
+}
+
 // ─── FIRESTORE HELPERS ────────────────────────────────────────────────────────
 const FS = {
   async saveDoc(name, obj) {
     await ensureAuth();
     try { await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) }); fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})}); }
     catch(e) { console.error("儲存失敗", name, e); fstatSet({err:`儲存失敗(${name}):${e.code||e.message}`}); }
-  },
-  // v235:跟 saveDoc 一樣,但失敗會丟出錯誤。搬照片時要確定每張真的存進去,不能被吞掉
-  async saveDocStrict(name, obj) {
-    await ensureAuth();
-    await setDoc(doc(db, "jinher", name), { data: JSON.stringify(obj) });
   },
   async loadDoc(name) {
     await ensureAuth();
@@ -114,29 +124,64 @@ const FS = {
     try { const snap = await getDoc(doc(db, "jinher_stats", "meta")); if(snap.exists()) return JSON.parse(snap.data().data); } catch(e) {}
     return null;
   },
+  // v232:原本失敗時只偷偷寫進本機、什麼錯都不報 → 改成顯示紅字,並回傳成功與否
   async saveGroups(groups) {
     await ensureAuth();
+    if (!GROUPS_CLOUD.readOK) {
+      fstatSet({err:"還沒讀到雲端的訂位資料,暫停存檔(避免把雲端蓋掉)。請重新整理"});
+      try { localStorage.setItem("jinher_groups", JSON.stringify(groups)); } catch(e2) {}
+      return false;
+    }
     try {
       await setDoc(doc(db, "jinher", "groups"), { data: JSON.stringify(groups) });
       fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})});
-      // v233 診斷:記錄這次存到雲端的,送單那組有幾筆
-      try { const _g=(groups||[]).find(x=>x.id===window.__diagGid);
-        if(_g) fstatSet({lastGroupSave:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜✅存檔成功｜那組存了${(_g.orders||[]).length}筆`}); } catch(e){}
+      return true;
     } catch(e) {
-      // v232:訂單存檔失敗以前完全不顯示(畫面燈號還是綠的),全部客人的單存不進去也沒人知道。
-      //       現在跟 saveDoc 一樣回報到 FSTAT,狀態燈會變紅並顯示錯誤原因。
       console.error("儲存失敗 groups", e);
-      fstatSet({err:`訂單儲存失敗:${e.code||e.message}`,
-        lastGroupSave:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜❌存檔失敗｜${e.code||""}｜${e.message||""}`});
+      fstatSet({err:`儲存失敗(groups):${e.code||e.message}`});
       try { localStorage.setItem("jinher_groups", JSON.stringify(groups)); } catch(e2) {}
+      return false;
+    }
+  },
+  // v232:關鍵存檔(新增大訂、麥訂匯入、轉入追蹤表、客人送單)。
+  // 讀雲端最新 → 只套用這次的改動 → 寫回,用交易包起來:
+  // 不會拿本機過期的資料去蓋別人,也不會因為延遲 500 毫秒而沒送出。寫成功才算數。
+  async patchGroups(patch) {
+    await ensureAuth();
+    try {
+      const ref = doc(db, "jinher", "groups");
+      let touched=[], created=[];
+      const out = await runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        const cur = snap.exists() ? JSON.parse(snap.data().data) : [];
+        if (!Array.isArray(cur)) throw new Error("雲端訂位資料格式不對");
+        const next = patch(cur);
+        if (!Array.isArray(next)) throw new Error("改動結果格式不對");
+        const curIds=new Set(cur.map(g=>g.id));
+        touched = next.filter(g=>!cur.includes(g)).map(g=>g.id);
+        created = next.filter(g=>!curIds.has(g.id)).map(g=>g.id);
+        if (touched.length || next.length!==cur.length) tx.set(ref, { data: JSON.stringify(next) });   // 沒改到就不寫
+        return next;
+      });
+      GROUPS_CLOUD.readOK = true;
+      fstatSet({err:null, lastSave:new Date().toLocaleTimeString("zh-TW",{hour12:false})});
+      return { ok:true, data:out, touched, created };
+    } catch(e) {
+      console.error("關鍵存檔失敗 groups", e);
+      fstatSet({err:`儲存失敗(groups):${e.code||e.message}`});
+      return { ok:false, err:(e.code||e.message||"未知錯誤") };
     }
   },
   async loadGroups() {
     await ensureAuth();
     try {
       const snap = await getDoc(doc(db, "jinher", "groups"));
+      GROUPS_CLOUD.readOK = true;              // v232:成功讀到雲端(就算文件不存在也算讀成功)
       if (snap.exists()) return JSON.parse(snap.data().data);
-    } catch(e) {}
+    } catch(e) {
+      console.error("讀取失敗 groups", e);
+      fstatSet({err:`讀取失敗(groups):${e.code||e.message}`});
+    }
     try {
       const v = localStorage.getItem("jinher_groups");
       if (v) return JSON.parse(v);
@@ -151,6 +196,7 @@ const FS = {
         if (snap.exists()) {
           try {
             const data = JSON.parse(snap.data().data);
+            if (!(snap.metadata && snap.metadata.fromCache)) GROUPS_CLOUD.readOK = true;   // v232:伺服器來的才算讀成功
             callback(data, snap.metadata && snap.metadata.hasPendingWrites);
           } catch(e) {}
         }
@@ -342,7 +388,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v235";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v233";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1095,6 +1141,20 @@ function DeadlineBar({ dateStr, compact=false }){
 
 function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGroup }) {
   const isMember = group.memberType !== "none";
+  // v232:送出要等雲端確認。傳送中擋住重複按;失敗留在原畫面顯示錯誤;成功才用雲端給的號碼進完成畫面
+  const [sending, setSending] = useState(false);
+  const [sendErr, setSendErr] = useState("");
+  const [doneNum, setDoneNum] = useState(null);
+  const doSubmit = async (payload) => {
+    if (sending) return;
+    setSending(true); setSendErr("");
+    let r = null;
+    try { r = await onSubmit(payload); } catch(e) { r = { ok:false, err:(e&&e.message)||"未知錯誤" }; }
+    setSending(false);
+    if (r && r.ok===false) { setSendErr(r.err||"未知錯誤"); return; }
+    if (r && r.num) setDoneNum(r.num);
+    setStep("done");
+  };
   // ── 一進來就強制提醒點餐截止(客人常常拖到逾期,現場點餐要等40分鐘)──
   const [gateOpen, setGateOpen] = useState(()=>{
     if(!group.date || group.locked) return false;
@@ -1304,7 +1364,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
         )}
       <div style={{background:"#fbf2e2",border:"2px solid #e0b060",borderRadius:"16px",padding:"12px 32px",marginBottom:"12px"}}>
         <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"4px"}}>您的號碼</div>
-        <div style={{fontSize:"40px",fontWeight:"700",color:"#9c5a1c",fontFamily:"'Noto Serif TC',serif"}}>{myNum}號</div>
+        <div style={{fontSize:"40px",fontWeight:"700",color:"#9c5a1c",fontFamily:"'Noto Serif TC',serif"}}>{doneNum||myNum}號</div>
         <div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>員工將依號碼送餐，請記住</div>
       </div>
       <div style={{background:"#fdf4e8",border:"1px solid #e0cdb0",borderRadius:"14px",padding:"12px 16px",marginBottom:"10px",width:"100%",maxWidth:"300px",textAlign:"left"}}>
@@ -1531,7 +1591,10 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
           ):!allAddComplete?(
             <button disabled style={{...LS.primaryBtn,opacity:0.4}}>請先完成所有必選項目</button>
           ):(
-            <button onClick={()=>{onSubmit({guestName,lines,num:myNum});setStep("done");}} style={{...LS.primaryBtn,background:"#4a7a5a"}}>確認加點 ✓</button>
+            <>
+              {sendErr&&<div style={{fontSize:"13px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"9px",padding:"9px 11px",marginBottom:"8px",lineHeight:"1.5"}}>⚠ 送出失敗，您的餐點還沒有送出。請再按一次；一直失敗請告知現場夥伴<div style={{fontSize:"10px",fontWeight:"600",opacity:.85,marginTop:"2px"}}>{sendErr}</div></div>}
+              <button disabled={sending} onClick={()=>doSubmit({guestName,lines,num:myNum})} style={{...LS.primaryBtn,background:"#4a7a5a",opacity:sending?0.6:1}}>{sending?"傳送中…請勿關閉":"確認加點 ✓"}</button>
+            </>
           )}
         </div>
       </div>
@@ -1735,9 +1798,12 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
           {!allComplete ? (
             <button disabled style={{...LS.primaryBtn,opacity:0.4}}>請先完成所有必選項目</button>
           ) : (
-            <button onClick={()=>{onSubmit({guestName,lines,num:myNum});setStep("done");}} style={{...LS.primaryBtn,background:"#4a7a5a"}}>
-              {existingOrder?"確認修改 ✓":"送出點餐 ✦"}
-            </button>
+            <>
+              {sendErr&&<div style={{fontSize:"13px",fontWeight:"800",color:"#fff",background:"#c02020",borderRadius:"9px",padding:"9px 11px",marginBottom:"8px",lineHeight:"1.5"}}>⚠ 送出失敗，您的餐點還沒有送出。請再按一次；一直失敗請告知現場夥伴<div style={{fontSize:"10px",fontWeight:"600",opacity:.85,marginTop:"2px"}}>{sendErr}</div></div>}
+              <button disabled={sending} onClick={()=>doSubmit({guestName,lines,num:myNum})} style={{...LS.primaryBtn,background:"#4a7a5a",opacity:sending?0.6:1}}>
+                {sending?"傳送中…請勿關閉":(existingOrder?"確認修改 ✓":"送出點餐 ✦")}
+              </button>
+            </>
           )}
         </div>
       )}
@@ -1929,13 +1995,13 @@ function ComplaintPanel({ g, setGroups, groups, walkin, onAdd }) {
             return (
               <div key={j} style={{fontSize:"11px",color:"#8a4a10",lineHeight:"1.6",marginBottom:"4px"}}>
                 🍽 <b>{nm}</b>{dk.length>0?`　${dk.join("、")}`:""}{nt?`　—「${nt}」`:""}
-                {(typeof dd==="object"&&dd.photo)&&<CplPhoto src={dd.photo} style={{display:"block",width:"100%",maxWidth:"180px",borderRadius:"7px",border:"1px solid #e0c0b0",marginTop:"3px"}}/>}
+                {(typeof dd==="object"&&dd.photo)&&<img src={dd.photo} style={{display:"block",width:"100%",maxWidth:"180px",borderRadius:"7px",border:"1px solid #e0c0b0",marginTop:"3px"}}/>}
               </div>
             );
           })}
         </div>
       )}
-      {it.photo&&<CplPhoto src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
+      {it.photo&&<img src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
       <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 8px",fontSize:"11px",color:"#5a4030",lineHeight:"1.5"}}>
         <span style={{color:"#a08070"}}>原因</span><span>{it.reason||"—"}</span>
         <span style={{color:"#a08070"}}>如何調整</span><span>{it.adjust||it.note||"—"}</span>
@@ -2027,124 +2093,6 @@ function compressImage(file, maxW=1080, quality=0.55){
 }
 
 // 封存照片:存在獨立的一筆紀錄(arch_xxx),需要時才載入,點縮圖可放大
-// v235:客訴照片。src 可能是舊的 data:image(還沒搬的)或新的「cplimg:編號」(存在獨立文件)
-//       照抄 ArchivePhoto 的讀法。兩種格式都要能顯示,搬移前後都不會破圖
-function CplPhoto({ src, style }){
-  const isRef = typeof src==="string" && src.startsWith("cplimg:");
-  const [img,setImg]=useState(isRef?null:(src||null));
-  const [err,setErr]=useState(false);
-  useEffect(()=>{
-    if(!isRef){ setImg(src||null); setErr(false); return; }
-    let alive=true; setErr(false); setImg(null);
-    FS.loadDoc(`cplimg_${src.slice(7)}`).then(d=>{ if(alive){ if(d&&d.img) setImg(d.img); else setErr(true); } }).catch(()=>{ if(alive) setErr(true); });
-    return ()=>{ alive=false; };
-  },[src]);
-  if(!src) return null;
-  if(err) return <span style={{fontSize:"10px",color:"#c06030"}}>照片載入失敗</span>;
-  if(!img) return <span style={{display:"block",width:"100%",maxWidth:(style&&style.maxWidth)||"180px",height:"60px",borderRadius:"7px",background:"#e8e0d0"}}/>;
-  return <img src={img} style={style}/>;
-}
-// v235:上傳客訴照片 → 存成獨立文件 → 回傳編號。失敗會丟錯,呼叫端要跳提醒(不會偷偷塞回訂位裡)
-async function uploadCplPhoto(file){
-  const img=await compressImage(file);
-  const id=`${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  await FS.saveDocStrict(`cplimg_${id}`, {img});
-  return `cplimg:${id}`;
-}
-// v235:一次性搬移現有圖片,讓 groups 降到 1 MB 以下
-//   1. 先下載備份檔(全部圖片,含退款簽名)
-//   2. 每張客訴照片存成獨立文件 → 讀回來比對內容一模一樣 → 才換成編號
-//      任何一張沒驗證成功,那張保留原圖不動,不會弄丟
-//   3. 退款簽名圖清掉(功能已移除,備份檔裡有)
-//   用 prev 套用,搬移期間有新訂單進來也不會被蓋掉
-const isDataImg=(v)=>typeof v==="string"&&v.startsWith("data:image");
-function collectImages(groups){
-  const items=[];
-  (groups||[]).forEach(g=>{
-    const base={gid:g.id,name:g.name||"",date:g.date||"",time:g.time||""};
-    if(isDataImg(g.refundStaffSig))    items.push({...base,kind:"退款簽名-員工",src:g.refundStaffSig});
-    if(isDataImg(g.refundCustomerSig)) items.push({...base,kind:"退款簽名-客人",src:g.refundCustomerSig});
-    (g.complaints||[]).forEach(c=>{
-      if(c&&isDataImg(c.photo)) items.push({...base,kind:"客訴照片",src:c.photo});
-      ((c&&c.dishes)||[]).forEach(d=>{ if(d&&typeof d==="object"&&isDataImg(d.photo)) items.push({...base,kind:"客訴菜色照片",src:d.photo}); });
-    });
-  });
-  return items;
-}
-async function migrateImages(groups, setGroups, onProgress){
-  const items=collectImages(groups);
-  if(!items.length) return {moved:0,kept:0,sigs:0};
-  // 1. 備份
-  const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),count:items.length,items},null,1)],{type:"application/json"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download=`今鶴照片備份_${new Date().toISOString().slice(0,10)}.json`;
-  document.body.appendChild(a); a.click(); a.remove();
-  // 2. 搬客訴照片:存 → 讀回驗證 → 成功才記下編號
-  const refOf=new Map();
-  const cpl=items.filter(i=>i.kind.startsWith("客訴"));
-  let moved=0, kept=0, n=0;
-  for(const it of cpl){
-    n++; onProgress&&onProgress(n,cpl.length);
-    if(refOf.has(it.src)) continue;                      // 同一張圖出現兩次,只存一次
-    try{
-      const id=`${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-      await FS.saveDocStrict(`cplimg_${id}`,{img:it.src});
-      const back=await FS.loadDoc(`cplimg_${id}`);
-      if(back&&back.img===it.src){ refOf.set(it.src,`cplimg:${id}`); moved++; }
-      else kept++;
-    }catch(e){ kept++; }
-  }
-  const sigs=items.filter(i=>i.kind.startsWith("退款")).length;
-  // 3. 套用(只換驗證成功的;退款簽名圖清掉;其他欄位原封不動)
-  const swap=(v)=>(isDataImg(v)&&refOf.has(v))?refOf.get(v):v;
-  setGroups(prev=>prev.map(g=>{
-    const hasSig=isDataImg(g.refundStaffSig)||isDataImg(g.refundCustomerSig);
-    const hasCpl=(g.complaints||[]).some(c=>c&&(refOf.has(c.photo)||((c.dishes)||[]).some(d=>d&&typeof d==="object"&&refOf.has(d.photo))));
-    if(!hasSig&&!hasCpl) return g;
-    const ng={...g};
-    if(isDataImg(ng.refundStaffSig))    delete ng.refundStaffSig;
-    if(isDataImg(ng.refundCustomerSig)) delete ng.refundCustomerSig;
-    if(Array.isArray(g.complaints)) ng.complaints=g.complaints.map(c=>{
-      if(!c) return c;
-      const nc={...c};
-      if(c.photo!==undefined) nc.photo=swap(c.photo);
-      if(Array.isArray(c.dishes)) nc.dishes=c.dishes.map(d=>(d&&typeof d==="object"&&d.photo!==undefined)?{...d,photo:swap(d.photo)}:d);
-      return nc;
-    });
-    return ng;
-  }));
-  return {moved,kept,sigs};
-}
-// v235:搬移按鈕。訂位裡沒有圖片就不出現;搬完顯示結果,有失敗的可以再按一次
-function ImageMigrateButton({ groups, setGroups }){
-  const [busy,setBusy]=useState(false);
-  const [prog,setProg]=useState("");
-  const [result,setResult]=useState(null);
-  const count=collectImages(groups).length;
-  if(!count&&!result) return null;
-  return (
-    <div style={{marginTop:"6px"}}>
-      {count>0&&(
-        <button disabled={busy} onClick={async()=>{
-            if(!window.confirm(`要搬移 ${count} 張圖片嗎?\n\n1. 先下載一份備份檔到這台裝置\n2. 客訴照片搬到獨立文件(照片保留)\n3. 退款簽名圖清掉(功能已移除)\n\n每張照片都會確認存好才換掉,不會弄丟。\n搬完請所有裝置重新整理。`)) return;
-            setBusy(true); setResult(null); setProg("準備中…");
-            try{ const r=await migrateImages(groups,setGroups,(d,t)=>setProg(`搬移中 ${d}/${t}`)); setResult(r); }
-            catch(e){ setResult({error:e.message||String(e)}); }
-            setBusy(false); setProg("");
-          }}
-          style={{width:"100%",fontSize:"12px",fontWeight:"900",color:"#fff",background:busy?"#8a9aaa":"#1a6a3a",border:"none",borderRadius:"7px",padding:"9px",cursor:busy?"default":"pointer"}}>
-          {busy?prog:`⬇ 備份並搬移 ${count} 張圖片`}
-        </button>
-      )}
-      {result&&(
-        <div style={{fontSize:"11px",marginTop:"5px",lineHeight:"1.6",fontWeight:"700",color:(result.error||result.kept)?"#a03020":"#1a6a3a"}}>
-          {result.error ? `❌ 失敗:${result.error}(資料沒有被改動)`
-            : `✅ 客訴照片搬好 ${result.moved} 張　退款簽名清掉 ${result.sigs} 張${result.kept?`\n⚠ ${result.kept} 張沒搬成功,已保留原圖,可以再按一次`:""}`}
-        </div>
-      )}
-    </div>
-  );
-}
 function ArchivePhoto({ photoId, size=54 }){
   const [img,setImg]=useState(null);
   const [big,setBig]=useState(false);
@@ -2234,7 +2182,7 @@ function CplDetail({ val, onChange }) {
     set({dishes:[...dishes,{id,kinds:[],note:""}]});
   };
   const pickPhoto = async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; setBusy(true);
-    try{ set({photo: await uploadCplPhoto(f)}); }catch(err){ window.alert("照片上傳失敗，請再試一次（這張照片沒有加上去）"); } setBusy(false); e.target.value=""; };
+    try{ set({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } setBusy(false); e.target.value=""; };
   const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
   return (
     <div style={{marginBottom:"12px"}}>
@@ -2301,14 +2249,14 @@ function CplDetail({ val, onChange }) {
                 <div style={{marginTop:"7px"}}>
                   {d.photo?(
                     <div style={{position:"relative"}}>
-                      <CplPhoto src={d.photo} style={{width:"100%",borderRadius:"7px",border:"1px solid #d0c0a8"}}/>
+                      <img src={d.photo} style={{width:"100%",borderRadius:"7px",border:"1px solid #d0c0a8"}}/>
                       <button onClick={()=>upd({photo:null})} style={{position:"absolute",top:"5px",right:"5px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"3px 8px",fontSize:"11px",cursor:"pointer"}}>移除</button>
                     </div>
                   ):(
                     <label style={{display:"block",textAlign:"center",padding:"8px",borderRadius:"7px",border:"1.5px dashed #c0a880",background:"#fff",color:"#9a6a30",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>
                       📷 這道的照片（選填）
                       <input type="file" accept="image/*" style={{display:"none"}}
-                        onChange={async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ upd({photo: await uploadCplPhoto(f)}); }catch(err){ window.alert("照片上傳失敗，請再試一次（這張照片沒有加上去）"); } e.target.value=""; }}/>
+                        onChange={async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ upd({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } e.target.value=""; }}/>
                     </label>
                   )}
                 </div>
@@ -2322,7 +2270,7 @@ function CplDetail({ val, onChange }) {
         <div style={{marginTop:"4px"}}>
           {v.photo?(
             <div style={{position:"relative"}}>
-              <CplPhoto src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
+              <img src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
               <button onClick={()=>set({photo:null})} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
             </div>
           ):(
@@ -2512,7 +2460,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
               <div style={{fontSize:"9px",color:"#fff",background:"#c0302a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>⚠ 聯絡不上</div>
             )}
             {g.fromMai&&(
-              <button onClick={(e)=>{e.stopPropagation();setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false}));}}
+              <button onClick={(e)=>{e.stopPropagation();commitTransfer(g,{fromMai:false},setGroups);}}
                 title="轉入追蹤表後才會開始追訂金、催點餐、算低消。留在麥訂這些都不會動" style={{marginTop:"3px",fontSize:"11px",background:"#b07840",color:"#fff",border:"none",borderRadius:"6px",padding:"7px 10px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",minHeight:"30px"}}>📥 轉入追蹤表→</button>
             )}
           </div>
@@ -2522,7 +2470,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
               <div style={{display:"flex",flexDirection:"column",gap:"4px",marginTop:"2px"}}>
                 <button onClick={(e)=>{e.stopPropagation();const now=new Date();const at=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,maiMissed:(x.maiMissed||0)+1,maiMissedAt:at}));}}
                   style={{fontSize:"12px",background:"#c06030",color:"#fff",border:"none",borderRadius:"7px",padding:"8px 10px",minHeight:"34px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",width:"100%"}}>📵 未接</button>
-                <button onClick={(e)=>{e.stopPropagation();const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;setGroups(p=>p.map(x=>x.id!==g.id?x:{...x,fromMai:false,maiMissed:0,statusLog:{status:"已加LINE",operator:"",date:d}}));}}
+                <button onClick={(e)=>{e.stopPropagation();const now=new Date();const d=`${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;commitTransfer(g,{fromMai:false,maiMissed:0,statusLog:{status:"已加LINE",operator:"",date:d}},setGroups);}}
                   style={{fontSize:"12px",background:"#b07840",color:"#fff",border:"none",borderRadius:"7px",padding:"8px 10px",minHeight:"34px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap",width:"100%"}}>轉入追蹤表 →</button>
               </div>
               {g.maiMissedAt&&<div style={{fontSize:"8px",color:"#a05030"}}>{g.maiMissedAt}</div>}
@@ -5698,36 +5646,93 @@ function FsStatus(){
           : noAuth ? {bg:"#fdf0d0",fg:"#8a5210",bd:"1px solid #d8b860",t:"⚠ 未登入模式"}
           : {bg:"#e2f2e8",fg:"#2a7a4a",bd:"none",t:"🔥 即時同步"};
   return (
-    <div>
-      <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
-        color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
-      {FSTAT.size&&(()=>{
-        const LIMIT=1048576, b=FSTAT.size.bytes;
-        const kb=(x)=>Math.round(x/1024).toLocaleString();
-        const pct=Math.round(b/LIMIT*100), over=b>LIMIT, warn=pct>=85;
-        return (
-          <div style={{fontSize:"11px",lineHeight:"1.7",marginTop:"5px",borderRadius:"6px",padding:"6px 8px",whiteSpace:"normal",
-            color:over?"#fff":warn?"#7a4a00":"#1a4a2a", background:over?"#c02020":warn?"#fff0c8":"#e8f5ec",
-            border:`1px solid ${over?"#8a1010":warn?"#d8a840":"#a8d0b4"}`}}>
-            <b>訂位資料大小</b>　{kb(b)} KB / 上限 1,024 KB（<b>{pct}%</b>）{over?"　⚠ 已超過,新訂單存不進去":warn?"　⚠ 快滿了":""}
-            <br/>其中圖片 {FSTAT.size.n} 張,佔 {kb(FSTAT.size.img)} KB（{b?Math.round(FSTAT.size.img/b*100):0}%）
-            <span style={{opacity:0.7}}>　量測 {FSTAT.size.at}</span>
-          </div>
-        );
-      })()}
-      {FSTAT.lastSubmit&&(
-        <div style={{fontSize:"11px",color:"#1a3a5a",background:"#eef4fa",border:"1px solid #b8d0e8",borderRadius:"6px",padding:"6px 8px",marginTop:"5px",lineHeight:"1.7",whiteSpace:"normal",wordBreak:"break-all"}}>
-          <b>送單診斷(依順序)</b><br/>
-          <b>①送單</b> {FSTAT.lastSubmit}<br/>
-          <b>②開始存檔</b> {FSTAT.lastSaveStart||<span style={{color:"#c02020",fontWeight:"900"}}>沒有觸發</span>}<br/>
-          <b>③存檔結果</b> {FSTAT.lastGroupSave||<span style={{color:"#c02020",fontWeight:"900"}}>沒有結果</span>}<br/>
-          <b>④雲端覆蓋</b> {FSTAT.lastRemote||<span style={{color:"#2a7a4a"}}>沒發生</span>}
-        </div>
-      )}
+    <div title={FSTAT.err||FSTAT.auth} style={{fontSize:"9px",fontWeight:"800",borderRadius:"6px",padding:"3px 7px",whiteSpace:"nowrap",
+      color:c.fg, background:c.bg, border:c.bd}}>{c.t}</div>
+  );
+}
+// v232:存檔/登入出問題時,畫面最上方直接跳紅色橫幅(原本只藏在齒輪選單裡 9px 小字)
+function FsAlert({ who }){
+  const [,tick]=useState(0);
+  useEffect(()=>{ const fn=()=>tick(t=>t+1); FSTAT.listeners.add(fn); return ()=>FSTAT.listeners.delete(fn); },[]);
+  const err = FSTAT.err;
+  const noAuth = FSTAT.auth.includes("失敗") || FSTAT.auth.includes("逾時");
+  if(!err && !noAuth) return null;
+  const guest = who==="guest";
+  const msg = guest
+    ? "⚠ 系統連線異常，您的點餐可能無法送出。請重新整理，或告知現場夥伴"
+    : `⚠ 雲端存檔有問題 —— 現在的修改可能沒有存進去！　${err||FSTAT.auth}`;
+  return (
+    <div style={{position:"sticky",top:0,zIndex:9000,background:"#c02020",color:"#fff",padding:"10px 12px",
+      display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap",boxShadow:"0 2px 8px rgba(0,0,0,.25)"}}>
+      <span style={{fontSize:"13px",fontWeight:"900",flex:"1 1 260px",lineHeight:"1.5"}}>{msg}</span>
+      <button onClick={()=>window.location.reload()}
+        style={{fontSize:"12px",fontWeight:"900",background:"#fff",color:"#c02020",border:"none",borderRadius:"7px",padding:"7px 13px",cursor:"pointer",whiteSpace:"nowrap"}}>重新整理</button>
     </div>
   );
 }
 
+const BIG_MIN = 8;   // 8 位大人以上才算「要線上點餐的大訂」(v233 提到全域,新首頁也要用,不要各寫一份)
+// v233:員工端新首頁。四張大卡直接寫出「現在要處理幾筆」,一頁看完今天要做什麼。
+// 純入口,不動任何既有畫面;卡片上的數字全部用系統現有的判斷函式算,沒有另外定義規則。
+function StaffHome({ groups, onBack, go }) {
+  const today=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
+  const live=(groups||[]).filter(g=>!g.cancelled);
+  const todayList=live.filter(g=>(g.date||"").trim()===today);
+  const todayBig=todayList.filter(g=>adultsOfG(g)>=BIG_MIN).length;
+  const toVerify=live.filter(g=>g.depositLast5&&g.depositStatus==="待核對").length;
+  const unpaid=live.filter(g=>depositUrgency(g)).length;
+  const needOrder=live.filter(g=>!g.archived&&!isPastMeal(g)&&adultsOfG(g)>=BIG_MIN);
+  const ordered=needOrder.filter(g=>(g.orders||[]).length>0).length;
+  const mai=live.filter(g=>g.fromMai).length;
+
+  const Card=({icon,title,main,sub,tone,onClick})=>(
+    <button onClick={onClick} style={{textAlign:"left",background:"#fff",border:`2px solid ${tone}`,borderRadius:"14px",
+      padding:"15px 16px",cursor:"pointer",display:"flex",flexDirection:"column",gap:"5px",minHeight:"108px",width:"100%",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
+      <div style={{fontSize:"14px",fontWeight:"900",color:"#5a3a28"}}>{icon} {title}</div>
+      <div style={{fontSize:"25px",fontWeight:"900",color:tone,lineHeight:"1.15"}}>{main}</div>
+      <div style={{fontSize:"12px",color:"#8a6a4a",fontWeight:"700",lineHeight:"1.4"}}>{sub}</div>
+    </button>
+  );
+  const Small=({icon,title,onClick})=>(
+    <button onClick={onClick} style={{flex:1,background:"#fff",border:"1.5px solid #ddd0bc",borderRadius:"11px",
+      padding:"13px 10px",cursor:"pointer",fontSize:"13px",fontWeight:"800",color:"#6a4a2e",whiteSpace:"nowrap"}}>{icon} {title}</button>
+  );
+  return (
+    <div style={{...S.page,background:"#f5f0e8",color:"#3a2a1a",minHeight:"100vh"}}>
+      <style>{GS}</style>
+      <FsAlert who="staff"/>
+      <div style={{maxWidth:"760px",margin:"0 auto",padding:"16px 14px 40px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"9px",marginBottom:"4px",flexWrap:"wrap"}}>
+          <div style={{fontSize:"20px",fontWeight:"900",color:"#8a5210",fontFamily:"'Noto Serif TC',serif"}}>今鶴 JINHER</div>
+          <span style={{flex:1}}/>
+          <span style={{fontSize:"10px",color:"#c8b49a",fontWeight:"800"}}>{APP_VER}</span>
+          <button onClick={onBack} style={{fontSize:"12px",fontWeight:"800",background:"transparent",border:"1px solid #ddd0bc",borderRadius:"8px",padding:"6px 11px",color:"#8a6a48",cursor:"pointer"}}>離開</button>
+        </div>
+        <div style={{fontSize:"12px",color:"#a08a70",fontWeight:"700",marginBottom:"14px"}}>今天 {today}</div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(215px,1fr))",gap:"11px"}}>
+          <Card icon="📋" title="今日訂位" tone="#8a5210" onClick={()=>go("table")}
+            main={`${todayList.length} 組`} sub={todayBig>0?`其中 ${todayBig} 組大訂`:"今天沒有大訂"}/>
+          <Card icon="💰" title="訂金追蹤" tone={(toVerify+unpaid)>0?"#c02020":"#2a8a5a"} onClick={()=>go("table")}
+            main={(toVerify+unpaid)>0?`${toVerify+unpaid} 筆`:"都處理完了"}
+            sub={(toVerify+unpaid)>0?`${unpaid} 筆還沒收　${toVerify} 筆待核對`:"沒有待收或待核對"}/>
+          <Card icon="🍽" title="點餐狀況" tone={needOrder.length&&ordered<needOrder.length?"#c06030":"#2a8a5a"} onClick={()=>go("table")}
+            main={needOrder.length?`${ordered} / ${needOrder.length} 組`:"沒有待點餐"}
+            sub={needOrder.length?`還有 ${needOrder.length-ordered} 組沒開始點`:"接下來沒有大訂"}/>
+          <Card icon="📥" title="麥訂／人數統計表" tone={mai>0?"#1a5a9a":"#2a8a5a"} onClick={()=>go("mai")}
+            main={mai>0?`${mai} 筆`:"沒有待轉入"} sub={mai>0?"還沒按「轉入追蹤表」":"都轉進追蹤表了"}/>
+        </div>
+
+        <div style={{display:"flex",gap:"9px",marginTop:"13px",flexWrap:"wrap"}}>
+          <Small icon="📊" title="數據統計" onClick={()=>go("stats")}/>
+          <Small icon="🖨" title="印訂位表" onClick={()=>go("print")}/>
+          <Small icon="📣" title="客訴中心" onClick={()=>go("cpl")}/>
+          <Small icon="🚫" title="品項關閉" onClick={()=>go("items")}/>
+        </div>
+      </div>
+    </div>
+  );
+}
 function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [filter,setFilter]=useState("");
   const [showMaiOnly,setShowMaiOnly]=useState(false);
@@ -5788,6 +5793,8 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [expanded,setExpanded]=useState(null);
   const [toast,setToast]=useState(null);
   const [saving,setSaving]=useState(false);
+  const [navHome,setNavHome]=useState(true);      // v233:預設進新首頁
+  const [printOpen,setPrintOpen]=useState(false);  // v233:首頁直接開印訂位表(不用再繞交接)
   const [showDingwe,setShowDingwe]=useState(false);
   const [showStats,setShowStats]=useState(false);
   const [showItemsOff,setShowItemsOff]=useState(false);
@@ -5904,7 +5911,6 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
 
 // 同時段規則:大人數 >=10 的大訂獨佔該時段;<10 的同時段最多 2 組
 const adultsOf=(g)=>{ const hc=(g.headcount||"").toLowerCase(); const p=+((hc.match(/(\d+)p/)||[])[1]||0); return p||parseInt(hc)||0; };
-const BIG_MIN = 8;                          // 8 位大人以上才算「要線上點餐的大訂」
 const slotRuleCheck=(gs)=>{                 // gs=同一時段的組
   // 只看大訂(>=8位大人);不到 8 位的只需打電話確認人數,不佔大訂配額
   // 已註記「客人可接受較晚出餐」的組,視同已協調,不列入計算
@@ -5999,6 +6005,7 @@ const rowBg=(g)=>{
     {key:"deposit",    label:"訂金",    w:74, text:true},
     {key:"depositDate",label:"付訂日",  w:66, text:true},
     {key:"collector",  label:"收款人",  w:48, text:true},
+    {key:"refundSigned",label:"退款\n簽名",w:44,chk:true,color:"#e87a5a"},
     {key:"cancelled",  label:"取消",   w:38, chk:true,color:"#c05050"},
     {key:"note",       label:"備註",   w:220,text:true},
   ];
@@ -6006,15 +6013,29 @@ const rowBg=(g)=>{
   const shownCols = compactMode ? COLS.filter(c=>compactKeys.includes(c.key)) : COLS;
   const statusAnchor = compactMode ? "headcount" : "collector";
 
+  // v233:新首頁是入口。子畫面打開時交給原本的畫面渲染,關掉就自動回到首頁
+  if(navHome && !showDingwe && !showStats && !showItemsOff && !showCplCenter){
+    if(printOpen) return <PrintDingwePage groups={groups} onClose={()=>setPrintOpen(false)}/>;
+    return <StaffHome groups={groups} onBack={onBack} go={(k)=>{
+      if(k==="table") setNavHome(false);
+      else if(k==="mai") setShowDingwe(true);
+      else if(k==="stats") setShowStats(true);
+      else if(k==="cpl") leaveGuard(()=>setShowCplCenter(true));      // 沿用原本的「還有麥訂沒轉入」提醒
+      else if(k==="items") leaveGuard(()=>setShowItemsOff(true));
+      else if(k==="print") setPrintOpen(true);
+    }}/>;
+  }
   return(
     <div style={{...S.page,background:"#f5f0e8",color:"#3a2a1a"}}>
       <style>{GS}</style>
+      <FsAlert who="staff"/>
       {toast&&<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:"#e2f2e8",border:"1px solid #2a7a4a",borderRadius:"10px",padding:"8px 18px",fontSize:"12px",color:"#2a7a4a",fontWeight:"700",zIndex:999,whiteSpace:"nowrap"}}>{toast}</div>}
 
       <div style={{...S.header,paddingBottom:"10px"}}>
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
           <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 {APP_VER}</div>
+          <button onClick={()=>setNavHome(true)} style={{fontSize:"12px",fontWeight:"800",background:"#fff",border:"1.5px solid #ddd0bc",borderRadius:"8px",padding:"6px 11px",color:"#6a4a2e",cursor:"pointer",whiteSpace:"nowrap"}}>☰ 首頁</button>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>leaveGuard(()=>setShowItemsOff(true))}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -6027,7 +6048,7 @@ const rowBg=(g)=>{
                     <button key={t} onClick={()=>{fn();setGearOpen(false);}}
                       style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderRadius:"7px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"9px 11px",cursor:"pointer"}}>{t}</button>
                   ))}
-                  <div style={{borderTop:"1px solid #e0e8f0",marginTop:"4px",paddingTop:"6px",paddingLeft:"11px",paddingBottom:"3px"}}><FsStatus/><ImageMigrateButton groups={groups} setGroups={setGroups}/></div>
+                  <div style={{borderTop:"1px solid #e0e8f0",marginTop:"4px",paddingTop:"6px",paddingLeft:"11px",paddingBottom:"3px"}}><FsStatus/></div>
                 </div>
               )}
             </div>
@@ -7313,7 +7334,7 @@ const rowBg=(g)=>{
             </div>
             <div style={{display:"flex",gap:"8px"}}>
               <button onClick={()=>setShowAdd(false)} style={{...S.ghostBtn,flex:1,margin:0,padding:"10px"}}>取消</button>
-              <button onClick={()=>{
+              <button onClick={async()=>{
                 if(!newG.name.trim()) return;
                 // 包廂人數防呆:10~11 位警告、12 位以上不能存
                 if(newG.isVip){
@@ -7334,13 +7355,24 @@ const rowBg=(g)=>{
                   const bigN=same.filter(g=>adultsOf(g)>=BIG_MIN&&!g.lateOK).length;
                   if(msg&&!window.confirm(`⚠ ${newG.date} ${newG.time} 已有 ${bigN} 組大訂（8位以上）。\n規則:${msg}。\n\n若客人可接受較晚出餐,可先新增後在該筆註記。\n確定還是要新增嗎?`)) return;
                 }
-                const code=makeCode(groups.map(g=>g.code));
                 const hp=parseInt(newG.hcP)||0, hc2=parseInt(newG.hcC)||0, hs=parseInt(newG.hcS)||0;
                 const headcount=[hp>0?hp+"p":"",hc2>0?hc2+"c":"",hs>0?hs+"s":""].filter(Boolean).join("")||newG.headcount||"";
-                setGroups(p=>[...p,{...BLANK_G,...newG,headcount,takeout:!!newG.takeout,takeoutQty:newG.takeout?String(parseInt(newG.takeoutQty)||0):"",id:`g${Date.now()}`,code,orders:[],disabledItems:[],locked:false}]);
+                // v232:改走關鍵存檔 —— 雲端確認存好才給代碼。代碼跟「雲端」現有的比對(原本只比本機),不會跟別台同時新增的撞號
+                const gid=`g${Date.now()}`;
+                const base={...BLANK_G,...newG,headcount,takeout:!!newG.takeout,takeoutQty:newG.takeout?String(parseInt(newG.takeoutQty)||0):"",id:gid,orders:[],disabledItems:[],locked:false};
+                const addPatch=(arr)=>arr.some(g=>g.id===gid)?arr:[...arr,{...base,code:makeCode(arr.map(g=>g.code))}];
+                if(!GROUPS_API.commit){ window.alert("⚠ 系統還沒準備好，請重新整理後再新增"); return; }
+                if(GROUPS_API.busy) return;                      // 存檔中,擋重複按
+                GROUPS_API.busy=true;
+                showToast("儲存中…");
+                const r=await GROUPS_API.commit(addPatch);
+                GROUPS_API.busy=false;
+                if(!r.ok){ window.alert(`⚠ 新增失敗，這筆還沒存進雲端 —— 代碼先不要給客人。\n請再按一次「新增並產生代碼」。\n\n（${r.err}）`); return; }
+                const saved=(r.data||[]).find(g=>g.id===gid);
+                if(!saved){ window.alert("⚠ 新增後在雲端找不到這筆，代碼先不要給客人，請再新增一次"); return; }
                 setNewG({...BLANK_G});
                 setShowAdd(false);
-                showToast(`已新增 ${newG.name}，代碼：${code}`);
+                showToast(`✓ 已存進雲端：${saved.name}，代碼：${saved.code}`);
               }} style={{...S.primaryBtn,flex:2,padding:"10px"}}>新增並產生代碼</button>
             </div>
           </div>
@@ -7825,18 +7857,26 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
         }
       });
       if(toAdd.length>0){
-        setGroups(prev=>{
+        // v232:匯入改走關鍵存檔。id 先固定好(重試時才不會重複加),代碼跟雲端現有的比對
+        const _stamp=Date.now(); const _ids=toAdd.map((bo,i)=>`g${_stamp}_${i}`);
+        const importPatch=(prev)=>{
           let next=[...prev];
           toAdd.forEach((bo,i)=>{
+            if(next.some(g=>g.id===_ids[i])) return;
             const code=makeCode(next.map(g=>g.code));
             const headcount=[bo.adults>0?bo.adults+"p":"",bo.children>0?bo.children+"c":""].filter(Boolean).join("");
             const needsDep = needsDeposit(headcount, bo.isVip);
-            next=[...next,{...BLANK_G,id:`g${Date.now()}_${i}`,code,name:bo.name,gender:bo.gender||"",maiNote:bo.maiNote||"",phone:bo.phone,date:bo.date,time:bo.time,headcount,bookDate:(bo.orderAt||""),
+            next=[...next,{...BLANK_G,id:_ids[i],code,name:bo.name,gender:bo.gender||"",maiNote:bo.maiNote||"",phone:bo.phone,date:bo.date,time:bo.time,headcount,bookDate:(bo.orderAt||""),
               isVip:!!bo.isVip, depositDate:"",
               orders:[],disabledItems:[],locked:false,fromMai:true}];
           });
           return next;
-        });
+        };
+        if(GROUPS_API.commit){
+          GROUPS_API.commit(importPatch).then(r=>{
+            if(!r.ok) window.alert(`⚠ 麥訂匯入有 ${toAdd.length} 筆沒存進雲端，請重新匯入一次。\n\n（${r.err}）`);
+          });
+        } else setGroups(importPatch);
       }
     }
     // 取消的訂位 → 自動封存對應大訂
@@ -9509,6 +9549,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
 
   return (
     <div style={S.page}>
+    <FsAlert who="staff"/>
       {isLockedNow(group)&&(
         <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
           <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（{lockReason(group)}）</span>
@@ -9991,7 +10032,9 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
           </div>
         </div>
       )}
-      {/* v235:退款簽名功能已移除(簽名圖曾塞進訂位資料,讓 groups 撐破 1 MB)。RefundSection 元件保留未刪,只是不再顯示 */}
+      {!fromStaff&&<RefundSection group={group} S={S} onSaveSig={(type,dataUrl,time)=>{
+        if(onCancelOrder) onCancelOrder(-99, {sigType:type, sig:dataUrl, time});
+      }}/>}
       {allOrders.length > 0 && (
         <div style={{padding:"14px 16px 24px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#7a5c3e",marginBottom:"4px"}}>
@@ -10059,6 +10102,7 @@ function HomePage({ onEnterCode, onEnterOrder, onStaff }) {
   return(
     <div style={S.page}>
       <style>{GS}</style>
+      <FsAlert who="guest"/>
       <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"32px 24px"}}>
         <div style={{textAlign:"center",marginBottom:"32px"}}>
           <div style={{fontSize:"11px",color:"#8b5e3c",letterSpacing:"0.25em",marginBottom:"12px"}}>✦  W E L C O M E  ✦</div>
@@ -10145,8 +10189,9 @@ export default function App() {
   // Load initial data + subscribe to real-time updates
   useEffect(()=>{
     FS.loadGroups().then(data=>{
-      if(data&&Array.isArray(data)&&data.length>0) { setGroupsState(data); measureGroups(data); }
-      else setGroupsState(DEMO);
+      if(data&&Array.isArray(data)&&data.length>0) setGroupsState(data);
+      // v232:讀不到雲端時不要載入示範假資料(客人會看到假訂位,而且可能被存回去蓋掉真的)
+      else setGroupsState(GROUPS_CLOUD.readOK ? DEMO : []);
       setLoaded(true);
       setSyncStatus("已連線 🔥");
     }).catch(()=>{
@@ -10161,12 +10206,9 @@ export default function App() {
         if(data&&Array.isArray(data)) {
           // 別讓即時同步把「剛在本機按下、還沒存完」的修改蓋掉(例如轉入追蹤表)
           if(pending) return;                                   // 自己樂觀寫入的回音,本機已有資料
+          if(inflight.current>0) return;                        // v232:關鍵存檔寫到一半,先別被覆蓋
           if(Date.now()-lastLocalEdit.current < 2500) return;   // 剛改過,先別被伺服器舊資料覆蓋
-          // v233 診斷:雲端資料整份蓋過本機 —— 這是唯一會自動刪掉記憶體中訂單的地方
-          try { const _g=data.find(x=>x.id===window.__diagGid);
-            if(_g) fstatSet({lastRemote:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜雲端覆蓋本機｜雲端那組只有${(_g.orders||[]).length}筆`}); } catch(e){}
           setGroupsState(data);
-          measureGroups(data);
           setSyncStatus("即時同步 ✓");
         }
       });
@@ -10178,23 +10220,56 @@ export default function App() {
   // Save to Firestore whenever groups change (debounced)
   const saveTimer = useRef(null);
   const lastLocalEdit = useRef(0);
+  const pendingNext = useRef(null);     // v232:還在等 500 毫秒、尚未送出的那一份
+  const inflight = useRef(0);           // v232:關鍵存檔進行中的數量
   const setGroups = (updater) => {
     lastLocalEdit.current = Date.now();   // 標記剛在本機改過,讓即時同步暫時別覆蓋
     setGroupsState(prev=>{
       const next = typeof updater==="function" ? updater(prev) : updater;
       // Debounce saves
       if(saveTimer.current) clearTimeout(saveTimer.current);
+      pendingNext.current = next;
       saveTimer.current = setTimeout(()=>{
-        // v233 診斷:計時器真的觸發了嗎?當下記憶體裡那組有幾筆?
-        try { if(window.__diagGid){ const _g=next.find(x=>x.id===window.__diagGid);
-          fstatSet({lastSaveStart:`${new Date().toLocaleTimeString("zh-TW",{hour12:false})}｜開始存檔｜記憶體那組${_g?(_g.orders||[]).length:"找不到"}筆`}); } } catch(e){}
-        measureGroups(next);
-        FS.saveGroups(next).catch(()=>{});
-        try { localStorage.setItem("jinher_groups", JSON.stringify(next)); } catch(e) {}
+        // v232:送出時讀「最新」的待存資料(關鍵存檔可能已經把新的組補進來)
+        const toSave = pendingNext.current || next;
+        saveTimer.current = null; pendingNext.current = null;
+        FS.saveGroups(toSave).catch(()=>{});
+        try { localStorage.setItem("jinher_groups", JSON.stringify(toSave)); } catch(e) {}
       }, 500);
       return next;
     });
   };
+  // v232:關鍵存檔。新增大訂、麥訂匯入、轉入追蹤表、客人送單都走這條:
+  // 立刻寫雲端(不等 500 毫秒)、用交易讀最新再套用改動(不會拿過期資料蓋別人)、寫成功才回報。
+  // patch 是一個「拿到整份訂位 → 回傳改好的整份」的函式,在雲端最新那份上執行。
+  const commitGroups = async (patch) => {
+    lastLocalEdit.current = Date.now();
+    inflight.current++;
+    try {
+      // ① 本機還有沒送出的修改 → 先送,免得等一下兩邊互相蓋掉
+      if(saveTimer.current){
+        clearTimeout(saveTimer.current); saveTimer.current=null;
+        const pn=pendingNext.current; pendingNext.current=null;
+        if(pn) await FS.saveGroups(pn);
+      }
+      // ② 雲端:讀最新 → 套這次的改動 → 寫回
+      const r = await FS.patchGroups(patch);
+      if(!r.ok) return r;
+      // ③ 畫面跟上雲端。期間本機又有新修改(有待存的)→ 只把這次動到的組換進去;否則整份換成雲端最新
+      if(saveTimer.current && pendingNext.current){
+        pendingNext.current = upsertById(pendingNext.current, r.data, r.touched);
+        setGroupsState(prev=>upsertById(prev, r.data, r.touched));
+      } else {
+        setGroupsState(r.data);
+      }
+      try { localStorage.setItem("jinher_groups", JSON.stringify(r.data)); } catch(e) {}
+      return r;
+    } finally {
+      inflight.current--;
+      lastLocalEdit.current = Date.now();
+    }
+  };
+  useEffect(()=>{ GROUPS_API.commit = commitGroups; return ()=>{ GROUPS_API.commit=null; }; },[]);
 
   const enterCode=(code,setErr,isSummary=false)=>{
     const g=groups.find(x=>x.code===code);
@@ -10224,35 +10299,36 @@ export default function App() {
     setPage("order");
   };
 
-  const submitOrder=(orderData)=>{
+  // v232:客人送單改走關鍵存檔 —— 立刻寫雲端、寫成功才算完成,回傳雲端實際給的號碼。
+  // 原本:號碼撞到就當成「改單」直接蓋掉別人的單;而且送出後要等 500 毫秒才開始存,客人馬上關頁就沒了。
+  const submitOrder=async(orderData)=>{
     const _now=new Date();
     const _stamp=`${_now.getMonth()+1}/${_now.getDate()} ${String(_now.getHours()).padStart(2,"0")}:${String(_now.getMinutes()).padStart(2,"0")}`;
-    // v233 診斷:送單當下把實際狀況記進 FSTAT(只顯示在員工 ⚙ 選單,客人看不到)
-    try {
-      window.__diagGid = activeGroup && activeGroup.id;   // v233:讓存檔/同步的診斷知道要追哪一組
-      const _t=groups.find(g=>g.id===(activeGroup&&activeGroup.id));
-      const _same=groups.filter(g=>g.code===(activeGroup&&activeGroup.code)).length;
-      const _before=_t?(_t.orders||[]).length:"-";
-      const _isEdit=!!(_t&&(_t.orders||[]).some(o=>o.num===orderData.num));
-      fstatSet({lastSubmit:`${_stamp}｜代碼${activeGroup&&activeGroup.code}｜找到訂位:${_t?"是":"否"}｜同代碼共${_same}組｜送出前${_before}筆｜號碼${orderData.num}｜${_isEdit?"當成改單":"當成新增"}｜品項${(orderData.lines||[]).length}道`});
-    } catch(e){ fstatSet({lastSubmit:`診斷失敗:${e.message}`}); }
-    setGroups(prev=>prev.map(g=>{
-      if(g.id!==activeGroup.id) return g;
-      const existing=g.orders.find(o=>o.num===orderData.num);
-      if(existing) {
+    const gid=activeGroup.id;
+    const isEdit=!!(existingOrder&&existingOrder.num===orderData.num);   // 明確是「改自己的單」
+    const oid=`o${Date.now()}${Math.random().toString(36).slice(2,7)}`;  // 新單的識別碼,用來找回實際號碼
+    const patch=(arr)=>arr.map(g=>{
+      if(g.id!==gid) return g;
+      const orders=g.orders||[];
+      if(isEdit&&orders.some(o=>o.num===orderData.num)) {
         // 改單:記錄每次修改的時間
-        return {...g,orders:g.orders.map(o=>o.num!==orderData.num?o:{...o,...orderData,
+        return {...g,orders:orders.map(o=>o.num!==orderData.num?o:{...o,...orderData,
           sentAt:o.sentAt||_stamp,
           editLog:[...(o.editLog||[]),_stamp]})};
       }
-      // New order: use max num + 1 to avoid duplicates even after deletions
-      const maxNum = g.orders.reduce((max, o) => Math.max(max, o.num || 0), 0);
-      const correctNum = maxNum + 1;
-      const finalOrder = {...orderData, num: correctNum, orderLocked: false, sentAt:_stamp, editLog:[]};
-      return {...g,orders:[...g.orders,finalOrder]};
-    }));
-    // Update existingOrder so user can view/edit after submit
-    setExistingOrder(orderData);
+      // 新單:一定是新增。號碼 = 雲端這組目前最大號 + 1(刪過單也不會重複,絕不覆蓋別人)
+      const maxNum=orders.reduce((max,o)=>Math.max(max,o.num||0),0);
+      return {...g,orders:[...orders,{...orderData,num:maxNum+1,oid,orderLocked:false,sentAt:_stamp,editLog:[]}]};
+    });
+    const r=await commitGroups(patch);
+    if(!r.ok) return {ok:false,err:r.err};
+    const g2=(r.data||[]).find(g=>g.id===gid);
+    if(!g2) return {ok:false,err:"雲端找不到這組訂位"};
+    const o2=(g2.orders||[]).find(o=>o.oid===oid)||(isEdit&&(g2.orders||[]).find(o=>o.num===orderData.num));
+    if(!o2) return {ok:false,err:"雲端找不到剛送出的這筆"};
+    // Update existingOrder so user can view/edit after submit(用雲端實際的號碼)
+    setExistingOrder({...orderData,num:o2.num});
+    return {ok:true,num:o2.num};
   };
 
   if(!loaded) return(
