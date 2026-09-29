@@ -23,7 +23,7 @@ const auth = getAuth(firebaseApp);
 // ─── 匿名登入:客人完全無感(不用註冊/登入),但資料庫可以只開放給「已登入」 ───
 // 這讓 Firestore 規則能從「任何人可讀寫」改成「登入才可讀寫」,擋掉外部亂改。
 let _authReady = null;
-const FSTAT = { auth:"連線中…", err:null, lastSave:null, listeners:new Set() };
+const FSTAT = { auth:"連線中…", err:null, lastSave:null, size:null, listeners:new Set() };
 function fstatSet(patch){ Object.assign(FSTAT, patch); FSTAT.listeners.forEach(fn=>{ try{fn();}catch(e){} }); }
 function ensureAuth() {
   if (_authReady) return _authReady;
@@ -41,6 +41,36 @@ ensureAuth();
 
 // v232:訂位資料(groups)是「整份覆蓋」寫法。還沒成功從雲端讀過一次之前就寫,
 // 會拿手機裡的舊暫存或示範資料把雲端全部蓋掉 → 一律擋下,並顯示紅字。
+// v236:量 groups 整份多大、圖片佔多少(Firestore 單一文件上限 1,048,576 bytes)
+function measureGroups(groups){
+  try{
+    const s=JSON.stringify(groups||[]);
+    const bytes=new TextEncoder().encode(s).length;
+    let img=0, n=0;
+    const walk=(v)=>{
+      if(typeof v==="string"){ if(v.startsWith("data:image")){ img+=v.length; n++; } }
+      else if(Array.isArray(v)) v.forEach(walk);
+      else if(v&&typeof v==="object") for(const k in v) walk(v[k]);
+    };
+    walk(groups);
+    fstatSet({size:{bytes,img,n,at:new Date().toLocaleTimeString("zh-TW",{hour12:false})}});
+  }catch(e){}
+}
+// v236:找出還塞在訂位資料裡的圖片(退款簽名、客訴照片 —— 兩個功能都已移除,只剩舊資料)
+function isDataImg(v){ return typeof v==="string" && v.startsWith("data:image"); }
+function collectImages(groups){
+  const items=[];
+  (groups||[]).forEach(g=>{
+    const base={gid:g.id,name:g.name||"",date:g.date||"",time:g.time||""};
+    if(isDataImg(g.refundStaffSig))    items.push({...base,kind:"退款簽名-員工",src:g.refundStaffSig});
+    if(isDataImg(g.refundCustomerSig)) items.push({...base,kind:"退款簽名-客人",src:g.refundCustomerSig});
+    (g.complaints||[]).forEach(c=>{
+      if(c&&isDataImg(c.photo)) items.push({...base,kind:"客訴照片",src:c.photo});
+      ((c&&c.dishes)||[]).forEach(d=>{ if(d&&typeof d==="object"&&isDataImg(d.photo)) items.push({...base,kind:"客訴菜色照片",src:d.photo}); });
+    });
+  });
+  return items;
+}
 const GROUPS_CLOUD = { readOK:false };
 // v232:讓子元件(轉入追蹤表那顆按鈕)也能用「關鍵存檔」,由 App 掛上來
 const GROUPS_API = { commit:null, busy:false };
@@ -388,7 +418,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v233";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v238";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1995,13 +2025,11 @@ function ComplaintPanel({ g, setGroups, groups, walkin, onAdd }) {
             return (
               <div key={j} style={{fontSize:"11px",color:"#8a4a10",lineHeight:"1.6",marginBottom:"4px"}}>
                 🍽 <b>{nm}</b>{dk.length>0?`　${dk.join("、")}`:""}{nt?`　—「${nt}」`:""}
-                {(typeof dd==="object"&&dd.photo)&&<img src={dd.photo} style={{display:"block",width:"100%",maxWidth:"180px",borderRadius:"7px",border:"1px solid #e0c0b0",marginTop:"3px"}}/>}
               </div>
             );
           })}
         </div>
       )}
-      {it.photo&&<img src={it.photo} style={{width:"100%",maxWidth:"200px",borderRadius:"8px",border:"1px solid #e0c0b0",marginBottom:"5px"}}/>}
       <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 8px",fontSize:"11px",color:"#5a4030",lineHeight:"1.5"}}>
         <span style={{color:"#a08070"}}>原因</span><span>{it.reason||"—"}</span>
         <span style={{color:"#a08070"}}>如何調整</span><span>{it.adjust||it.note||"—"}</span>
@@ -2181,8 +2209,6 @@ function CplDetail({ val, onChange }) {
     if(dishes.some(d=>d.id===id)) return;
     set({dishes:[...dishes,{id,kinds:[],note:""}]});
   };
-  const pickPhoto = async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; setBusy(true);
-    try{ set({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } setBusy(false); e.target.value=""; };
   const chip=(on)=>({padding:"5px 10px",borderRadius:"7px",border:`1px solid ${on?"#a04020":"#d8c8b0"}`,fontSize:"12px",fontWeight:"700",cursor:"pointer",background:on?"#a04020":"#fff",color:on?"#fff":"#6a4a2e"});
   return (
     <div style={{marginBottom:"12px"}}>
@@ -2246,39 +2272,10 @@ function CplDetail({ val, onChange }) {
                 </div>
                 <input value={d.note||""} onChange={e=>upd({note:e.target.value})} placeholder="這道的詳細說明（選填）"
                   style={{width:"100%",boxSizing:"border-box",padding:"7px 9px",borderRadius:"7px",border:"1px solid #d8c8b0",background:"#fff",color:"#2e2010",fontSize:"12px"}}/>
-                <div style={{marginTop:"7px"}}>
-                  {d.photo?(
-                    <div style={{position:"relative"}}>
-                      <img src={d.photo} style={{width:"100%",borderRadius:"7px",border:"1px solid #d0c0a8"}}/>
-                      <button onClick={()=>upd({photo:null})} style={{position:"absolute",top:"5px",right:"5px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"3px 8px",fontSize:"11px",cursor:"pointer"}}>移除</button>
-                    </div>
-                  ):(
-                    <label style={{display:"block",textAlign:"center",padding:"8px",borderRadius:"7px",border:"1.5px dashed #c0a880",background:"#fff",color:"#9a6a30",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>
-                      📷 這道的照片（選填）
-                      <input type="file" accept="image/*" style={{display:"none"}}
-                        onChange={async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ upd({photo: await compressImage(f)}); }catch(err){ window.alert("照片處理失敗"); } e.target.value=""; }}/>
-                    </label>
-                  )}
-                </div>
               </div>
             );
           })}
-          <div style={{fontSize:"10px",color:"#a08070",marginTop:"7px"}}>每道菜可各自選原因、寫說明、上傳照片。</div>
-        </div>
-      )}
-      {v.type&&v.type!=="餐點"&&(
-        <div style={{marginTop:"4px"}}>
-          {v.photo?(
-            <div style={{position:"relative"}}>
-              <img src={v.photo} style={{width:"100%",borderRadius:"8px",border:"1px solid #d0c0a8"}}/>
-              <button onClick={()=>set({photo:null})} style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"6px",padding:"4px 8px",fontSize:"12px",cursor:"pointer"}}>移除</button>
-            </div>
-          ):(
-            <label style={{display:"block",textAlign:"center",padding:"11px",borderRadius:"8px",border:"1.5px dashed #c0a880",background:"#faf4e8",color:"#9a6a30",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>
-              {busy?"處理中…":"📷 上傳照片（選填）"}
-              <input type="file" accept="image/*" onChange={pickPhoto} style={{display:"none"}}/>
-            </label>
-          )}
+          <div style={{fontSize:"10px",color:"#a08070",marginTop:"7px"}}>每道菜可各自選原因、寫說明。</div>
         </div>
       )}
       <div style={{marginTop:"12px"}}>
@@ -2548,7 +2545,7 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                       <div style={{fontSize:"11px",fontWeight:"800",color:"#6a4a2e"}}>
                         {c.date}{c.editedAt?`（${c.editedAt} 改過）`:""}　{c.type||"未分類"}
                         {(c.kinds||[]).length>0?`　${(c.kinds||[]).join("、")}`:""}
-                        {c.photo?"　📷":""}
+                        
                       </div>
                       {c.reason&&<div style={{fontSize:"11px",color:"#8a6a4a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.reason}</div>}
                     </div>
@@ -5671,19 +5668,149 @@ function FsAlert({ who }){
   );
 }
 
+// v237:容量快滿的緊急提醒。超過 80% 就跳,超過 95% 不給關(再不處理就會整個存不進去)
+function CapacityAlert({ groups }){
+  const [hide,setHide]=useState(false);
+  const sz=FSTAT.size; const LIMIT=1048576;
+  if(!sz) return null;
+  const pct=Math.round(sz.bytes/LIMIT*100);
+  if(pct<80) return null;
+  const critical=pct>=95;
+  if(hide&&!critical) return null;
+  const kb=(n)=>Math.round((n||0)/1024).toLocaleString();
+  return createPortal(
+    <div style={{position:"fixed",inset:0,zIndex:99999,background:"rgba(20,8,4,.62)",display:"flex",alignItems:"center",justifyContent:"center",padding:"18px"}}>
+      <div style={{background:"#fff",borderRadius:"16px",maxWidth:"440px",width:"100%",padding:"22px 20px",boxShadow:"0 10px 40px rgba(0,0,0,.35)",border:`3px solid ${critical?"#c02020":"#e08020"}`}}>
+        <div style={{fontSize:"19px",fontWeight:"900",color:critical?"#c02020":"#b06010",marginBottom:"9px"}}>
+          {critical?"🚨 資料量已經爆滿":"⚠ 資料量快滿了"}
+        </div>
+        <div style={{fontSize:"14px",color:"#4a3628",lineHeight:"1.75",marginBottom:"13px"}}>
+          目前 <b style={{fontSize:"17px",color:critical?"#c02020":"#b06010"}}>{kb(sz.bytes)} KB</b>，已用掉 <b>{pct}%</b>（上限 1,024 KB）。
+          {sz.n>0&&<><br/>其中圖片 {sz.n} 張，佔 {kb(sz.img)} KB。</>}
+          <br/><br/>
+          {critical
+            ? <b>再滿下去，訂位和客人點的餐會完全存不進去，而且不會有任何提示。請立刻處理。</b>
+            : "滿了之後就會存不進去。建議現在先清掉舊圖片。"}
+        </div>
+        <div style={{display:"flex",gap:"9px",flexWrap:"wrap"}}>
+          <ImagePurgeButton groups={groups}/>
+          {!critical&&<button onClick={()=>setHide(true)}
+            style={{fontSize:"12px",fontWeight:"800",background:"transparent",border:"1px solid #ddd0bc",borderRadius:"8px",padding:"7px 13px",color:"#8a6a48",cursor:"pointer"}}>稍後再說</button>}
+        </div>
+        {collectImages(groups).length===0&&(
+          <div style={{fontSize:"11.5px",color:"#a04020",fontWeight:"700",marginTop:"11px",lineHeight:"1.6"}}>
+            已經沒有圖片可以清了。請找人處理資料結構（把訂位拆成一組一份文件）。
+          </div>
+        )}
+      </div>
+    </div>, document.body);
+}
+// v236:一次性清掉還躺在訂位資料裡的舊圖片(退款簽名、客訴照片,兩個功能都已移除)。
+// 先下載備份 → 你確認存好 → 才真的清除。清完直接告訴你資料量從多少降到多少。
+function ImagePurgeButton({ groups }){
+  const [busy,setBusy]=useState(false);
+  const items=collectImages(groups);
+  const kb=(n)=>Math.round((n||0)/1024).toLocaleString();
+  if(items.length===0) return null;
+  const run=async()=>{
+    if(busy) return;
+    if(!window.confirm(`要清掉 ${items.length} 張舊圖片嗎?\n\n1. 會先下載一份備份檔到這台電腦\n2. 你確認備份存好之後,才真的清除\n\n這些是退款簽名和客訴照片,兩個功能都已經移除。`)) return;
+    setBusy(true);
+    try{
+      const blob=new Blob([JSON.stringify(items,null,2)],{type:"application/json"});
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download=`舊圖片備份_${new Date().toISOString().slice(0,10)}.json`;
+      a.click(); URL.revokeObjectURL(a.href);
+    }catch(e){ window.alert("備份下載失敗，為安全起見沒有清除任何東西"); setBusy(false); return; }
+    if(!window.confirm("備份已下載。確認檔案有存好之後再按確定，就會開始清除。")){ setBusy(false); return; }
+    const before=(FSTAT.size&&FSTAT.size.bytes)||0;
+    const patch=(arr)=>arr.map(g=>{
+      let hit=false; const ng={...g};
+      if(isDataImg(ng.refundStaffSig)){ ng.refundStaffSig=""; hit=true; }
+      if(isDataImg(ng.refundCustomerSig)){ ng.refundCustomerSig=""; hit=true; }
+      const hasImg=(ng.complaints||[]).some(c=>c&&(isDataImg(c.photo)||((c.dishes||[]).some(d=>d&&typeof d==="object"&&isDataImg(d.photo)))));
+      if(hasImg){
+        ng.complaints=(ng.complaints||[]).map(c=>{
+          if(!c) return c;
+          const nc={...c};
+          if(isDataImg(nc.photo)) nc.photo=null;
+          if((nc.dishes||[]).length) nc.dishes=nc.dishes.map(d=>(d&&typeof d==="object"&&isDataImg(d.photo))?{...d,photo:null}:d);
+          return nc;
+        });
+        hit=true;
+      }
+      return hit?ng:g;
+    });
+    const r=GROUPS_API.commit ? await GROUPS_API.commit(patch) : {ok:false,err:"系統還沒準備好，請重新整理"};
+    setBusy(false);
+    if(!r.ok){ window.alert(`清除失敗，資料完全沒有變動。請再按一次。\n\n（${r.err}）`); return; }
+    measureGroups(r.data);
+    window.alert(`✅ 已清掉 ${items.length} 張圖片\n\n資料量 ${kb(before)} KB → ${kb((FSTAT.size&&FSTAT.size.bytes)||0)} KB`);
+  };
+  return (
+    <button onClick={run} disabled={busy}
+      style={{fontSize:"11.5px",fontWeight:"900",color:"#fff",background:busy?"#b09080":"#b04010",border:"none",borderRadius:"7px",padding:"6px 12px",cursor:busy?"default":"pointer",whiteSpace:"nowrap"}}>
+      {busy?"處理中…":`⬇ 備份後清除 ${items.length} 張舊圖片`}
+    </button>
+  );
+}
 const BIG_MIN = 8;   // 8 位大人以上才算「要線上點餐的大訂」(v233 提到全域,新首頁也要用,不要各寫一份)
-// v233:員工端新首頁。四張大卡直接寫出「現在要處理幾筆」,一頁看完今天要做什麼。
-// 純入口,不動任何既有畫面;卡片上的數字全部用系統現有的判斷函式算,沒有另外定義規則。
-function StaffHome({ groups, onBack, go }) {
+// v237:首頁和左側欄共用同一份數字,不要各算一份
+function staffCounts(groups){
   const today=(()=>{const d=new Date();return `${d.getMonth()+1}/${d.getDate()}`;})();
   const live=(groups||[]).filter(g=>!g.cancelled);
   const todayList=live.filter(g=>(g.date||"").trim()===today);
-  const todayBig=todayList.filter(g=>adultsOfG(g)>=BIG_MIN).length;
-  const toVerify=live.filter(g=>g.depositLast5&&g.depositStatus==="待核對").length;
-  const unpaid=live.filter(g=>depositUrgency(g)).length;
   const needOrder=live.filter(g=>!g.archived&&!isPastMeal(g)&&adultsOfG(g)>=BIG_MIN);
-  const ordered=needOrder.filter(g=>(g.orders||[]).length>0).length;
-  const mai=live.filter(g=>g.fromMai).length;
+  return { today, todayList, needOrder,
+    todayBig:todayList.filter(g=>adultsOfG(g)>=BIG_MIN).length,
+    toVerify:live.filter(g=>g.depositLast5&&g.depositStatus==="待核對").length,
+    unpaid:live.filter(g=>depositUrgency(g)).length,
+    ordered:needOrder.filter(g=>(g.orders||[]).length>0).length,
+    mai:live.filter(g=>g.fromMai).length };
+}
+// v237:左側欄。平常收起來只留一顆 ☰,點開從左邊滑出來,手機上是抽屜、電腦上是側欄
+function StaffDrawer({ open, onClose, groups, go, onBack }){
+  if(!open) return null;
+  const c=staffCounts(groups);
+  const Item=({icon,label,badge,tone,onClick})=>(
+    <button onClick={()=>{onClose();onClick();}}
+      style={{display:"flex",alignItems:"center",gap:"10px",width:"100%",textAlign:"left",background:"transparent",
+        border:"none",borderBottom:"1px solid #f0e8dc",padding:"13px 15px",cursor:"pointer",fontSize:"14px",fontWeight:"800",color:"#5a3a28"}}>
+      <span style={{fontSize:"16px",width:"22px"}}>{icon}</span>
+      <span style={{flex:1}}>{label}</span>
+      {badge!=null&&badge!==""&&<span style={{fontSize:"12px",fontWeight:"900",color:"#fff",background:tone||"#a08a70",borderRadius:"11px",padding:"2px 9px",minWidth:"22px",textAlign:"center"}}>{badge}</span>}
+    </button>
+  );
+  return createPortal(
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9500,background:"rgba(20,8,4,.42)"}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{position:"absolute",left:0,top:0,bottom:0,width:"260px",maxWidth:"84vw",background:"#fffdf8",
+          boxShadow:"3px 0 18px rgba(0,0,0,.25)",display:"flex",flexDirection:"column",overflowY:"auto"}}>
+        <div style={{padding:"15px 15px 11px",borderBottom:"2px solid #e8dcc8"}}>
+          <div style={{fontSize:"17px",fontWeight:"900",color:"#8a5210",fontFamily:"'Noto Serif TC',serif"}}>今鶴 JINHER</div>
+          <div style={{fontSize:"11px",color:"#a08a70",fontWeight:"700",marginTop:"2px"}}>今天 {c.today}　{APP_VER}</div>
+        </div>
+        <Item icon="🏠" label="首頁" onClick={()=>go("home")}/>
+        <Item icon="📋" label="今日訂位" badge={c.todayList.length} tone="#8a5210" onClick={()=>go("table")}/>
+        <Item icon="💰" label="訂金追蹤" badge={(c.toVerify+c.unpaid)||""} tone="#c02020" onClick={()=>go("table")}/>
+        <Item icon="🍽" label="點餐狀況" badge={c.needOrder.length?`${c.ordered}/${c.needOrder.length}`:""} tone="#c06030" onClick={()=>go("table")}/>
+        <Item icon="📥" label="麥訂／人數統計表" badge={c.mai||""} tone="#1a5a9a" onClick={()=>go("mai")}/>
+        <div style={{height:"9px",background:"#faf5ec",borderBottom:"1px solid #f0e8dc"}}/>
+        <Item icon="📊" label="數據統計" onClick={()=>go("stats")}/>
+        <Item icon="🖨" label="印訂位表" onClick={()=>go("print")}/>
+        <Item icon="📣" label="客訴中心" onClick={()=>go("cpl")}/>
+        <Item icon="🚫" label="品項關閉" onClick={()=>go("items")}/>
+        <div style={{flex:1}}/>
+        <button onClick={()=>{onClose();onBack();}}
+          style={{margin:"13px 15px 18px",fontSize:"12px",fontWeight:"800",background:"transparent",border:"1px solid #ddd0bc",borderRadius:"8px",padding:"9px",color:"#8a6a48",cursor:"pointer"}}>離開員工區</button>
+      </div>
+    </div>, document.body);
+}
+// v233:員工端新首頁。四張大卡直接寫出「現在要處理幾筆」,一頁看完今天要做什麼。
+// 純入口,不動任何既有畫面;卡片上的數字全部用系統現有的判斷函式算,沒有另外定義規則。
+function StaffHome({ groups, onBack, go, onMenu }) {
+  const {today,todayList,todayBig,toVerify,unpaid,needOrder,ordered,mai}=staffCounts(groups);
 
   const Card=({icon,title,main,sub,tone,onClick})=>(
     <button onClick={onClick} style={{textAlign:"left",background:"#fff",border:`2px solid ${tone}`,borderRadius:"14px",
@@ -5701,8 +5828,10 @@ function StaffHome({ groups, onBack, go }) {
     <div style={{...S.page,background:"#f5f0e8",color:"#3a2a1a",minHeight:"100vh"}}>
       <style>{GS}</style>
       <FsAlert who="staff"/>
+      <CapacityAlert groups={groups}/>
       <div style={{maxWidth:"760px",margin:"0 auto",padding:"16px 14px 40px"}}>
         <div style={{display:"flex",alignItems:"center",gap:"9px",marginBottom:"4px",flexWrap:"wrap"}}>
+          <button onClick={onMenu} title="選單" style={{fontSize:"17px",background:"#fff",border:"1.5px solid #ddd0bc",borderRadius:"9px",padding:"5px 11px",cursor:"pointer",lineHeight:"1"}}>☰</button>
           <div style={{fontSize:"20px",fontWeight:"900",color:"#8a5210",fontFamily:"'Noto Serif TC',serif"}}>今鶴 JINHER</div>
           <span style={{flex:1}}/>
           <span style={{fontSize:"10px",color:"#c8b49a",fontWeight:"800"}}>{APP_VER}</span>
@@ -5723,6 +5852,17 @@ function StaffHome({ groups, onBack, go }) {
             main={mai>0?`${mai} 筆`:"沒有待轉入"} sub={mai>0?"還沒按「轉入追蹤表」":"都轉進追蹤表了"}/>
         </div>
 
+        {FSTAT.size&&(
+          <div style={{marginTop:"13px",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap",
+            background:"#fff",border:"1px solid #e4dccc",borderRadius:"10px",padding:"9px 12px"}}>
+            <span style={{fontSize:"11.5px",color:FSTAT.size.bytes>838860?"#c02020":"#8a7a60",fontWeight:"800"}}>
+              資料量 {Math.round(FSTAT.size.bytes/1024).toLocaleString()} KB ／ 上限 1,024 KB
+              {FSTAT.size.n>0?`　圖片 ${FSTAT.size.n} 張（${Math.round(FSTAT.size.img/1024).toLocaleString()} KB）`:""}
+            </span>
+            <span style={{flex:1}}/>
+            <ImagePurgeButton groups={groups}/>
+          </div>
+        )}
         <div style={{display:"flex",gap:"9px",marginTop:"13px",flexWrap:"wrap"}}>
           <Small icon="📊" title="數據統計" onClick={()=>go("stats")}/>
           <Small icon="🖨" title="印訂位表" onClick={()=>go("print")}/>
@@ -5793,6 +5933,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [expanded,setExpanded]=useState(null);
   const [toast,setToast]=useState(null);
   const [saving,setSaving]=useState(false);
+  const [drawer,setDrawer]=useState(false);       // v237:左側欄
   const [navHome,setNavHome]=useState(true);      // v233:預設進新首頁
   const [printOpen,setPrintOpen]=useState(false);  // v233:首頁直接開印訂位表(不用再繞交接)
   const [showDingwe,setShowDingwe]=useState(false);
@@ -6005,7 +6146,6 @@ const rowBg=(g)=>{
     {key:"deposit",    label:"訂金",    w:74, text:true},
     {key:"depositDate",label:"付訂日",  w:66, text:true},
     {key:"collector",  label:"收款人",  w:48, text:true},
-    {key:"refundSigned",label:"退款\n簽名",w:44,chk:true,color:"#e87a5a"},
     {key:"cancelled",  label:"取消",   w:38, chk:true,color:"#c05050"},
     {key:"note",       label:"備註",   w:220,text:true},
   ];
@@ -6013,17 +6153,23 @@ const rowBg=(g)=>{
   const shownCols = compactMode ? COLS.filter(c=>compactKeys.includes(c.key)) : COLS;
   const statusAnchor = compactMode ? "headcount" : "collector";
 
+  // v237:導覽只寫一份,首頁的卡片和左側欄共用
+  const goTo=(k)=>{
+    if(k==="home") setNavHome(true);
+    else if(k==="table") setNavHome(false);
+    else if(k==="mai") setShowDingwe(true);
+    else if(k==="stats") setShowStats(true);
+    else if(k==="cpl") leaveGuard(()=>setShowCplCenter(true));      // 沿用原本的「還有麥訂沒轉入」提醒
+    else if(k==="items") leaveGuard(()=>setShowItemsOff(true));
+    else if(k==="print") setPrintOpen(true);
+  };
   // v233:新首頁是入口。子畫面打開時交給原本的畫面渲染,關掉就自動回到首頁
   if(navHome && !showDingwe && !showStats && !showItemsOff && !showCplCenter){
     if(printOpen) return <PrintDingwePage groups={groups} onClose={()=>setPrintOpen(false)}/>;
-    return <StaffHome groups={groups} onBack={onBack} go={(k)=>{
-      if(k==="table") setNavHome(false);
-      else if(k==="mai") setShowDingwe(true);
-      else if(k==="stats") setShowStats(true);
-      else if(k==="cpl") leaveGuard(()=>setShowCplCenter(true));      // 沿用原本的「還有麥訂沒轉入」提醒
-      else if(k==="items") leaveGuard(()=>setShowItemsOff(true));
-      else if(k==="print") setPrintOpen(true);
-    }}/>;
+    return (<>
+      <StaffHome groups={groups} onBack={onBack} go={goTo} onMenu={()=>setDrawer(true)}/>
+      <StaffDrawer open={drawer} onClose={()=>setDrawer(false)} groups={groups} go={goTo} onBack={onBack}/>
+    </>);
   }
   return(
     <div style={{...S.page,background:"#f5f0e8",color:"#3a2a1a"}}>
@@ -6035,7 +6181,8 @@ const rowBg=(g)=>{
         <button onClick={onBack} style={S.backBtn}>← 離開</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
           <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 {APP_VER}</div>
-          <button onClick={()=>setNavHome(true)} style={{fontSize:"12px",fontWeight:"800",background:"#fff",border:"1.5px solid #ddd0bc",borderRadius:"8px",padding:"6px 11px",color:"#6a4a2e",cursor:"pointer",whiteSpace:"nowrap"}}>☰ 首頁</button>
+          <button onClick={()=>setDrawer(true)} style={{fontSize:"12px",fontWeight:"800",background:"#fff",border:"1.5px solid #ddd0bc",borderRadius:"8px",padding:"6px 11px",color:"#6a4a2e",cursor:"pointer",whiteSpace:"nowrap"}}>☰ 選單</button>
+          <StaffDrawer open={drawer} onClose={()=>setDrawer(false)} groups={groups} go={goTo} onBack={onBack}/>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
             <button title={TIP_TXT.items} onClick={()=>leaveGuard(()=>setShowItemsOff(true))}
               style={{background:"#dce8f4",border:"1.5px solid #a8c4dc",borderRadius:"8px",color:"#1a4a6a",fontSize:"13px",fontWeight:"700",padding:"8px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>🚫 品項</button>
@@ -6891,19 +7038,6 @@ const rowBg=(g)=>{
                         </div>
                       )}
                       <ComplaintPanel g={g} setGroups={setGroups} groups={groups} walkin={walkinCpl} onAdd={(gg)=>{setGForm({type:"",kinds:[],dishes:[],photo:null,reason:"",attitude:"",adjust:"",treat:""});setGCpl(gg);}}/>
-                      {(g.refundStaffSig||g.refundCustomerSig)&&(
-                        <div style={{padding:"10px 12px",background:"#f0f6f0",borderRadius:"10px",margin:"8px 0",border:"1px solid #b8d0b8"}}>
-                          <div style={{fontSize:"12px",color:"#2a6a2a",fontWeight:"700",marginBottom:"8px"}}>💰 退款簽名記錄</div>
-                          <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
-                            {[["staff","員工","refundStaffSig","refundStaffSigTime"],["customer","客人","refundCustomerSig","refundCustomerSigTime"]].map(([t,label,sk,tk])=>(
-                              <div key={t} style={{flex:1,minWidth:"140px",padding:"8px",background:"#fff",borderRadius:"8px",border:`1px solid ${g[sk]?"#2a6a3a":"#ddd"}`}}>
-                                <div style={{fontSize:"11px",color:g[sk]?"#2a6a2a":"#999",marginBottom:"4px"}}>{g[sk]?"✓ ":""}{label}簽名{g[tk]?`（${g[tk]}）`:""}</div>
-                                {g[sk]&&<img src={g[sk]} style={{width:"100%",maxHeight:"80px",objectFit:"contain",background:"#fafafa",borderRadius:"6px"}}/>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                       <div style={{padding:"12px 16px"}}>
                         <div style={{fontSize:"12px",color:"#8a5210",fontWeight:"700",marginBottom:"10px"}}>
                           📋 {g.name} 的點餐 — {g.orders.length} 人
@@ -7468,6 +7602,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
   const RED_AT=22, ORG_AT=17, YEL_AT=17; // 紅22+必關 黃17-21留意(兩色制)
   const TIMES2 = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30"];
   const DAYS2 = ["一","二","三","四","五","六","日"];
+  const [compact,setCompact]=useState(true);   // v234:精簡模式 —— 每格併成一行,整天 20 個時段一次看完
   const [weekOffset, setWeekOffset] = useState(0);
   const [closeMap, setCloseMap] = useState({});
   const [peopleMap, setPeopleMap] = useState({}); // {key:{a,ch,by,at}}
@@ -8209,6 +8344,8 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
           <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
         </div>
         <div style={{display:"flex",gap:"5px"}}>
+          <button onClick={()=>setCompact(c=>!c)} title="精簡:整天一次看完,來源資訊移到滑鼠提示"
+            style={{padding:"6px 9px",borderRadius:"6px",border:"1px solid #c8b89c",background:compact?"#6a4a2e":"#fff",color:compact?"#fff":"#6a4a2e",fontSize:"11px",fontWeight:"800",cursor:"pointer",whiteSpace:"nowrap"}}>{compact?"精簡":"詳細"}</button>
           <button onClick={()=>fileInputRef.current&&fileInputRef.current.click()} style={{padding:"6px 10px",borderRadius:"6px",background:"#3a7a5a",border:"none",color:"#fff",cursor:"pointer",fontSize:"11px",fontWeight:"700"}}>📥 大麥</button>
           <button onClick={()=>{setWeekOffset(p=>Math.max(0,p-1));if(isMobile)setViewDay(0);}} style={{padding:"6px 9px",borderRadius:"6px",background:"#e0d2bc",border:"none",color:"#6a4a2e",cursor:"pointer",fontWeight:"700"}}>◀</button>
           <button onClick={()=>{setWeekOffset(0);setViewDay(isMobile?weekDates.indexOf(todayStr):null);}} style={{padding:"5px 8px",borderRadius:"6px",background:"#b07840",border:"none",color:"#fff",cursor:"pointer",fontSize:"10px"}}>本週</button>
@@ -8441,7 +8578,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
           <tbody>
             {TIMES2.map(time=>(
               <tr key={time}>
-                <td style={{padding:"6px 3px",border:"1px solid #e0d8c8",textAlign:"center",fontWeight:"700",color:"#a09070",background:"#f0ebe0",fontSize:"11px",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:5}}>{time}</td>
+                <td style={{padding:compact?"1px 3px":"6px 3px",border:"1px solid #e0d8c8",textAlign:"center",fontWeight:"700",color:"#a09070",background:"#f0ebe0",fontSize:"11px",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:5}}>{time}</td>
                 {daysToShow.map(di=>{
                   const date=weekDates[di];
                   const key=`${date}-${time}`;
@@ -8460,14 +8597,22 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
                   return (
                     <React.Fragment key={di}>
                       <td onClick={()=>active&&setEditCell({key,a:entry?String(entry.a):"",ch:entry?String(entry.ch):"",autoT})}
-                        style={{padding:"3px",border:"1px solid #e0d8c8",borderLeft:"3px solid #8a6a3a",minWidth:isMobile?"60px":"40px",verticalAlign:"top",cursor:active?"pointer":"default",
+                        title={entry&&entry.by?`大${a} 小${ch}　${entry.src==="麥"?"麥·":""}${entry.by} ${entry.at}`:undefined}
+                        style={{padding:compact?"0 2px":"3px",border:"1px solid #e0d8c8",borderLeft:"3px solid #8a6a3a",minWidth:isMobile?"60px":"40px",verticalAlign:"top",cursor:active?"pointer":"default",
                         background:red?"#ffe8e8":org?"#ffe6cc":yel?"#fff3cc":active?"transparent":"#ece8e0",opacity:active?1:0.45}}>
                         {active&&(entry?(
+                          compact?(
+                          <div style={{textAlign:"center",minHeight:"0",whiteSpace:"nowrap",lineHeight:"1.25"}}>
+                            <span style={{fontSize:"13px",fontWeight:"800",color:red?"#e82020":org?"#c06010":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</span>
+                            <span style={{fontSize:"8px",color:"#8a6a50",marginLeft:"3px"}}>大{a}小{ch}</span>
+                          </div>
+                          ):(
                           <div style={{textAlign:"center",minHeight:"30px"}}>
                             <div style={{fontSize:"14px",fontWeight:"700",color:red?"#e82020":org?"#c06010":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</div>
                             <div style={{fontSize:"8px",color:"#8a6a50"}}>大{a} 小{ch}</div>
                             {entry.by&&<div style={{fontSize:"7px",color:"#aaa"}}>{entry.src==="麥"?"麥·":""}{entry.by} {entry.at}</div>}
                           </div>
+                          )
                         ):(
                           <div style={{textAlign:"center",minHeight:"30px",lineHeight:"30px",fontSize:"13px",fontWeight:"700",color:autoT>=RED_AT?"#e82020":autoT>=ORG_AT?"#c06010":autoT>=YEL_AT?"#b08000":autoT>0?"#9a8a76":"#c8c0b0"}}>{autoT>0?autoT:"＋"}</div>
                         ))}
@@ -9242,81 +9387,6 @@ function StatsPage({ onBack, staffList }) {
   );
 }
 
-function RefundSection({ group, S, onSaveSig }) {
-  const [showRefund, setShowRefund] = useState(false);
-  const [pin, setPin] = useState("");
-  const [pinErr, setPinErr] = useState("");
-  const [pinOk, setPinOk] = useState(false);
-  const [sigType, setSigType] = useState(null);
-  const [sigs, setSigs] = useState({staff:null, customer:null});
-
-  if(!showRefund) return (
-    <div style={{padding:"8px 16px 12px",background:"#f5efe2"}}>
-      <button onClick={()=>setShowRefund(true)}
-        style={{width:"100%",padding:"8px 6px",borderRadius:"10px",background:"#e4ecf4",border:"1px solid #3a5a7a",color:"#2a5a8a",fontSize:"12px",fontWeight:"800",cursor:"pointer"}}>
-        💰 退款簽名(需員工密碼)
-      </button>
-    </div>
-  );
-
-  if(!pinOk) return (
-    <div style={{padding:"14px 16px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
-      <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"8px"}}>輸入員工密碼</div>
-      <input value={pin} onChange={e=>{setPin(e.target.value);setPinErr("");}} type="password" placeholder="員工密碼"
-        style={{width:"100%",background:"#ffffff",border:"1px solid #d0c0a8",borderRadius:"10px",padding:"11px 14px",color:"#3a2a1a",fontSize:"14px",fontFamily:"'Noto Sans TC',sans-serif",marginBottom:"8px"}}/>
-      {pinErr&&<div style={{fontSize:"11px",color:"#e87a5a",marginBottom:"8px"}}>{pinErr}</div>}
-      <div style={{display:"flex",gap:"8px"}}>
-        <button onClick={()=>{setShowRefund(false);setPin("");}} style={{flex:1,padding:"10px",borderRadius:"10px",background:"#ffffff",border:"1px solid #d8c8b0",color:"#7a5c3e",fontSize:"12px",cursor:"pointer"}}>取消</button>
-        <button onClick={()=>{if(pin==="9015"){setPinOk(true);}else setPinErr("密碼錯誤");}}
-          style={{flex:1,padding:"10px",borderRadius:"10px",background:"#b07840",border:"none",color:"#fff",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>確認</button>
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={{padding:"14px 16px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
-      <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",marginBottom:"12px"}}>💰 退款簽名</div>
-      <div style={{background:"#fdfaf4",borderRadius:"10px",padding:"10px 12px",marginBottom:"12px",fontSize:"12px",color:"#aa8060",lineHeight:"1.8"}}>
-        <div><b style={{color:"#8a5210"}}>姓名：</b>{group.name}</div>
-        <div><b style={{color:"#8a5210"}}>訂位：</b>{group.date} {group.time}</div>
-        <div><b style={{color:"#8a5210"}}>電話：</b>{group.phone}</div>
-        <div><b style={{color:"#8a5210"}}>退還訂金：</b>${group.deposit||"—"}</div>
-      </div>
-      <div style={{display:"flex",gap:"8px",marginBottom:"12px"}}>
-        <button onClick={()=>setSigType("staff")}
-          style={{flex:1,padding:"12px",borderRadius:"12px",border:`1px solid ${sigs.staff?"#7ab87a":"#3a5a7a"}`,
-            background:sigs.staff?"#dfeadf":"#e4ecf4",color:sigs.staff?"#2a7a4a":"#2a5a8a",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>
-          {sigs.staff?"✓ ":""}員工簽名
-        </button>
-        <button onClick={()=>setSigType("customer")}
-          style={{flex:1,padding:"12px",borderRadius:"12px",border:`1px solid ${sigs.customer?"#7ab87a":"#7a5a3a"}`,
-            background:sigs.customer?"#dfeadf":"#ffffff",color:sigs.customer?"#2a7a4a":"#c4924a",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>
-          {sigs.customer?"✓ ":""}客人簽名
-        </button>
-      </div>
-      {sigs.staff&&sigs.customer&&(
-        <div style={{fontSize:"12px",color:"#2a7a4a",textAlign:"center",padding:"8px",background:"#0d1a0d",borderRadius:"8px",marginBottom:"8px"}}>
-          ✓ 雙方均已簽名完成
-        </div>
-      )}
-      <button onClick={()=>{setShowRefund(false);setPin("");setPinOk(false);}}
-        style={{width:"100%",padding:"11px",borderRadius:"12px",background:"transparent",border:"1px solid #e0d5c0",color:"#5a3a28",fontSize:"12px",fontWeight:"600",cursor:"pointer",marginTop:"4px"}}>
-        關閉
-      </button>
-      {sigType&&(
-        <SignatureModal group={group} sigType={sigType}
-          onSave={(dataUrl,type)=>{
-            setSigs(p=>({...p,[type]:dataUrl}));
-            setSigType(null);
-            const now=new Date();
-            const t=`${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-            if(onSaveSig) onSaveSig(type, dataUrl, t);
-          }}
-          onClose={()=>setSigType(null)}/>
-      )}
-    </div>
-  );
-}
 
 
 // ─── HUADAN (夥伴劃單) ───────────────────────────────────────────────────────
@@ -10032,9 +10102,6 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
           </div>
         </div>
       )}
-      {!fromStaff&&<RefundSection group={group} S={S} onSaveSig={(type,dataUrl,time)=>{
-        if(onCancelOrder) onCancelOrder(-99, {sigType:type, sig:dataUrl, time});
-      }}/>}
       {allOrders.length > 0 && (
         <div style={{padding:"14px 16px 24px",borderTop:"1px solid #e0d5c0",background:"#f5efe2"}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"13px",color:"#7a5c3e",marginBottom:"4px"}}>
@@ -10189,7 +10256,7 @@ export default function App() {
   // Load initial data + subscribe to real-time updates
   useEffect(()=>{
     FS.loadGroups().then(data=>{
-      if(data&&Array.isArray(data)&&data.length>0) setGroupsState(data);
+      if(data&&Array.isArray(data)&&data.length>0){ setGroupsState(data); measureGroups(data); }
       // v232:讀不到雲端時不要載入示範假資料(客人會看到假訂位,而且可能被存回去蓋掉真的)
       else setGroupsState(GROUPS_CLOUD.readOK ? DEMO : []);
       setLoaded(true);
@@ -10208,7 +10275,7 @@ export default function App() {
           if(pending) return;                                   // 自己樂觀寫入的回音,本機已有資料
           if(inflight.current>0) return;                        // v232:關鍵存檔寫到一半,先別被覆蓋
           if(Date.now()-lastLocalEdit.current < 2500) return;   // 剛改過,先別被伺服器舊資料覆蓋
-          setGroupsState(data);
+          setGroupsState(data); measureGroups(data);
           setSyncStatus("即時同步 ✓");
         }
       });
@@ -10233,7 +10300,7 @@ export default function App() {
         // v232:送出時讀「最新」的待存資料(關鍵存檔可能已經把新的組補進來)
         const toSave = pendingNext.current || next;
         saveTimer.current = null; pendingNext.current = null;
-        FS.saveGroups(toSave).catch(()=>{});
+        FS.saveGroups(toSave).catch(()=>{}); measureGroups(toSave);
         try { localStorage.setItem("jinher_groups", JSON.stringify(toSave)); } catch(e) {}
       }, 500);
       return next;
@@ -10410,14 +10477,6 @@ export default function App() {
             if(served[sigData.lineKey]) delete served[sigData.lineKey];
             else served[sigData.lineKey]={at:sigData.at||"",by:sigData.by||""};
             return {...g,served};
-          }));
-        } else if(sigData) {
-          // Saving signature
-          const key = sigData.sigType==="staff"?"refundStaffSig":"refundCustomerSig";
-          const timeKey = sigData.sigType==="staff"?"refundStaffSigTime":"refundCustomerSigTime";
-          setGroups(prev=>prev.map(g=>{
-            if(g.id!==liveGroup.id) return g;
-            return {...g,[key]:sigData.sig,[timeKey]:sigData.time,refundSigned:true};
           }));
         } else {
           setGroups(prev=>prev.map(g=>{
