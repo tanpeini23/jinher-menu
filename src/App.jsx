@@ -418,7 +418,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v238";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v239";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5934,7 +5934,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const [toast,setToast]=useState(null);
   const [saving,setSaving]=useState(false);
   const [drawer,setDrawer]=useState(false);       // v237:左側欄
-  const [navHome,setNavHome]=useState(true);      // v233:預設進新首頁
+  const [navHome,setNavHome]=useState(false);     // v239:進來直接看大訂表,其他功能從 ☰ 選單進
   const [printOpen,setPrintOpen]=useState(false);  // v233:首頁直接開印訂位表(不用再繞交接)
   const [showDingwe,setShowDingwe]=useState(false);
   const [showStats,setShowStats]=useState(false);
@@ -8337,11 +8337,11 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
       )}
 
       {/* 表頭 */}
-      <div className="np" style={{padding:"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+      <div className="np" style={{padding:compact?"2px 10px":"6px 12px",background:"#ede2d0",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <button onClick={guardedBack} style={{background:"none",border:"none",color:"#6a4a2e",fontSize:"14px",cursor:"pointer",fontWeight:"700"}}>← 返回</button>
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:"13px",fontWeight:"700",color:"#6a4a2e"}}>✦ 訂位人數統計表 {APP_VER}</div>
-          <div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>
+          {!compact&&<div style={{fontSize:"9px",color:"#b05a10",marginTop:"1px"}}>{closeDayLabel}</div>}
         </div>
         <div style={{display:"flex",gap:"5px"}}>
           <button onClick={()=>setCompact(c=>!c)} title="精簡:整天一次看完,來源資訊移到滑鼠提示"
@@ -8371,7 +8371,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
       )}
 
       {/* 進度橫幅 */}
-      {progress&&(
+      {progress&&!(compact&&progress.status==="complete")&&(
         <div className="np" style={{padding:"5px 12px",background:progress.status==="complete"?"#dff0df":"#fceedc",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:"8px"}}>
           <div style={{fontSize:"11px",color:progress.status==="complete"?"#2a6a2a":"#9a5a10",fontWeight:"700",lineHeight:"1.5"}}>
             {progress.status==="complete"
@@ -8530,10 +8530,10 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
         );
       })()}
       {/* 顏色說明 */}
-      <div className="np" style={{padding:"3px 12px",background:"#f5f0e8",display:"flex",gap:"14px",alignItems:"center",flexShrink:0,fontSize:"10px",color:"#6a4a2e"}}>
+      {!compact&&<div className="np" style={{padding:"3px 12px",background:"#f5f0e8",display:"flex",gap:"14px",alignItems:"center",flexShrink:0,fontSize:"10px",color:"#6a4a2e"}}>
         <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#fff3cc",border:"1px solid #d8c060",borderRadius:"3px",verticalAlign:"-2px"}}/> {YEL_AT}–{RED_AT-1}人 留意</span>
         <span><span style={{display:"inline-block",width:"12px",height:"12px",background:"#ffe8e8",border:"1px solid #d88080",borderRadius:"3px",verticalAlign:"-2px"}}/> {RED_AT}人以上 必關</span>
-      </div>
+      </div>}
 
       {/* 選單日時的返回全部列(只在篩選單日時出現) */}
       {viewDay!==null&&(
@@ -8547,7 +8547,7 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
         <table style={{borderCollapse:"collapse",minWidth:"100%",background:"#fff",fontSize:"11px"}}>
           <thead style={{position:"sticky",top:0,zIndex:10}}>
             <tr style={{background:"#ede2d0"}}>
-              <th style={{padding:"6px 4px",color:"#6a4a2e",border:"1px solid #c8b89c",minWidth:"46px",position:"sticky",left:0,background:"#ede2d0",zIndex:11,textAlign:"center"}}>時段</th>
+              <th style={{padding:compact?"1px 4px":"6px 4px",color:"#6a4a2e",border:"1px solid #c8b89c",minWidth:"46px",position:"sticky",left:0,background:"#ede2d0",zIndex:11,textAlign:"center"}}>時段</th>
               {daysToShow.map(di=>{
                 const active=inRange(weekDates[di]);
                 const warn=active&&dayNeedsClose(weekDates[di]);
@@ -8603,8 +8603,8 @@ function DingwePage({ groups, onBack, staffList, setGroups, setTodoChecksParent,
                         {active&&(entry?(
                           compact?(
                           <div style={{textAlign:"center",minHeight:"0",whiteSpace:"nowrap",lineHeight:"1.25"}}>
-                            <span style={{fontSize:"13px",fontWeight:"800",color:red?"#e82020":org?"#c06010":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</span>
-                            <span style={{fontSize:"8px",color:"#8a6a50",marginLeft:"3px"}}>大{a}小{ch}</span>
+                            <span style={{fontSize:"12px",fontWeight:"800",color:red?"#e82020":org?"#c06010":yel?"#b08000":"#d8c8b0"}}>{manualTotal}</span>
+                            <span style={{fontSize:"7.5px",color:"#8a6a50",marginLeft:"2px"}}>大{a}小{ch}</span>
                           </div>
                           ):(
                           <div style={{textAlign:"center",minHeight:"30px"}}>
@@ -10511,7 +10511,8 @@ export default function App() {
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center"}}>
           <div style={{background:"#fdfaf4",borderRadius:"16px",padding:"24px",width:"280px",border:"1px solid #d0c0a8"}}>
             <div style={{color:"#6a4a2e",fontWeight:"700",marginBottom:"12px",fontFamily:"'Noto Serif TC',serif"}}>員工驗證</div>
-            <input value={staffPin} onChange={e=>{setStaffPin(e.target.value);setPinErr("");}}
+            <input value={staffPin} autoFocus inputMode="numeric" onChange={e=>{setStaffPin(e.target.value);setPinErr("");}}
+              onKeyDown={e=>{if(e.key==="Enter"){if(staffPin==="9015"){setPage("staff");setShowPin(false);setStaffPin("");}else setPinErr("密碼錯誤");}}}
               placeholder="輸入員工密碼" type="password" style={{...S.input,background:"#fff",color:"#2e2010",border:"1px solid #c8b89c",marginBottom:"8px"}}/>
             {pinErr&&<div style={{fontSize:"11px",color:"#e87a5a",marginBottom:"8px"}}>{pinErr}</div>}
             <div style={{display:"flex",gap:"8px",marginTop:"4px"}}>
