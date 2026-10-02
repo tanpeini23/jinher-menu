@@ -418,7 +418,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v240";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v241";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -5668,6 +5668,23 @@ function FsAlert({ who }){
   );
 }
 
+// v241:容量標記,跟在版號旁邊。首頁已不在選單裡,清除鈕改掛這裡,不然沒地方按
+function CapacityTag({ groups }){
+  const [,tick]=useState(0);
+  useEffect(()=>{ const fn=()=>tick(t=>t+1); FSTAT.listeners.add(fn); return ()=>FSTAT.listeners.delete(fn); },[]);
+  const sz=FSTAT.size; if(!sz) return null;
+  const pct=Math.round(sz.bytes/1048576*100);
+  const tone=pct>=80?"#c02020":pct>=60?"#c06010":"#8a7a60";
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+      <span title={`圖片 ${sz.n} 張，${Math.round(sz.img/1024).toLocaleString()} KB（量測於 ${sz.at}）`}
+        style={{fontSize:"11px",fontWeight:"800",color:tone,background:"#fff",border:`1px solid ${pct>=80?"#e0a0a0":"#e0d8c8"}`,borderRadius:"7px",padding:"2px 8px",whiteSpace:"nowrap"}}>
+        {Math.round(sz.bytes/1024).toLocaleString()} KB／1,024（{pct}%）
+      </span>
+      <ImagePurgeButton groups={groups}/>
+    </span>
+  );
+}
 // v237:容量快滿的緊急提醒。超過 80% 就跳,超過 95% 不給關(再不處理就會整個存不進去)
 function CapacityAlert({ groups }){
   const [hide,setHide]=useState(false);
@@ -5791,17 +5808,13 @@ function StaffDrawer({ open, onClose, groups, go, onBack }){
           <div style={{fontSize:"17px",fontWeight:"900",color:"#8a5210",fontFamily:"'Noto Serif TC',serif"}}>今鶴 JINHER</div>
           <div style={{fontSize:"11px",color:"#a08a70",fontWeight:"700",marginTop:"2px"}}>今天 {c.today}　{APP_VER}</div>
         </div>
-        <Item icon="🏠" label="首頁" onClick={()=>go("home")}/>
-        <Item icon="📋" label="今日訂位" badge={c.todayList.length} tone="#8a5210" onClick={()=>go("table")}/>
-        <Item icon="💰" label="訂金追蹤" badge={(c.toVerify+c.unpaid)||""} tone="#c02020" onClick={()=>go("table")}/>
-        <Item icon="🍽" label="點餐狀況" badge={c.needOrder.length?`${c.ordered}/${c.needOrder.length}`:""} tone="#c06030" onClick={()=>go("table")}/>
-        <Item icon="📥" label="麥訂／人數統計表" badge={c.mai||""} tone="#1a5a9a" onClick={()=>go("mai")}/>
+        <Item icon="📋" label="大訂追蹤表" badge={c.todayList.length} tone="#8a5210" onClick={()=>go("table")}/>
+        <Item icon="📊" label="人數統計表" badge={c.mai||""} tone="#1a5a9a" onClick={()=>go("mai")}/>
+        <div style={{height:"9px",background:"#faf5ec",borderBottom:"1px solid #f0e8dc"}}/>
         <Item icon="📮" label="只看麥訂" onClick={()=>go("maiOnly")}/>
         <Item icon="⏰" label="過期訂單（詢問餐評）" onClick={()=>go("past")}/>
-        <div style={{height:"9px",background:"#faf5ec",borderBottom:"1px solid #f0e8dc"}}/>
-        <Item icon="📊" label="數據統計" onClick={()=>go("stats")}/>
+        <Item icon="📈" label="數據統計" onClick={()=>go("stats")}/>
         <Item icon="🖨" label="印訂位表" onClick={()=>go("print")}/>
-        <Item icon="📣" label="客訴中心" onClick={()=>go("cpl")}/>
         <Item icon="🚫" label="品項關閉" onClick={()=>go("items")}/>
         <div style={{flex:1}}/>
         <button onClick={()=>{onClose();onBack();}}
@@ -6179,6 +6192,7 @@ const rowBg=(g)=>{
     <div style={{...S.page,background:"#f5f0e8",color:"#3a2a1a"}}>
       <style>{GS}</style>
       <FsAlert who="staff"/>
+      <CapacityAlert groups={groups}/>
       {toast&&<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:"#e2f2e8",border:"1px solid #2a7a4a",borderRadius:"10px",padding:"8px 18px",fontSize:"12px",color:"#2a7a4a",fontWeight:"700",zIndex:999,whiteSpace:"nowrap"}}>{toast}</div>}
 
       <div style={{...S.header,paddingBottom:"10px"}}>
@@ -6187,6 +6201,7 @@ const rowBg=(g)=>{
           <div style={{display:"flex",alignItems:"center",gap:"9px"}}>
             <button onClick={()=>setDrawer(true)} title="選單" style={{fontSize:"17px",fontWeight:"800",background:"#fff",border:"1.5px solid #ddd0bc",borderRadius:"9px",padding:"4px 11px",color:"#6a4a2e",cursor:"pointer",lineHeight:"1.2"}}>☰</button>
             <div style={{...S.logo,whiteSpace:"nowrap"}}>✦ 大訂追蹤表 {APP_VER}</div>
+            <CapacityTag groups={groups}/>
           </div>
           <StaffDrawer open={drawer} onClose={()=>setDrawer(false)} groups={groups} go={goTo} onBack={onBack}/>
           <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
