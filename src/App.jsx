@@ -418,7 +418,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v241";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v246";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -516,6 +516,35 @@ function autoTagsFrom(txt){
   const out=[];
   if(/畫盤/.test(t)) out.push("畫盤");
   return out;
+}
+// v243:低消進度。大訂是一個人點一次、陸續送,所以「不擋送出」,只告訴客人全組還差多少。
+// 規則跟 lowConsumeOk 同一套(包廂看金額、一般看份數),不另外定義一份。
+function LowConsumeBar({ group, compactNote }){
+  if(!group) return null;
+  let ok,txt,sub;
+  if(group.isVip){
+    const isMem=(group.memberType==="existing"||group.memberType==="new");
+    const tot=(group.orders||[]).reduce((sm,o)=>sm+orderTotal(o.lines||[],isMem),0);
+    const left=VIP_MIN_SPEND-tot; ok=left<=0;
+    txt=ok?`✓ 包廂低消已達標`:`包廂低消還差 $${left.toLocaleString()}`;
+    sub=`目前 $${tot.toLocaleString()} ／ 低消 $${VIP_MIN_SPEND.toLocaleString()}`;
+  }else{
+    const ad=adultsOfG(group); if(ad<=0) return null;
+    const now=lowConsumeCount((group.orders||[]).flatMap(o=>o.lines||[]));
+    const left=ad-now; ok=left<=0;
+    txt=ok?`✓ 全組低消已達標`:`全組還差 ${left} 份`;
+    sub=`${ad} 位大人要點 ${ad} 份主餐或飲料，目前全組已點 ${now} 份`;
+  }
+  return (
+    <div style={{background:ok?"#eaf5ee":"#fff4e6",border:`2px solid ${ok?"#a8d0b8":"#e8b878"}`,borderRadius:"12px",
+      padding:"11px 14px",margin:"10px 0",textAlign:"center"}}>
+      <div style={{fontSize:"15px",fontWeight:"900",color:ok?"#1a6a3a":"#a05810",lineHeight:"1.5"}}>{txt}</div>
+      <div style={{fontSize:"12px",color:"#8a6a4a",fontWeight:"700",marginTop:"3px",lineHeight:"1.6"}}>{sub}</div>
+      {!ok&&<div style={{fontSize:"11.5px",color:"#a06840",marginTop:"5px",lineHeight:"1.6"}}>
+        甜點、前菜、套餐費不算低消。{compactNote!==false&&<>可以再加點，或請同行的人接著點 —— <b>不用一次點完</b>。</>}
+      </div>}
+    </div>
+  );
 }
 // 低消是否達標(包廂看金額、一般看份數)
 function lowConsumeOk(g){
@@ -1395,6 +1424,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
       <div style={{background:"#fbf2e2",border:"2px solid #e0b060",borderRadius:"16px",padding:"12px 32px",marginBottom:"12px"}}>
         <div style={{fontSize:"13px",color:"#8a6a48",marginBottom:"4px"}}>您的號碼</div>
         <div style={{fontSize:"40px",fontWeight:"700",color:"#9c5a1c",fontFamily:"'Noto Serif TC',serif"}}>{doneNum||myNum}號</div>
+        <LowConsumeBar group={group}/>
         <div style={{fontSize:"12px",color:"#7a5e42",marginTop:"2px"}}>員工將依號碼送餐，請記住</div>
       </div>
       <div style={{background:"#fdf4e8",border:"1px solid #e0cdb0",borderRadius:"14px",padding:"12px 16px",marginBottom:"10px",width:"100%",maxWidth:"300px",textAlign:"left"}}>
@@ -5669,7 +5699,7 @@ function FsAlert({ who }){
 }
 
 // v241:容量標記,跟在版號旁邊。首頁已不在選單裡,清除鈕改掛這裡,不然沒地方按
-function CapacityTag({ groups }){
+function CapacityTag({ groups, withPurge=true }){
   const [,tick]=useState(0);
   useEffect(()=>{ const fn=()=>tick(t=>t+1); FSTAT.listeners.add(fn); return ()=>FSTAT.listeners.delete(fn); },[]);
   const sz=FSTAT.size; if(!sz) return null;
@@ -5681,7 +5711,7 @@ function CapacityTag({ groups }){
         style={{fontSize:"11px",fontWeight:"800",color:tone,background:"#fff",border:`1px solid ${pct>=80?"#e0a0a0":"#e0d8c8"}`,borderRadius:"7px",padding:"2px 8px",whiteSpace:"nowrap"}}>
         {Math.round(sz.bytes/1024).toLocaleString()} KB／1,024（{pct}%）
       </span>
-      <ImagePurgeButton groups={groups}/>
+      {withPurge&&<ImagePurgeButton groups={groups}/>}
     </span>
   );
 }
@@ -5806,12 +5836,14 @@ function StaffDrawer({ open, onClose, groups, go, onBack }){
           boxShadow:"3px 0 18px rgba(0,0,0,.25)",display:"flex",flexDirection:"column",overflowY:"auto"}}>
         <div style={{padding:"15px 15px 11px",borderBottom:"2px solid #e8dcc8"}}>
           <div style={{fontSize:"17px",fontWeight:"900",color:"#8a5210",fontFamily:"'Noto Serif TC',serif"}}>今鶴 JINHER</div>
-          <div style={{fontSize:"11px",color:"#a08a70",fontWeight:"700",marginTop:"2px"}}>今天 {c.today}　{APP_VER}</div>
+          <div style={{fontSize:"11px",color:"#a08a70",fontWeight:"700",marginTop:"2px",display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+            <span>今天 {c.today}　{APP_VER}</span>
+            <CapacityTag groups={groups} withPurge={false}/>
+          </div>
         </div>
         <Item icon="📋" label="大訂追蹤表" badge={c.todayList.length} tone="#8a5210" onClick={()=>go("table")}/>
         <Item icon="📊" label="人數統計表" badge={c.mai||""} tone="#1a5a9a" onClick={()=>go("mai")}/>
         <div style={{height:"9px",background:"#faf5ec",borderBottom:"1px solid #f0e8dc"}}/>
-        <Item icon="📮" label="只看麥訂" onClick={()=>go("maiOnly")}/>
         <Item icon="⏰" label="過期訂單（詢問餐評）" onClick={()=>go("past")}/>
         <Item icon="📈" label="數據統計" onClick={()=>go("stats")}/>
         <Item icon="🖨" label="印訂位表" onClick={()=>go("print")}/>
@@ -6023,23 +6055,23 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
           tagTxt, noteTxt, g.maiNote, g.customPlate,         // 第10項:標籤、備註、大麥備註
         ].some(v=>String(v||"").toLowerCase().includes(kw));
       })
-    : groups.filter(g=>!g.fromMai&&!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&(showPast?isPastMeal(g):!isPastMeal(g)));
+    : groups.filter(g=>!(g.archived&&(g.archiveType!=="menu"||g.cplDone))&&(showPast?isPastMeal(g):!isPastMeal(g)));   // v246:麥訂也一起顯示,不再另開一區
   const parseDT=(g)=>{const[m,d]=(g.date||"0/0").split("/").map(Number);const[h,mi]=(g.time||"0:0").split(":").map(Number);return (m||0)*1000000+(d||0)*10000+(h||0)*100+(mi||0);};
   filtered.sort((a,b)=>parseDT(a)-parseDT(b));
 
   // ── 本週/下週:週一~週日;用切換鈕手動切(週日晚上要處理下週)──────────────
+  // v244:改以「一個月」為單位(原本是本週/下週兩週)。mon=當月1號、sun=當月最後一天
   const weekRange=(offset)=>{
     const t=new Date(); t.setHours(0,0,0,0);
-    const dow=t.getDay();                       // 0=日
-    const mon=new Date(t); mon.setDate(t.getDate()-((dow+6)%7)+offset*7);   // 該週週一
-    const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+    const mon=new Date(t.getFullYear(), t.getMonth()+offset, 1);
+    const sun=new Date(t.getFullYear(), t.getMonth()+offset+1, 0);
     return {mon,sun};
   };
   const wr=weekRange(weekView);
+  const monLabel=(off)=>`${weekRange(off).mon.getMonth()+1}月`;
   const inWeek=(g)=>{
     const m2=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/); if(!m2) return false;
-    const d=new Date(wr.mon.getFullYear(),+m2[1]-1,+m2[2]); d.setHours(0,0,0,0);
-    return d>=wr.mon && d<=wr.sun;
+    return (+m2[1])===(wr.mon.getMonth()+1);     // v244:同月份就算(日期字串沒帶年份)
   };
   // 待處理:需訂金但沒收 / 還沒點完(用截止日判斷)
   // 處理完 = 現場點餐 或 已封存餐點;其他都算待處理
@@ -6055,11 +6087,20 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   const noGroup = showMaiOnly || !!filter.trim() || showPast;
   // 訂金逾期/快到期的,就算用餐日還很遠也要拉進本週待處理(訂金期限跟用餐日是兩回事)
   const depPull=(g)=>!inWeek(g)&&!g.cancelled&&!g.archived&&["overdue","urgent"].includes(depositUrgency(g));
-  const weekGs=noGroup?[]:filtered.filter(g=>inWeek(g)||depPull(g));
-  const weekTodo=noGroup?[]:weekGs.filter(isTodo), weekDone=noGroup?[]:weekGs.filter(g=>!isTodo(g));
-  const restGs=noGroup?filtered:filtered.filter(g=>!inWeek(g)&&!depPull(g));
-  // 顯示順序:本週待處理 → 本週已處理 → 其他
-  const rows=noGroup?filtered:[...weekTodo,...weekDone,...restGs];
+  // v246:整張表是「整月」,但「本週待處理」只抓當週(週一~週日)的
+  const thisWeek=(g)=>{
+    const m2=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/); if(!m2) return false;
+    const t=new Date(); t.setHours(0,0,0,0);
+    const mon=new Date(t); mon.setDate(t.getDate()-((t.getDay()+6)%7));
+    const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+    const d=new Date(t.getFullYear(),+m2[1]-1,+m2[2]); d.setHours(0,0,0,0);
+    return d>=mon&&d<=sun;
+  };
+  const weekGs=noGroup?[]:filtered.filter(g=>(thisWeek(g)&&isTodo(g))||depPull(g));
+  const weekTodo=weekGs, weekDone=[];
+  const restGs=noGroup?filtered:filtered.filter(g=>!weekGs.includes(g));
+  // 顯示順序:本週待處理 → 本月其餘
+  const rows=noGroup?filtered:[...weekTodo,...restGs];
   const gapAfter = weekTodo.length>0 ? weekTodo.length-1 : -1;        // 待處理最後一列後面留空隙
   const weekEndIdx = weekGs.length-1;
   const overdueGs=groups.filter(g=>depositUrgency(g)==="overdue");
@@ -6275,8 +6316,8 @@ const rowBg=(g)=>{
         </div>
         {!noGroup&&<div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
           <div style={{display:"flex",border:"1.5px solid #b8a888",borderRadius:"8px",overflow:"hidden"}}>
-            <button onClick={()=>setWeekView(0)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===0?"#8a6a4a":"#fff",color:weekView===0?"#fff":"#8a6a4a"}}>本週</button>
-            <button onClick={()=>setWeekView(1)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===1?"#8a6a4a":"#fff",color:weekView===1?"#fff":"#8a6a4a"}}>下週 →</button>
+            <button onClick={()=>setWeekView(0)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===0?"#8a6a4a":"#fff",color:weekView===0?"#fff":"#8a6a4a"}}>{monLabel(0)}</button>
+            <button onClick={()=>setWeekView(1)} style={{fontSize:"12px",fontWeight:"800",padding:"6px 13px",border:"none",cursor:"pointer",background:weekView===1?"#8a6a4a":"#fff",color:weekView===1?"#fff":"#8a6a4a"}}>{monLabel(1)} →</button>
           </div>
           <span style={{fontSize:"11px",color:"#8a6a4a",fontWeight:"700"}}>
             {wr.mon.getMonth()+1}/{wr.mon.getDate()} ~ {wr.sun.getMonth()+1}/{wr.sun.getDate()}
@@ -6284,15 +6325,23 @@ const rowBg=(g)=>{
           <span style={{fontSize:"11px",fontWeight:"800",color:weekTodo.length>0?"#c02020":"#2a7a4a"}}>
             {weekTodo.length>0?`待處理 ${weekTodo.length} 筆`:"都處理完了 ✓"}
           </span>
-          <span style={{fontSize:"10px",color:"#a09070"}}>（左側粗線＝{weekView===0?"本週":"下週"}）</span>
+          <span style={{fontSize:"10px",color:"#a09070"}}>（左側粗線＝{monLabel(weekView)}）</span>
         </div>}
         <div style={{fontSize:"10px",color:"#5a3a28",marginTop:"6px"}}>{rows.length} 組 · {compactMode?"手機版:點一列展開看全部欄位":"左右滑動查看所有欄位"}</div>
       </div>
 
+      {!noGroup&&weekTodo.length>0&&(
+        <div style={{background:"#fbe4d0",borderTop:"2px solid #d09050",borderBottom:"2px solid #d09050",
+          padding:"9px 12px",display:"flex",alignItems:"center",gap:"9px",flexWrap:"wrap"}}>
+          <span style={{fontSize:"17px",fontWeight:"900",color:"#a04010"}}>本週待處理</span>
+          <span style={{fontSize:"17px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"14px",padding:"1px 12px"}}>{weekTodo.length}</span>
+          <span style={{fontSize:"12px",color:"#a06840",fontWeight:"700"}}>還沒現場點餐、也還沒封存餐點</span>
+        </div>
+      )}
       <div style={{overflowX:"auto",overflowY:"auto",flex:1}}>
         <table style={{borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap",width:"100%"}}>
           <thead>
-            <tr style={{background:"#efe6d4",position:"sticky",top:0,zIndex:5}}>
+            <tr style={{background:"#efe6d4",position:"sticky",top:0,zIndex:5,fontSize:"15px"}}>
               <th style={{...TH,minWidth:80}}>代碼</th>
               <th style={{...TH,minWidth:66}}>會員</th>
               <th style={{...TH,minWidth:50}}>點餐<br/>數量</th>
@@ -6318,28 +6367,6 @@ const rowBg=(g)=>{
             })()}
             {rows.map((g,ri)=>(
               <>
-                {!noGroup&&ri===0&&weekTodo.length>0&&(
-                  <tr key="h-todo"><td colSpan={shownCols.length+4} onClick={()=>setSecOpen(p=>({...p,todo:!(p.todo!==false)}))}
-                    style={{background:"#fbe4d0",padding:"10px 12px",borderBottom:"2px solid #d09050",cursor:"pointer"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                      <span style={{fontSize:"15px",color:"#a04010"}}>{secOpen.todo!==false?"▼":"▶"}</span>
-                      <span style={{fontSize:"17px",fontWeight:"900",color:"#a04010"}}>{weekView===0?"本週":"下週"}待處理</span>
-                      <span style={{fontSize:"17px",fontWeight:"900",color:"#fff",background:"#c02020",borderRadius:"14px",padding:"1px 12px"}}>{weekTodo.length}</span>
-                      <span style={{fontSize:"12px",color:"#a06840",fontWeight:"700"}}>還沒現場點餐、也還沒封存餐點</span>
-                    </div>
-                  </td></tr>
-                )}
-                {!noGroup&&ri===weekTodo.length&&weekDone.length>0&&(
-                  <tr key="h-done"><td colSpan={shownCols.length+4} onClick={()=>setSecOpen(p=>({...p,done:!(p.done!==false)}))}
-                    style={{background:"#e2f0e4",padding:"10px 12px",borderBottom:"2px solid #78b088",cursor:"pointer"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                      <span style={{fontSize:"15px",color:"#2a7a4a"}}>{secOpen.done!==false?"▼":"▶"}</span>
-                      <span style={{fontSize:"17px",fontWeight:"900",color:"#2a7a4a"}}>{weekView===0?"本週":"下週"}已處理</span>
-                      <span style={{fontSize:"17px",fontWeight:"900",color:"#fff",background:"#2a8a5a",borderRadius:"14px",padding:"1px 12px"}}>{weekDone.length}</span>
-                      <span style={{fontSize:"12px",color:"#5a8a6a",fontWeight:"700"}}>現場點餐或已封存</span>
-                    </div>
-                  </td></tr>
-                )}
                 {!noGroup&&ri===weekGs.length&&restGs.length>0&&(
                   <tr key="h-rest"><td colSpan={shownCols.length+4} onClick={()=>setSecOpen(p=>({...p,rest:!(p.rest!==false)}))}
                     style={{background:"#ece5d8",padding:"10px 12px",borderBottom:"2px solid #b8a890",cursor:"pointer"}}>
@@ -6351,9 +6378,9 @@ const rowBg=(g)=>{
                   </td></tr>
                 )}
                 {!noGroup&&((ri<weekTodo.length&&secOpen.todo===false)||(ri>=weekTodo.length&&ri<weekGs.length&&secOpen.done===false)||(ri>=weekGs.length&&secOpen.rest===false))?null:(<>
-                <tr key={g.id} style={{background:rowBg(g),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),
+                <tr key={g.id} style={{background:rowBg(g)||(g.fromMai&&(!g.memberType||(needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit))?"#e8f0fa":(!noGroup&&isTodo(g)?"#fff8ee":"transparent")),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),
                   borderBottom: "1.5px solid #cbb99a",
-                  boxShadow: inWeek(g) ? "inset 5px 0 0 0 #8a6a4a" : "none"}}>
+                  boxShadow: inWeek(g) ? (isTodo(g)?"inset 5px 0 0 0 #c06030":"inset 5px 0 0 0 #a8c0a8") : "none"}}>
                   <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
                     {g.memberType==="private"
                       ? <div style={{fontSize:"14px",fontWeight:"700",color:"#a85ab4"}}>🎉 包場</div>
@@ -9110,6 +9137,7 @@ function GroupSummaryPage({ group, onBack, onCancelOrder, onAddStaffOrder, onTog
   return (
     <div style={S.page}>
     <FsAlert who="staff"/>
+    <div style={{padding:"0 12px"}}><LowConsumeBar group={group}/></div>
       {isLockedNow(group)&&(
         <div style={{padding:"10px 14px",background:"#fbe0e0",borderBottom:"1px solid #7a3030",textAlign:"center"}}>
           <span style={{fontSize:"13px",color:"#b03030",fontWeight:"700"}}>🔒 此訂單已鎖定（{lockReason(group)}）</span>
