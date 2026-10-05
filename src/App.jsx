@@ -418,7 +418,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v247";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v249";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1207,13 +1207,13 @@ function MemberBar({ group, onChange }){
     <div style={{position:"sticky",top:0,zIndex:50,background:mem?"#eaf5ee":"#f3efe6",
       borderBottom:`1.5px solid ${mem?"#a8d0b8":"#ddd0bc"}`,padding:"7px 12px",
       display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
-      <span style={{fontSize:"13px",fontWeight:"900",color:mem?"#1a6a3a":"#7a6a58",whiteSpace:"nowrap"}}>
-        👤 {MEM_LABEL[t]||"尚未選擇"}
-      </span>
-      {!mem&&<span style={{fontSize:"11.5px",color:"#a05810",fontWeight:"800"}}>加入會員主餐每份省 $60</span>}
-      <span style={{flex:1}}/>
-      <button onClick={onChange} style={{fontSize:"11.5px",fontWeight:"800",background:"transparent",
-        border:"1px solid #c8b89c",borderRadius:"7px",padding:"4px 10px",color:"#6a4a2e",cursor:"pointer",whiteSpace:"nowrap"}}>更改 ›</button>
+      <button onClick={onChange} style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",
+        background:mem?"#2a7a5a":"#a05810",color:"#fff",border:"none",borderRadius:"999px",
+        padding:"7px 16px",cursor:"pointer",fontSize:"13.5px",fontWeight:"900",whiteSpace:"nowrap"}}>
+        <span>👤 {MEM_LABEL[t]||"尚未選擇"}</span>
+        {!mem&&<span style={{fontSize:"11.5px",fontWeight:"800",opacity:.92}}>· 加入會員主餐每份省 $60</span>}
+        <span style={{fontSize:"12px",opacity:.85}}>更改 ›</span>
+      </button>
     </div>
   );
 }
@@ -2583,7 +2583,6 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
                   style={{fontSize:"10px",background:"#8a6a4a",color:"#fff",border:"none",borderRadius:"5px",padding:"2px 7px",marginTop:"3px",fontWeight:"800",cursor:"pointer",display:"block"}}>✓ 收起來</button>
               )}
             </>)}
-            <div style={{fontSize:"9px",color:"#7a5c3e"}}>{sl.operator} {sl.date}</div>
             {sl.status==="未接"&&(g.missedCount>=3||missedOverdue(g))&&(
               <div style={{fontSize:"9px",color:"#fff",background:"#c0302a",borderRadius:"4px",padding:"1px 4px",marginTop:"2px",fontWeight:"700"}}>⚠ 聯絡不上</div>
             )}
@@ -2615,15 +2614,20 @@ function StatusCell({ g, onSave, groups, setGroups, staffList }) {
       {open&&(
         <div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setOpen(false)}>
           <div style={{background:"#f0e8d8",border:"1px solid #d0c0a8",borderRadius:"14px",padding:"10px",width:"100%",maxWidth:"300px",boxShadow:"0 10px 36px rgba(0,0,0,0.45)"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",textAlign:"center",padding:"4px 0 10px"}}>選擇點餐狀態</div>
-            {STATUS_OPTIONS.map(s=>(
-              <div key={s} onClick={(e)=>{e.stopPropagation();selectStatus(s);}}
-                style={{padding:"13px 14px",cursor:"pointer",fontSize:"15px",borderRadius:"8px",marginBottom:"2px",
-                  color:s==="未KEY-需優先KEY"?"#ff6060":"#8a5210",
-                  background:sl.status===s?"#ede2d0":"#fbf6ec"}}>
-                {s==="未KEY-需優先KEY"?"🔴 "+s:s}
-              </div>
-            ))}
+            {/* v249:只留這兩個。其他狀態選項已移除 */}
+            <div style={{fontSize:"13px",color:"#8a5210",fontWeight:"700",textAlign:"center",padding:"4px 0 10px"}}>這組要標記成？</div>
+            <div onClick={(e)=>{e.stopPropagation();selectStatus("餐點封存");}}
+              style={{padding:"15px 14px",cursor:"pointer",borderRadius:"10px",marginBottom:"8px",
+                background:"#e8e8f8",border:"1px solid #a0a0d0"}}>
+              <div style={{fontSize:"16px",fontWeight:"900",color:"#5a5aa8"}}>📦 餐點封存</div>
+              <div style={{fontSize:"12px",color:"#6a6aaa",fontWeight:"600",marginTop:"3px",lineHeight:"1.5"}}>已進 POS，可拍照留存。封存後就離開「本週待處理」</div>
+            </div>
+            <div onClick={(e)=>{e.stopPropagation();selectStatus("現場點餐");}}
+              style={{padding:"15px 14px",cursor:"pointer",borderRadius:"10px",
+                background:"#f5ead8",border:"1px solid #8a6a4a"}}>
+              <div style={{fontSize:"16px",fontWeight:"900",color:"#8a5a20"}}>🍽 現場點餐</div>
+              <div style={{fontSize:"12px",color:"#aa8a6a",fontWeight:"600",marginTop:"3px",lineHeight:"1.5"}}>客人到現場才點，不用線上點餐</div>
+            </div>
             <div onClick={()=>{onSave(g.id,"statusLog",{status:"",operator:"",date:""});setOpen(false);}}
               style={{padding:"11px 14px",cursor:"pointer",fontSize:"14px",color:"#7a3030",borderTop:"1px solid #d0c0a8",marginTop:"6px",textAlign:"center",fontWeight:"700"}}>
               清除狀態
@@ -6178,7 +6182,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   // 處理完 = 現場點餐 或 已封存餐點;其他都算待處理
   // 待處理判斷:未付訂金一律待處理;只有「現場點餐」或「已封存餐點」才算處理完
   const isTodo=(g)=>{
-    if(needsDeposit(g.headcount,g.isVip,g.takeout) && !g.deposit) return true;   // 未付訂金 → 一定待處理
+    // v248:訂金追蹤已取消,不再因為沒收訂金就算待處理(不然每組都會永遠留在清單上)
     const st=(g.statusLog&&g.statusLog.status)||"";
     if(g.onsiteOrder) return false;                          // 現場點餐 → 處理完
     if(st==="餐點封存"||g.archiveType==="menu") return false; // 已封存餐點 → 處理完
@@ -6187,7 +6191,7 @@ function StaffPage({ onBack, groups, setGroups, onOpenSummary }) {
   // 麥訂區:全部都要處理,不分類
   const noGroup = showMaiOnly || !!filter.trim() || showPast;
   // 訂金逾期/快到期的,就算用餐日還很遠也要拉進本週待處理(訂金期限跟用餐日是兩回事)
-  const depPull=(g)=>!inWeek(g)&&!g.cancelled&&!g.archived&&["overdue","urgent"].includes(depositUrgency(g));
+  const depPull=(g)=>false;   // v248:訂金追蹤已取消,不再把逾期訂金拉進本週待處理
   // v246:整張表是「整月」,但「本週待處理」只抓當週(週一~週日)的
   const thisWeek=(g)=>{
     const m2=(g.date||"").match(/^(\d{1,2})\/(\d{1,2})$/); if(!m2) return false;
@@ -6300,15 +6304,12 @@ const rowBg=(g)=>{
     {key:"phone",      label:"電話",    w:102,text:true},
     {key:"headcount",  label:"人數",    w:60, text:true},
     {key:"bookDate",   label:"訂位日",  w:50, text:true},
-    {key:"deposit",    label:"訂金",    w:74, text:true},
-    {key:"depositDate",label:"付訂日",  w:66, text:true},
-    {key:"collector",  label:"收款人",  w:48, text:true},
     {key:"cancelled",  label:"取消",   w:38, chk:true,color:"#c05050"},
     {key:"note",       label:"備註",   w:220,text:true},
   ];
   const compactKeys=["date","time","name","headcount"];
   const shownCols = compactMode ? COLS.filter(c=>compactKeys.includes(c.key)) : COLS;
-  const statusAnchor = compactMode ? "headcount" : "collector";
+  const statusAnchor = compactMode ? "headcount" : "bookDate";   // v248:收款人欄已刪,狀態欄改錨在訂位日後面
 
   // v237:導覽只寫一份,首頁的卡片和左側欄共用
   const goTo=(k)=>{
@@ -6479,13 +6480,14 @@ const rowBg=(g)=>{
                   </td></tr>
                 )}
                 {!noGroup&&((ri<weekTodo.length&&secOpen.todo===false)||(ri>=weekTodo.length&&ri<weekGs.length&&secOpen.done===false)||(ri>=weekGs.length&&secOpen.rest===false))?null:(<>
-                <tr key={g.id} style={{background:rowBg(g)||(g.fromMai&&(!g.memberType||(needsDeposit(g.headcount,g.isVip,g.takeout)&&!g.deposit))?"#e8f0fa":(!noGroup&&isTodo(g)?"#fff8ee":"transparent")),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),
+                <tr key={g.id} style={{background:rowBg(g)||(g.fromMai&&!g.memberType?"#e8f0fa":(!noGroup&&isTodo(g)?"#fff8ee":"transparent")),opacity:g.cancelled?0.55:(isPastMeal(g)&&!g.archived?0.6:1),
                   borderBottom: "1.5px solid #cbb99a",
                   boxShadow: inWeek(g) ? (isTodo(g)?"inset 5px 0 0 0 #c06030":"inset 5px 0 0 0 #a8c0a8") : "none"}}>
                   <td style={{padding:"5px 6px",borderRight:"1.5px solid #cbb99a",textAlign:"center"}}>
+                    {/* v248:代碼直接顯示 —— 會員身分改由客人自己在點餐頁選,不再卡著代碼 */}
                     {g.memberType==="private"
                       ? <div style={{fontSize:"14px",fontWeight:"700",color:"#a85ab4"}}>🎉 包場</div>
-                      : !g.memberType
+                      : false
                         ? <div onClick={()=>showToast("請先在右邊「會員」欄確認身分，才會顯示代碼")} style={{cursor:"pointer",fontSize:"10px",fontWeight:"700",color:"#c06030",background:"#fbeede",border:"1px solid #e8c8a0",borderRadius:"6px",padding:"4px 5px",lineHeight:"1.3"}}>⚠ 先確認<br/>會員身分</div>
                         : <div style={{fontSize:"14px",fontWeight:"700",color:"#8a5210"}}>{g.code}</div>}
 
@@ -6497,7 +6499,7 @@ const rowBg=(g)=>{
                       const dl2=getOrderDeadline(g.date);
                       const near=dl2&&(dl2-new Date())>0&&(dl2-new Date())<=48*3600000;
                       const notDone=need2>0&&(g.orders||[]).length<need2&&!lowConsumeOk(g)&&!noChase(g);
-                      const label = needDep?"催訂金" : (near&&notDone?"催點餐" : (g.fromMai?"改名字":"LINE"));
+                      const label = (near&&notDone?"催點餐" : (g.fromMai?"改名字":"LINE"));   // v248:催訂金已取消
                       const hot = needDep||(near&&notDone)||g.fromMai;
                       return (
                         <div onClick={()=>setLineG(g)} title={TIP_TXT.lineBtn} className={hot?"blinkTag":""}
