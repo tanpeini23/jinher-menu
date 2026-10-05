@@ -418,7 +418,7 @@ const MENU = {
   ]},
 };
 
-const APP_VER = "v246";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
+const APP_VER = "v247";   // 改版號只要改這一行,畫面上 4 個地方會一起跟著變
 const FOOD_CATS  = ["durian","salad","appetizer","brunch","pasta","pizza","risotto","dessert","classic","pets"];
 const DRINK_CATS = ["duriandrink","styled","milktea","specials","sparkling","tea","coffee","brewed","juice","beer","wine","nonalc"];
 const ALCOHOL_CATS = ["beer","wine","nonalc"];                    // 酒類:不可升級套餐
@@ -1198,14 +1198,107 @@ function DeadlineBar({ dateStr, compact=false }){
   );
 }
 
+// v247:會員身分 —— 第一位輸入代碼的客人選,整桌連動。線上不驗證,櫃檯結帳時看得到。
+const MEM_LABEL={existing:"會員價",new:"會員價（今天加入）",private:"包場",none:"原價"};
+function MemberBar({ group, onChange }){
+  const t=group.memberType||"";
+  const mem=["existing","new","private"].includes(t);
+  return (
+    <div style={{position:"sticky",top:0,zIndex:50,background:mem?"#eaf5ee":"#f3efe6",
+      borderBottom:`1.5px solid ${mem?"#a8d0b8":"#ddd0bc"}`,padding:"7px 12px",
+      display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
+      <span style={{fontSize:"13px",fontWeight:"900",color:mem?"#1a6a3a":"#7a6a58",whiteSpace:"nowrap"}}>
+        👤 {MEM_LABEL[t]||"尚未選擇"}
+      </span>
+      {!mem&&<span style={{fontSize:"11.5px",color:"#a05810",fontWeight:"800"}}>加入會員主餐每份省 $60</span>}
+      <span style={{flex:1}}/>
+      <button onClick={onChange} style={{fontSize:"11.5px",fontWeight:"800",background:"transparent",
+        border:"1px solid #c8b89c",borderRadius:"7px",padding:"4px 10px",color:"#6a4a2e",cursor:"pointer",whiteSpace:"nowrap"}}>更改 ›</button>
+    </div>
+  );
+}
+function MemberGate({ onPick }){
+  const Card=({tone,title,sub,extra,onClick})=>(
+    <button onClick={onClick} style={{width:"100%",maxWidth:"420px",textAlign:"left",background:"#fff",
+      border:`2px solid ${tone}`,borderRadius:"14px",padding:"16px 18px",marginBottom:"11px",cursor:"pointer"}}>
+      <div style={{fontSize:"17px",fontWeight:"900",color:tone,lineHeight:"1.4"}}>{title}</div>
+      <div style={{fontSize:"13px",color:"#6a5a48",fontWeight:"700",marginTop:"4px",lineHeight:"1.6"}}>{sub}</div>
+      {extra&&<div style={{fontSize:"12.5px",color:"#a05810",fontWeight:"800",marginTop:"5px"}}>{extra}</div>}
+    </button>
+  );
+  return (
+    <div style={{...LS.page,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"26px 18px",minHeight:"100vh"}}>
+      <style>{GS}</style>
+      <div style={{fontSize:"20px",fontWeight:"900",color:"#8a5210",marginBottom:"5px",textAlign:"center",fontFamily:"'Noto Serif TC',serif"}}>先確認一下，才能給你正確的價格</div>
+      <div style={{fontSize:"12.5px",color:"#a08a70",fontWeight:"700",marginBottom:"20px"}}>可以隨時更改</div>
+      <Card tone="#2a7a5a" title="✓ 我是會員" sub="直接用會員價" onClick={()=>onPick("existing")}/>
+      <Card tone="#a05810" title="★ 今天加入會員" sub="$100 全桌共用一次・主餐每份省 $60"
+        extra="這桌所有人都會用會員價　·　點 2 份主餐就回本" onClick={()=>onPick("new")}/>
+      <Card tone="#8a7a68" title="這次先不用" sub="用原價點餐" onClick={()=>onPick("none")}/>
+    </div>
+  );
+}
+function MemberWelcome({ onClose, onAppetizer }){
+  return (
+    <div style={{...LS.page,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"26px 18px",minHeight:"100vh"}}>
+      <style>{GS}</style>
+      <div style={{background:"#fff",border:"2px solid #c9a45c",borderRadius:"16px",padding:"22px 20px",maxWidth:"420px",width:"100%"}}>
+        <div style={{fontSize:"21px",fontWeight:"900",color:"#8a5210",marginBottom:"12px"}}>歡迎加入 🎉</div>
+        <div style={{fontSize:"14px",color:"#4a3628",lineHeight:"2"}}>
+          ・$100 <b>終生有效</b>，以後每次來都是會員價<br/>
+          ・主餐<b>每份省 $60</b><br/>
+          ・這 $100 <b>今天就能用掉</b> —— 點任一道前菜或酒就折抵掉
+        </div>
+        <div style={{fontSize:"12.5px",color:"#b03030",fontWeight:"800",marginTop:"10px",lineHeight:"1.7"}}>⏰ 折抵限今天，沒用到不會留到下次</div>
+        <div style={{display:"flex",gap:"9px",marginTop:"16px",flexWrap:"wrap"}}>
+          <button onClick={onClose} style={{...LS.primaryBtn,flex:"1 1 150px",background:"#4a7a5a"}}>好，繼續點餐</button>
+          <button onClick={onAppetizer} style={{...LS.primaryBtn,flex:"1 1 130px",background:"#8a6a3a"}}>先看看前菜</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function MemberAsk({ save, onJoin, onSkip, now }){
+  return (
+    <div style={{...LS.page,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"26px 18px",minHeight:"100vh"}}>
+      <style>{GS}</style>
+      <div style={{background:"#fff",border:"2px solid #c9a45c",borderRadius:"16px",padding:"22px 20px",maxWidth:"420px",width:"100%"}}>
+        <div style={{fontSize:"14px",color:"#6a5a48",fontWeight:"700"}}>你這單目前</div>
+        <div style={{fontSize:"26px",fontWeight:"900",color:"#8a7a60",textDecoration:"line-through"}}>${now.toLocaleString()}</div>
+        <div style={{fontSize:"14px",color:"#6a5a48",fontWeight:"700",marginTop:"7px"}}>用會員價只要</div>
+        <div style={{fontSize:"34px",fontWeight:"900",color:"#a05810",lineHeight:"1.2"}}>${(now-save).toLocaleString()}</div>
+        <div style={{fontSize:"17px",fontWeight:"900",color:"#2a7a5a",marginTop:"4px"}}>現省 ${save.toLocaleString()}</div>
+        <div style={{fontSize:"13px",color:"#6a5a48",lineHeight:"1.9",marginTop:"12px",borderTop:"1px solid #eee2d0",paddingTop:"11px"}}>
+          加入會員 $100 <b>全桌共用一次</b>，以後每次來都是會員價
+        </div>
+        <div style={{display:"flex",gap:"9px",marginTop:"15px",flexWrap:"wrap"}}>
+          <button onClick={onJoin} style={{...LS.primaryBtn,flex:"1 1 190px",background:"#a05810"}}>加入，全桌都用會員價</button>
+          <button onClick={onSkip} style={{...LS.primaryBtn,flex:"1 1 110px",background:"#8a8075"}}>這次不用</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGroup }) {
-  const isMember = group.memberType !== "none";
+  const isMember = ["existing","new","private"].includes(group.memberType);   // v247:沒選過 → 用原價,不再預設會員價
   // v232:送出要等雲端確認。傳送中擋住重複按;失敗留在原畫面顯示錯誤;成功才用雲端給的號碼進完成畫面
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState("");
   const [doneNum, setDoneNum] = useState(null);
+  // v247:會員身分相關
+  const [memWelcome,setMemWelcome]=useState(false);   // 剛選「今天加入」的歡迎畫面
+  const [memAsk,setMemAsk]=useState(0);               // 送單前提醒(數字=省多少,0=不顯示)
+  const [memAsked,setMemAsked]=useState(false);       // 只問一次
+  const [memPending,setMemPending]=useState(null);    // 問的時候先收著這筆
+  const pickMember=(t)=>{ onUpdateGroup&&onUpdateGroup({memberType:t}); if(t==="new") setMemWelcome(true); };
   const doSubmit = async (payload) => {
     if (sending) return;
+    // v247:非會員、而且省得回本(省的 ≥ 入會費 $100)才問,只問一次;划不來就安靜放行
+    if (group.memberType==="none" && !memAsked) {
+      const ls=payload.lines||[];
+      const sv=orderTotal(ls,false)-orderTotal(ls,true);   // 原價 − 會員價 = 這單省多少
+      if (sv>=100) { setMemAsked(true); setMemPending(payload); setMemAsk(sv); return; }
+    }
     setSending(true); setSendErr("");
     let r = null;
     try { r = await onSubmit(payload); } catch(e) { r = { ok:false, err:(e&&e.message)||"未知錯誤" }; }
@@ -1447,12 +1540,12 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
       )}
       {(()=>{
         const mf = calcMemberFee(lines, group.memberType);
-        const subtotal = total + mf.fee;   // 只加入會費,不主動扣折抵
+        const subtotal = total;   // v247:入會費整桌共用一次,不計進每個人的小計
         const withService = Math.round(subtotal * 1.1);
         return (<>
           <div style={{fontSize:"15px",color:"#8a6a48",marginBottom:"2px"}}>小計 ${total}</div>
-          {mf.fee>0&&<div style={{fontSize:"13px",color:"#3f8f63",marginBottom:"1px",fontWeight:"700"}}>★ 入會費 +${mf.fee}</div>}
-          {mf.fee>0&&<div style={{fontSize:"11px",color:"#b06010",marginBottom:"3px",lineHeight:"1.4"}}>結帳時若有前菜或酒類，折$100</div>}
+          {mf.fee>0&&<div style={{fontSize:"12px",color:"#3f8f63",marginBottom:"1px",fontWeight:"700",lineHeight:"1.6"}}>★ 這桌今天加入會員，入會費 $100 全桌共用一次（不在你這單裡）</div>}
+          {mf.fee>0&&<div style={{fontSize:"11px",color:"#b06010",marginBottom:"3px",lineHeight:"1.6"}}>💡 這桌點任一道前菜或酒，$100 就折抵掉 —— 限今天，沒用到不會留到下次</div>}
           <div style={{fontSize:"22px",color:"#9c5a1c",fontWeight:"700",marginBottom:"2px"}}>${withService}</div>
           <div style={{fontSize:"12px",color:"#7a5e42",marginBottom:"16px"}}>含10%服務費 · 請等待服務人員確認</div>
         </>);
@@ -1470,6 +1563,13 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
     </div>
   );
 
+  // v247:身分還沒選 → 先選。選完才看得到價格,整桌連動
+  if (!group.memberType) return <MemberGate onPick={pickMember}/>;
+  if (memWelcome) return <MemberWelcome onClose={()=>setMemWelcome(false)}
+    onAppetizer={()=>{ setMemWelcome(false); setStep("menu"); setActiveCat("appetizer"); }}/>;
+  if (memAsk>0) return <MemberAsk save={memAsk} now={orderTotal((memPending&&memPending.lines)||[],false)}
+    onJoin={()=>{ pickMember("new"); const pl=memPending; setMemAsk(0); setMemPending(null); setMemWelcome(false); doSubmit(pl); }}
+    onSkip={()=>{ const pl=memPending; setMemAsk(0); setMemPending(null); doSubmit(pl); }}/>;
   if (step === "add") {
     const addLines = lines.filter(l => !existingOrder?.lines?.find(el => el.id === l.id));
     const allAddComplete = addLines.length > 0 && addLines.every(lineComplete) &&
@@ -1664,6 +1764,7 @@ function OrderFlow({ group, existingOrder, onSubmit, onBack, nextNum, onUpdateGr
   return (
     <div style={LS.page}>
       <style>{GS}</style>
+      <MemberBar group={group} onChange={()=>onUpdateGroup&&onUpdateGroup({memberType:""})}/>
       <div style={{...LS.header,paddingBottom:"8px"}}>
         <button onClick={()=>lines.length>0?setStep("done"):onBack()} style={LS.backBtn}>← 返回</button>
         <div style={LS.logo}>✦ {step==="menu"&&existingOrder?"修改訂單":"選擇餐點"}</div>
